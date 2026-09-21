@@ -1,0 +1,37 @@
+{
+  "name": "dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint --deny-warnings",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run build"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "8.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "oxlint": "1.85.0",
+    "prettier": "3.9.8",
+    "typescript": "6.0.3",
+    "vite": "8.3.0"
+  },
+  "description": "React + TypeScript + Vite Dashboard foundation",
+  "engines": {
+    "node": ">=24.16.0 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.13.0"
+}
