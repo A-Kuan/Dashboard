@@ -2,6 +2,7 @@
   --nav-surface: #fff;
   --nav-text: #191919;
   --nav-muted: #808080;
+  --nav-text-secondary: #707070;
   --nav-selected: #f0f0f0;
   --nav-hover: #f6f6f6;
   --nav-line: #eaeaea;
@@ -82,7 +83,7 @@
   margin: 0 12px 12px;
   font-size: 14px;
   font-weight: 400;
-  color: var(--nav-muted);
+  color: var(--nav-text-secondary);
 }
 .sidebar-list,
 .sidebar-children {
@@ -129,7 +130,7 @@
   padding: 1px 7px;
   border: 1px solid #d5d5d5;
   border-radius: 8px;
-  color: var(--nav-muted);
+  color: var(--nav-text-secondary);
   background: var(--nav-surface);
   box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
   font-size: 12px;
@@ -178,7 +179,7 @@
   gap: 10px;
   padding-left: 13px;
   padding-right: 10px;
-  color: var(--nav-muted);
+  color: var(--nav-text-secondary);
   font-weight: 500;
 }
 .sidebar-children .sidebar-row.is-current {
