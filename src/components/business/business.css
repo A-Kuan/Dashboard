@@ -1,0 +1,654 @@
+.business {
+  box-sizing: border-box;
+  color: #192333;
+  font:
+    15px/1.5 'Helvetica Neue',
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+}
+.business *,
+.business *::before,
+.business *::after {
+  box-sizing: border-box;
+}
+.business button,
+.business input,
+.business textarea {
+  font: inherit;
+}
+.business button {
+  cursor: pointer;
+  border: 1px solid #dce2ea;
+  border-radius: 7px;
+  background: #fff;
+  color: #243248;
+  padding: 9px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.business button:hover {
+  background: #f5f7fa;
+}
+.business button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.business :focus-visible {
+  outline: 2px solid #2168da;
+  outline-offset: 2px;
+}
+.business .primary {
+  background: #121a29;
+  color: #fff;
+  border-color: #121a29;
+  font-weight: 600;
+}
+.business .primary:hover {
+  background: #2c374a;
+}
+.business h1,
+.business h2,
+.business h3 {
+  margin: 0;
+  color: #152033;
+}
+.business h1 {
+  font-size: 30px;
+  line-height: 1.3;
+  letter-spacing: -0.7px;
+}
+.business h2 {
+  font-size: 23px;
+}
+.business h3 {
+  font-size: 17px;
+}
+.business p {
+  margin: 8px 0 18px;
+}
+.business .muted,
+.business small {
+  color: #758298;
+}
+.business small {
+  display: block;
+  font-size: 12px;
+}
+.business-page {
+  min-height: 100dvh;
+  padding: 26px 28px 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.page-heading p {
+  color: #758298;
+  margin: 6px 0 0;
+}
+.heading-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.business .heading-actions .primary {
+  white-space: nowrap;
+  min-height: 46px;
+}
+.business .search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d7dfec;
+  border-radius: 8px;
+  padding: 0 13px;
+  color: #8190a8;
+  min-width: 220px;
+  margin: 0;
+}
+.business .search-field input {
+  border: 0;
+  min-width: 0;
+  height: 46px;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+}
+.heading-actions .search-field {
+  width: clamp(250px, 26vw, 460px);
+}
+.business input,
+.business textarea {
+  border: 1px solid #d7dfe9;
+  border-radius: 7px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #243248;
+  width: 100%;
+}
+.business input::placeholder,
+.business textarea::placeholder {
+  color: #8a96a8;
+}
+.business input[type='number'] {
+  appearance: textfield;
+}
+.business input[type='number']::-webkit-inner-spin-button,
+.business input[type='number']::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.business label {
+  display: block;
+  margin-bottom: 18px;
+  color: #526079;
+  font-size: 14px;
+}
+.business label > input,
+.business label > textarea {
+  display: block;
+  margin-top: 6px;
+}
+.business .business-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+}
+.business .business-select-trigger {
+  width: 100%;
+  min-height: 43px;
+  padding: 10px 12px;
+  border: 1px solid #d7dfe9;
+  border-radius: 7px;
+  background: #fff;
+  color: #243248;
+  font-weight: 400;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+}
+.business .business-select-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.business .business-select-options {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 5px);
+  left: 0;
+  width: max(100%, 180px);
+  max-width: min(380px, 80vw);
+  max-height: 270px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid #d7dfe9;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 36px #15203320;
+}
+.business .business-select-options button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 35px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  text-align: left;
+  font-weight: 400;
+}
+.business .business-select-options button.selected {
+  color: #1459bd;
+  background: #edf4ff;
+}
+.business textarea {
+  resize: vertical;
+  min-height: 90px;
+}
+.business .toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.business .tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.business .tabs button {
+  border-radius: 0;
+  border-right: 0;
+  color: #566781;
+  padding: 9px 19px;
+  background: #f8f9fc;
+}
+.business .tabs button:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.business .tabs button:last-child {
+  border-radius: 0 7px 7px 0;
+  border-right: 1px solid #dce2ea;
+}
+.business .tabs button.active {
+  background: #e8f1ff;
+  color: #0760db;
+  border-color: #d1e3ff;
+  font-weight: 600;
+}
+.business .filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.business .filters .business-select {
+  width: auto;
+  min-width: 124px;
+  max-width: 160px;
+  margin: 0;
+}
+.business .filters .vehicle-filter {
+  width: 125px;
+}
+.business .text-button {
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: #687b97;
+}
+.customer-price-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 0 16px;
+  color: #7a879b;
+  font-size: 13px;
+}
+.business .customer-price-bar label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.business .customer-price-bar .business-select {
+  width: 210px;
+  margin: 0;
+}
+.customer-price-bar > button {
+  margin-left: auto;
+}
+.table-scroll {
+  width: 100%;
+  overflow: auto;
+}
+.business table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.business th {
+  background: #f5f7fa;
+  color: #62718a;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  padding: 14px 12px;
+}
+.business th:first-child {
+  border-radius: 8px 0 0 8px;
+}
+.business th:last-child {
+  border-radius: 0 8px 8px 0;
+}
+.business td {
+  padding: 15px 12px;
+  border-bottom: 1px solid #e7edf4;
+  height: 65px;
+  font-size: 14px;
+}
+.business tr:hover td {
+  background: #fafcff;
+}
+.business td small {
+  margin-top: 3px;
+}
+.business .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.business .cell-note {
+  white-space: normal;
+  max-width: 320px;
+}
+.business .cell-codes {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.business .cell-link {
+  border: 0;
+  padding: 0;
+  font-weight: 600;
+  background: transparent;
+}
+.business .icon-button {
+  border: 0;
+  padding: 6px;
+  background: transparent;
+  flex-shrink: 0;
+}
+.business .tag {
+  border: 1px solid #e2e7ef;
+  border-radius: 5px;
+  padding: 3px 7px;
+  color: #60718a;
+  font-size: 12px;
+}
+.empty-state {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 45px 20px;
+  text-align: center;
+  color: #94a2b6;
+}
+.empty-state h2 {
+  font-size: 20px;
+  margin-top: 18px;
+}
+.empty-state p {
+  color: #8390a3;
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-top: auto;
+  padding: 20px 0;
+  color: #7889a4;
+  font-size: 13px;
+}
+.pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.pagination button {
+  padding: 6px;
+}
+.business .error {
+  padding: 11px 14px;
+  background: #fff0ef;
+  border-radius: 7px;
+  color: #a63432;
+  white-space: normal;
+}
+.business .success {
+  padding: 10px 14px;
+  background: #eff8f1;
+  border-radius: 7px;
+  color: #2e6c45;
+}
+.business.modal {
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 24px 90px #15283d33;
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  padding: 28px 32px;
+  margin: auto;
+}
+.business.modal.wide {
+  width: min(920px, calc(100vw - 32px));
+}
+.business.modal::backdrop {
+  background: rgb(16 30 48 / 38%);
+}
+.modal-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  gap: 14px;
+}
+.business .form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 18px;
+}
+.business .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 22px;
+  margin-top: 20px;
+  border-top: 1px solid #e4e9f0;
+}
+.business .form-actions button {
+  min-width: 110px;
+}
+.business .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.business .checkbox-label input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid #aab8ca;
+  border-radius: 4px;
+  flex: none;
+  padding: 0;
+}
+.business .checkbox-label input:checked {
+  background: #1766da;
+  border-color: #1766da;
+  box-shadow: inset 0 0 0 3px #1766da;
+}
+.business .checkbox-label input:checked::after {
+  content: '';
+  display: block;
+  width: 9px;
+  height: 5px;
+  border: solid #fff;
+  border-width: 0 0 2px 2px;
+  transform: translate(3px, 3px) rotate(-45deg);
+}
+.business .required {
+  color: #b65252;
+}
+.business fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.business .editor-tabs {
+  margin-bottom: 22px;
+}
+.business .editor-panel[hidden] {
+  display: none;
+}
+.business .subheading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+}
+.business .subheading button {
+  font-size: 13px;
+}
+.business .inline-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.business .inline-fields label {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.business .inline-fields .icon-button {
+  margin-bottom: 5px;
+}
+.business .repeated-card {
+  padding: 16px;
+  border: 1px solid #e1e7f0;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.business .inline-notice {
+  background: #f4f7fb;
+  padding: 12px;
+  border-radius: 7px;
+}
+.business .sr-only {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.auth-screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px;
+  background: #f5f7fa;
+}
+.auth-card {
+  width: 440px;
+  padding: 32px;
+  border: 1px solid #e4e9ef;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 16px 60px #18263d0a;
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 24px;
+  margin-bottom: 28px;
+}
+.auth-lock {
+  color: #8b99ad;
+}
+.auth-card h1 {
+  font-size: 25px;
+  margin-top: 8px;
+}
+.auth-card p {
+  color: #7d8999;
+  font-size: 14px;
+}
+.auth-card .primary {
+  width: 100%;
+  min-height: 46px;
+}
+.auth-card .text-button {
+  display: flex;
+  margin: 12px auto 0;
+}
+.account-footer {
+  margin-top: auto;
+  padding: 18px 6px 0;
+  border-top: 1px solid #e9edf2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.account-footer small {
+  display: block;
+  color: #7d8998;
+  margin-top: 3px;
+}
+.account-footer button {
+  background: transparent;
+  border: 0;
+  color: #6d7c92;
+  padding: 8px;
+}
+@media (max-width: 1200px) {
+  .page-heading {
+    flex-wrap: wrap;
+  }
+  .heading-actions {
+    width: 100%;
+  }
+  .heading-actions .search-field {
+    flex: 1;
+    width: auto;
+  }
+  .business-page {
+    padding: 24px 20px 0;
+  }
+  .sku-table {
+    min-width: 1180px;
+  }
+}
+@media (max-width: 720px) {
+  .business h1 {
+    font-size: 26px;
+  }
+  .business-page {
+    padding: 22px 14px 0;
+  }
+  .business .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .business.modal {
+    padding: 22px 18px;
+  }
+  .heading-actions {
+    flex-wrap: wrap;
+  }
+  .business .filters .business-select {
+    max-width: 140px;
+  }
+  .business .inline-fields {
+    flex-wrap: wrap;
+  }
+  .business .inline-fields label {
+    min-width: 100px;
+  }
+  .business .tabs button {
+    padding: 8px 12px;
+  }
+  .business .pagination {
+    flex-wrap: wrap;
+  }
+  .account-footer {
+    margin-top: 15px;
+  }
+  .business .customer-price-bar .business-select {
+    width: 180px;
+  }
+}

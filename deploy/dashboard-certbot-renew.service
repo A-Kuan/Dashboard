@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew Dashboard IP certificate
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dashboard/certbot-venv/bin/certbot renew --quiet --deploy-hook "systemctl reload nginx"

@@ -18,6 +18,10 @@ coverage
 artifacts
 playwright-report
 test-results
+.data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Editor directories and files
 .vscode/*

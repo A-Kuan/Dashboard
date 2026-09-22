@@ -4,14 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "vite",
+    "dev:api": "node --env-file-if-exists=.env.local server/index.mjs",
+    "start": "node --env-file-if-exists=.env.local server/index.mjs",
+    "test": "node --test server/*.test.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint --deny-warnings",
+    "ui:check": "node scripts/check-ui-controls.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint && npm run build"
+    "check": "npm run format:check && npm run lint && npm run ui:check && npm run test && npm run build"
   },
   "dependencies": {
     "@tabler/icons-react": "3.47.0",

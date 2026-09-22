@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { IconChevronDown, IconLayoutDashboard, IconMenu2, IconX } from '@tabler/icons-react'
 import { Link, matchPath, NavLink, useLocation } from 'react-router'
 import { appConfig } from '../../config/app'
@@ -66,7 +66,8 @@ function Group({ item, onNavigate }: { item: NavigationGroup; onNavigate: () => 
 }
 
 function Item({ item, onNavigate }: { item: NavigationItem; onNavigate: () => void }) {
-  if (item.type === 'group') return <Group item={item} onNavigate={onNavigate} />
+  const { pathname } = useLocation()
+  if (item.type === 'group') return <Group key={pathname} item={item} onNavigate={onNavigate} />
 
   return (
     <li className="sidebar-item">
@@ -82,7 +83,13 @@ function Item({ item, onNavigate }: { item: NavigationItem; onNavigate: () => vo
   )
 }
 
-export function Sidebar({ sections }: { sections: readonly NavigationSection[] }) {
+export function Sidebar({
+  sections,
+  footer,
+}: {
+  sections: readonly NavigationSection[]
+  footer?: ReactNode
+}) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const menuId = useId()
   const menuButton = useRef<HTMLButtonElement>(null)
@@ -145,6 +152,7 @@ export function Sidebar({ sections }: { sections: readonly NavigationSection[] }
           </section>
         ))}
       </nav>
+      {footer}
     </aside>
   )
 }

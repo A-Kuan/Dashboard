@@ -1,58 +1,68 @@
-# 本地开发与多环境协作
+# 本地开发与协作
 
-## 环境
+## 环境和启动
 
-- Node.js：24.16.0（`.nvmrc`），项目允许 24.16.0 及以上的 24.x。
-- npm：11.x，初始锁文件由 npm 11.13.0 生成。
-- Git：用于同步源码、配置样例与文档。
-
-macOS / Linux 使用 nvm 时可执行 `nvm install && nvm use`。Windows 可安装对应 Node.js 版本或使用 nvm-windows。具体项目脚本均不依赖 Unix shell 命令。
-
-## 首次启动
-
-```bash
-git clone https://github.com/A-Kuan/Dashboard.git
-cd Dashboard
-npm ci
-npm run dev
-```
-
-打开 http://127.0.0.1:4179。端口被占用时会明确失败，不会自动切换；临时指定其他端口可使用 `npm run dev -- --port 4181`。
-
-如需手机在同一局域网访问，执行 `npm run dev -- --host 0.0.0.0`，使用终端显示的局域网地址。默认仅监听本机。
+Node.js 24.16.0 及以上的 24.x，npm 11.x。使用 npm 与 package-lock.json；换环境执行 npm ci。
+执行 npm run dev 同时启动 Vite 4179 和 Node API 4182，访问 http://127.0.0.1:4179，默认仅本机。
+首次读取 .data/setup-token.txt 的一次性初始化码，在页面自行设置管理员账号和密码（必填，最多 128 位）。初始化后文件移除。后续账号由管理员创建，无公开注册。正式业务数据库初始为空。
 
 ## 环境变量
 
-无需 .env 即可启动。如需修改应用名称，将 `.env.example` 复制为 `.env.local`，修改后重新启动。
+无需配置即可开发；可复制 .env.example 为 .env.local，修改后重启。
 
-| 变量          | 默认值    | 用途               |
-| ------------- | --------- | ------------------ |
-| VITE_APP_NAME | Dashboard | 导航与页面标题名称 |
+| 变量          | 默认                  | 用途                                       |
+| ------------- | --------------------- | ------------------------------------------ |
+| VITE_APP_NAME | Dashboard             | 公开名称                                   |
+| HOST          | 127.0.0.1             | 后端监听地址                               |
+| PORT          | 4182                  | 后端端口                                   |
+| APP_ORIGIN    | http://127.0.0.1:4179 | 写请求允许的完整来源                       |
+| DATA_DIR      | .data                 | 数据目录                                   |
+| NODE_ENV      | 未设置                | production 要求 HTTPS 并启用 Secure Cookie |
 
-Vite 的 `VITE_` 变量会进入浏览器构建产物，只用于公开配置。密钥、数据库密码不能放入其中。新变量必须同步更新 `.env.example`、类型与本文档。
+更改前端端口需同步 APP_ORIGIN，更改后端端口需同步 vite.config.ts 代理。VITE_ 变量进入浏览器，不可保存秘密。
 
-## 常用命令
+## 命令
 
-| 命令                 | 用途                        |
-| -------------------- | --------------------------- |
-| npm ci               | 严格按照锁文件安装依赖      |
-| npm run dev          | 开发服务器，4179            |
-| npm run typecheck    | TypeScript 类型检查         |
-| npm run lint         | Oxlint 检查，警告也视为失败 |
-| npm run format       | 统一格式                    |
-| npm run format:check | 检查格式                    |
-| npm run build        | 类型检查并构建到 dist       |
-| npm run preview      | 本机预览构建结果，4180      |
-| npm run check        | 格式、lint、类型和构建检查  |
+| 命令                 | 用途                                          |
+| -------------------- | --------------------------------------------- |
+| npm run dev          | 同时启动前后端                                |
+| npm run dev:frontend | 单独启动 Vite                                 |
+| npm run dev:api      | 单独启动 API                                  |
+| npm start            | 提供 dist 与 API，先构建并配置对应 APP_ORIGIN |
+| npm test             | 隔离数据库集成测试                            |
+| npm run typecheck    | TypeScript 检查                               |
+| npm run lint         | Oxlint                                        |
+| npm run ui:check     | 检查原生下拉与日期控件                        |
+| npm run format       | 格式化                                        |
+| npm run format:check | 检查格式                                      |
+| npm run build        | 类型检查并构建                                |
+| npm run check        | 格式、lint、控件规则、集成测试、类型与构建    |
+| npm run preview      | 仅静态预览，不用于完整业务                    |
 
-当前没有业务逻辑测试套件。`npm run check` 不等于业务功能或浏览器端到端测试；新增业务功能时按风险补充测试。
+集成测试覆盖未登录和角色权限、来源校验、初始化、数据校验、价格隔离、事务回滚、版本冲突、重启持久化及会话撤销；不是浏览器端到端套件。浏览器验收用独立临时数据库。
 
-## 换电脑与同步
+## 旧站 SKU 迁移
 
-第一次使用新电脑，克隆仓库并安装相同 Node/npm 版本，执行 npm ci。以后开始工作先检查并处理未提交改动，再使用 `git pull --ff-only` 同步当前分支。依赖锁文件发生变化后重新执行 npm ci。
+迁移脚本读取已从旧站只读导出的 NDJSON 文件。名称包含“弃用零件”的 SKU 会被跳过，预检报告给出跳过数量。先运行预检，再执行导入；执行模式会自动备份目标 SQLite 数据库，并在单个事务中写入 SKU、来源、件号和车型。重复执行相同快照会跳过已导入记录。导入后检查记录数与 SQLite 完整性。操作前停止本地 API，完成后重启。
 
-main 保存整合后的版本，日常使用功能分支。操作流程见 [CONTRIBUTING.md](../CONTRIBUTING.md)。同时在两台电脑修改同一个文件仍可能产生冲突，需要逐项确认合并；Git 不会自动同步尚未提交的改动。
+```bash
+node scripts/import-legacy-skus.mjs --source=.data/import/old-skus.ndjson --data-dir=.data
+node scripts/import-legacy-skus.mjs --source=.data/import/old-skus.ndjson --data-dir=.data --apply
+```
 
-## 依赖更新
+预检报告在 `.data/import/migration-report.json`，执行备份在 `.data/backups`。快照、报告、备份含业务数据，不提交到 Git。原始来源字段保存在 `sku_source`；品牌、性质、产地与售价需要人工核对后补全。
 
-package.json 使用精确版本，package-lock.json 必须提交。新增或升级依赖使用 npm install，同步提交两个文件并运行 npm run check。不要提交 node_modules 或手工编辑锁文件。
+## 旧站字典迁移
+
+两处字典来自不同的源表，快照为 `.data/import/old-dictionaries.ndjson`。导入脚本先校验分组、选项和 Logo 数量；执行模式先备份目标数据库，再以单个事务写入。重复运行跳过已存在编码，保留本地后续编辑。
+
+```bash
+node scripts/import-legacy-dictionaries.mjs --source=.data/import/old-dictionaries.ndjson --data-dir=.data
+node scripts/import-legacy-dictionaries.mjs --source=.data/import/old-dictionaries.ndjson --data-dir=.data --apply
+```
+
+预检报告为 `.data/import/dictionary-migration-report.json`，备份位于 `.data/backups`。操作前停止本地 API，完成后重启。原始快照、Logo、报告和备份均包含业务资料，不提交到 Git。
+
+## 协作
+
+先检查 git status，保留未提交修改；同步使用 git pull --ff-only。依赖变化执行 npm ci。新增依赖同步 package.json 与 package-lock.json，运行 npm run check。源码同步不会携带本地数据库，备份见 DEPLOYMENT.md。详细流程见 CONTRIBUTING.md。真实环境文件、数据、账号密钥不得提交。

@@ -1,0 +1,103 @@
+.dictionary-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #e1e7ef;
+}
+.dictionary-groups {
+  overflow-y: auto;
+  border-right: 1px solid #e1e7ef;
+  background: #fbfcfe;
+}
+.business .dictionary-groups button {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 12px 15px;
+  justify-content: space-between;
+  text-align: left;
+  background: transparent;
+}
+.business .dictionary-groups button.active {
+  background: #eaf2ff;
+  color: #1459bd;
+  font-weight: 600;
+}
+.dictionary-content {
+  min-width: 0;
+  padding: 22px;
+}
+.dictionary-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.dictionary-heading p {
+  color: #728198;
+}
+.dictionary-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+.dictionary-toolbar .search-field {
+  flex: 1;
+  max-width: 400px;
+}
+.dictionary-toolbar .business-select {
+  width: 150px;
+  margin: 0;
+}
+.dictionary-name-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dictionary-parent-row td {
+  background: #f7f9fc;
+  border-top: 1px solid #dce5f0;
+}
+.dictionary-parent-row .dictionary-item-label {
+  font-weight: 700;
+  color: #14233b;
+}
+.dictionary-child-row .dictionary-name-content {
+  padding-left: 22px;
+}
+.dictionary-child-row .dictionary-name-content > svg {
+  flex: none;
+  color: #8a9ab0;
+}
+.dictionary-name-content > span {
+  display: flex;
+  flex-direction: column;
+}
+.dictionary-name img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+.dictionary-name small {
+  font-size: 11px;
+}
+.dictionary-content code {
+  font: inherit;
+  color: #64748b;
+}
+.dictionary-content .empty-state {
+  min-height: 180px;
+}
+@media (max-width: 850px) {
+  .dictionary-layout {
+    grid-template-columns: 185px minmax(0, 1fr);
+  }
+  .dictionary-content {
+    padding: 16px;
+  }
+  .dictionary-content table {
+    min-width: 760px;
+  }
+}

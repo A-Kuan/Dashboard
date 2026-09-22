@@ -1,0 +1,35 @@
+{
+  "natures": ["拆车件", "品牌件", "进口原厂", "服务站原厂", "待确认"],
+  "supplyTypes": [
+    { "code": "GENUINE", "label": "原厂件", "parentCode": null },
+    { "code": "germany", "label": "德国", "parentCode": "GENUINE" },
+    { "code": "imported_volkswagen", "label": "进口大众", "parentCode": "GENUINE" },
+    { "code": "porsche_genuine_original_pack", "label": "保时捷原厂", "parentCode": "GENUINE" },
+    { "code": "AFTERMARKET", "label": "品牌件", "parentCode": null },
+    { "code": "aftermarket_part", "label": "副厂件", "parentCode": "AFTERMARKET" },
+    { "code": "domestic_brand", "label": "国产品牌", "parentCode": "AFTERMARKET" },
+    { "code": "international_brand", "label": "国际品牌", "parentCode": "AFTERMARKET" },
+    { "code": "oe_support_brand", "label": "OE配套品牌", "parentCode": "AFTERMARKET" },
+    { "code": "UNKNOWN", "label": "待核实", "parentCode": null }
+  ],
+  "origins": ["国产", "进口", "待确认"],
+  "categories": [
+    "滤清系统",
+    "制动系统",
+    "点火系统",
+    "底盘悬挂",
+    "冷却系统",
+    "发动机",
+    "变速箱",
+    "电气系统",
+    "车身附件",
+    "油液养护",
+    "其他"
+  ],
+  "units": ["个", "只", "件", "套", "对", "支", "瓶", "桶", "升"],
+  "numberTypes": ["OE号", "替代件号", "条码"],
+  "powerTypes": ["汽油", "柴油", "混动", "纯电", "其他"],
+  "roles": ["admin", "editor", "viewer"],
+  "customerTypes": ["同行", "修理厂", "待分类"],
+  "customerStages": ["待跟进", "询价中", "已报价", "合作中"]
+}
