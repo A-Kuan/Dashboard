@@ -15,7 +15,7 @@ Ubuntu 24.04 使用 `/opt/dashboard/runtime/node-v24.16.0-linux-x64`，代码在
 
 发布新版本：先在本地通过 `npm run check` 并推送 GitHub，再在服务器 `/opt/dashboard/app` 执行 `git pull --ff-only`、用 Node 24 对应的 npm 执行 `npm ci` 和 `npm run build`，最后 `systemctl restart dashboard`。先备份 `/var/lib/dashboard`，再发布；`systemctl status dashboard` 和 HTTPS 下 `/api/auth/session` 用于验收。代码更新不会覆盖数据库。不得公开 Node 端口、开发服务、SQLite 数据文件或私钥。
 
-当前数据库从本地通过 SQLite 一致性快照首次迁入，包含旧站迁移的 SKU、字典、管理员账号与报价模板。后续服务器数据为准，不要再用本地旧快照覆盖线上编辑。首次管理员若未初始化，一次性码位于数据目录的 `setup-token.txt`；目前没有自助找回密码。当前是单实例方案。登录按 Node 连接 IP 限流，反向代理下所有访问可能共用额度，上线后应继续完善可信代理策略。
+当前数据库从本地通过 SQLite 一致性快照首次迁入，包含旧站迁移的 SKU、字典、管理员账号与报价模板。后续服务器数据为准，不要再用本地旧快照覆盖线上编辑。首次管理员若未初始化，一次性码位于数据目录的 `setup-token.txt`；目前没有自助找回密码。当前是单实例方案。生产服务设置 `TRUST_LOOPBACK_PROXY=1`：仅当请求直接来自本机回环地址时，登录限流才采纳 Nginx 覆写的合法 `X-Real-IP`，否则按实际连接地址计数；Node 端口不能公开。
 
 ## 备份与恢复
 

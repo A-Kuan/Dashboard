@@ -13,6 +13,7 @@ Environment=HOST=127.0.0.1
 Environment=PORT=4182
 Environment=APP_ORIGIN=https://121.41.24.42
 Environment=DATA_DIR=/var/lib/dashboard
+Environment=TRUST_LOOPBACK_PROXY=1
 ExecStart=/opt/dashboard/runtime/node-v24.16.0-linux-x64/bin/node server/index.mjs
 Restart=always
 RestartSec=3

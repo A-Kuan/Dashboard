@@ -10,14 +10,15 @@ Node.js 24.16.0 及以上的 24.x，npm 11.x。使用 npm 与 package-lock.json�
 
 无需配置即可开发；可复制 .env.example 为 .env.local，修改后重启。
 
-| 变量          | 默认                  | 用途                                       |
-| ------------- | --------------------- | ------------------------------------------ |
-| VITE_APP_NAME | Dashboard             | 公开名称                                   |
-| HOST          | 127.0.0.1             | 后端监听地址                               |
-| PORT          | 4182                  | 后端端口                                   |
-| APP_ORIGIN    | http://127.0.0.1:4179 | 写请求允许的完整来源                       |
-| DATA_DIR      | .data                 | 数据目录                                   |
-| NODE_ENV      | 未设置                | production 要求 HTTPS 并启用 Secure Cookie |
+| 变量                 | 默认                  | 用途                                                                   |
+| -------------------- | --------------------- | ---------------------------------------------------------------------- |
+| VITE_APP_NAME        | Dashboard             | 公开名称                                                               |
+| HOST                 | 127.0.0.1             | 后端监听地址                                                           |
+| PORT                 | 4182                  | 后端端口                                                               |
+| APP_ORIGIN           | http://127.0.0.1:4179 | 写请求允许的完整来源                                                   |
+| DATA_DIR             | .data                 | 数据目录                                                               |
+| TRUST_LOOPBACK_PROXY | 0                     | 仅当直接连接来自本机回环地址时信任代理提供的真实 IP，生产 Nginx 设为 1 |
+| NODE_ENV             | 未设置                | production 要求 HTTPS 并启用 Secure Cookie                             |
 
 更改前端端口需同步 APP_ORIGIN，更改后端端口需同步 vite.config.ts 代理。VITE_ 变量进入浏览器，不可保存秘密。
 

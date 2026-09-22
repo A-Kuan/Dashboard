@@ -10,6 +10,7 @@ const app = createApp({
   dataDir,
   origins: [process.env.APP_ORIGIN ?? 'http://127.0.0.1:4179'],
   secureCookie: production,
+  trustLoopbackProxy: process.env.TRUST_LOOPBACK_PROXY === '1',
 })
 app.server.listen(port, process.env.HOST ?? '127.0.0.1', () => {
   console.log(`Dashboard API listening on port ${port}. Database directory: ${dataDir}`)

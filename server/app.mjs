@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { isIP } from 'node:net'
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'node:fs'
@@ -67,6 +68,7 @@ export function createApp({
   dataDir,
   origins = ['http://127.0.0.1:4179'],
   secureCookie = false,
+  trustLoopbackProxy = false,
   distDir = resolve('dist'),
 }) {
   const db = openDatabase(dataDir)
@@ -77,7 +79,15 @@ export function createApp({
   const dummyHash = hashPassword(randomBytes(32).toString('hex'))
   const attempts = new Map()
   function rateLimit(req) {
-    const key = req.socket.remoteAddress
+    const peer = req.socket.remoteAddress
+    const forwarded = req.headers['x-real-ip']
+    const key =
+      trustLoopbackProxy &&
+      (peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1') &&
+      typeof forwarded === 'string' &&
+      isIP(forwarded)
+        ? forwarded
+        : peer
     const time = Date.now()
     for (const [ip, entry] of attempts) if (entry.until < time) attempts.delete(ip)
     const value = attempts.get(key) ?? { count: 0, until: time + 15 * 60 * 1000 }

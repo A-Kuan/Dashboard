@@ -7,7 +7,11 @@ import { createApp } from './app.mjs'
 
 test('authenticated persistent customer and SKU workflow', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'dashboard-api-test-'))
-  let app = createApp({ dataDir: directory, origins: ['http://app.test'] })
+  let app = createApp({
+    dataDir: directory,
+    origins: ['http://app.test'],
+    trustLoopbackProxy: true,
+  })
   let base
   async function listen() {
     await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
@@ -118,6 +122,24 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     )
     const row = app.db.prepare('SELECT password_hash FROM users').get()
     assert.ok(!row.password_hash.includes('short'))
+  })
+  await t.test('proxy login limits are isolated by validated client IP', async () => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const result = await call('/auth/login', 'POST', {}, '', { 'X-Real-IP': '198.51.100.10' })
+      assert.equal(result.status, 400)
+    }
+    assert.equal(
+      (await call('/auth/login', 'POST', {}, '', { 'X-Real-IP': '198.51.100.10' })).status,
+      429,
+    )
+    assert.equal(
+      (await call('/auth/login', 'POST', {}, '', { 'X-Real-IP': '198.51.100.11' })).status,
+      400,
+    )
+    assert.equal(
+      (await call('/auth/login', 'POST', {}, '', { 'X-Real-IP': 'not-an-ip' })).status,
+      400,
+    )
   })
   await t.test('dictionary groups, paging and SKU option validation', async () => {
     app.db
