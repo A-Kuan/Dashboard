@@ -14,6 +14,7 @@
 | 技术栈、模块职责、目录、路由、共享组件、数据来源     | docs/ARCHITECTURE.md                                  |
 | 环境版本、依赖管理、命令、环境变量、端口、多环境协作 | docs/DEVELOPMENT.md，必要时 README.md 与 .env.example |
 | 部署方式、托管配置、构建产物                         | docs/DEPLOYMENT.md                                    |
+| 导航样式、菜单配置、交互与参考来源                   | docs/NAVIGATION.md，必要时 docs/ARCHITECTURE.md       |
 | 协作流程、提交和检查要求                             | CONTRIBUTING.md 与本文件                              |
 | 用户可见功能、基础设施或全局规则变化                 | CHANGELOG.md                                          |
 
@@ -24,7 +25,7 @@
 - 使用 React + TypeScript + Vite；Node.js 与 npm 以 .nvmrc、package.json 为准。
 - 使用 npm，提交 package-lock.json；换环境执行 npm ci，不混用锁文件。
 - TypeScript 使用严格模式。共用页面结构和组件放在 src/components；业务逻辑按功能放在 src/features。
-- 用户要求当前只做基础骨架：不添加自定义 CSS、主题、UI 库、演示数据和业务页面。后续有明确需求时再引入。
+- 当前范围是基础骨架和用户选定的左侧导航样式。导航按 docs/NAVIGATION.md 与参考图实现；主内容保持最小骨架，不擅自添加业务页面、演示数据、主题或整套 UI 库。
 - 重复出现的选择项使用共享字典，不在各页面各写一份。
 - 当前只实现前端基础框架。接入真实数据前，清晰标记空状态，不能用虚构指标冒充实际数据。
 - 后续权限必须由服务端校验；前端隐藏入口不能充当安全控制。

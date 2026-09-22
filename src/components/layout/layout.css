@@ -1,0 +1,31 @@
+body {
+  margin: 0;
+}
+
+.app-layout {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  align-items: start;
+  align-content: start;
+  gap: 32px;
+  padding: 24px;
+  background: #f3f3f3;
+}
+
+.app-content {
+  min-width: 0;
+  padding: 12px 8px;
+}
+
+@media (max-width: 720px) {
+  .app-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px;
+  }
+  .app-content {
+    padding: 0 8px;
+  }
+}
