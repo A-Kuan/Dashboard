@@ -4,7 +4,7 @@
 
 方案 A：React + TypeScript + Vite，使用 React Router 提供浏览器端路由。
 
-用户要求只做基础骨架：不加入自定义 CSS、主题、UI 组件库、图标库、演示数据或业务页面。首页和 404 只使用语义 HTML 与浏览器默认样式。后端、登录、权限、数据库与商品管理尚未实现。
+当前范围是基础骨架与参考图风格的左侧导航。仅为导航及承载它的基础布局加入样式，主内容保持语义 HTML；没有主题、整套 UI 组件库、演示数据或业务页面。导航图标使用 @tabler/icons-react。后端、登录、权限、数据库与商品管理尚未实现。
 
 技术版本以 package.json 的精确版本和 package-lock.json 为准。
 
@@ -15,11 +15,13 @@ src/
   App.tsx                 根组件与路由
   main.tsx                React 启动入口
   config/app.ts           公开应用配置
-  components/layout/      共享布局入口
+  config/navigation.ts    导航分区、分组与链接配置
+  components/layout/      共享布局入口与承载布局样式
+  components/navigation/  导航组件、类型与局部样式
   pages/                  首页与 404 页面
   vite-env.d.ts           环境变量类型
- docs/                    全局文档
- .github/                 CI 与 PR 模板
+docs/                     全局文档与视觉参考
+.github/                  CI 与 PR 模板
 ```
 
 ## 路由
@@ -29,7 +31,9 @@ src/
 | /        | 首页     | 最小骨架就绪提示 |
 | 其他地址 | 404 页面 | 返回首页链接     |
 
-共享布局只包含导航和主内容区域。应用名称从 VITE_APP_NAME 读取，默认 Dashboard。
+共享布局包含 Sidebar 和主内容区域。Sidebar 从 config/navigation.ts 读取配置；现有菜单为“工作台 → 首页”，不会为菜单创建虚假业务页面。应用名称从 VITE_APP_NAME 读取，默认 Dashboard。
+
+导航使用原生 button 折叠分组、NavLink 表达当前页面，并提供移动端菜单。展开状态仅保存在当前组件中，不持久化。样式与交互规范见 [NAVIGATION.md](NAVIGATION.md)。
 
 部署时需配置 SPA 回退，使直接访问未来新增的子路径也能返回 index.html。前端 404 是页面展示，不会改变静态服务器返回的 HTTP 状态码。
 
