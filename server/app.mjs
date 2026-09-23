@@ -147,9 +147,26 @@ export function createApp({
       ...row,
       customerType: row.customer_type,
       projectStage: row.project_stage,
+      mainBrand: row.main_brand,
+      invoiceTitle: row.invoice_title,
+      taxId: row.tax_id,
+      settlementMethod: row.settlement_method,
+      additionalContacts: db
+        .prepare(
+          'SELECT id,name,phone,wechat,email FROM customer_contacts WHERE customer_id=? ORDER BY position',
+        )
+        .all(row.id),
       enabled: Boolean(row.enabled),
       updatedAt: row.updated_at,
     }
+  }
+  function nextCustomerCode() {
+    const prefix = `KH${now().slice(0, 10).replaceAll('-', '')}`
+    const latest = db
+      .prepare('SELECT code FROM customers WHERE code LIKE ? ORDER BY code DESC LIMIT 1')
+      .get(`${prefix}%`)
+    const sequence = latest ? Number(latest.code.slice(prefix.length)) + 1 : 1
+    return `${prefix}${String(Number.isSafeInteger(sequence) ? sequence : 1).padStart(3, '0')}`
   }
   function quoteTemplate(row) {
     return {
@@ -716,7 +733,10 @@ export function createApp({
           if (!customerStages.includes(previous.project_stage))
             customerStages.push(previous.project_stage)
         }
-        const value = customerInput(body, { customerTypes, customerStages })
+        const value = customerInput(
+          { ...body, code: previous?.code ?? nextCustomerCode() },
+          { customerTypes, customerStages },
+        )
         return json(
           res,
           cm ? 200 : 201,
@@ -728,6 +748,17 @@ export function createApp({
               value.projectStage,
               value.contact,
               value.phone,
+              value.source,
+              value.owner,
+              value.wechat,
+              value.email,
+              value.mainBrand,
+              value.tags,
+              value.invoiceTitle,
+              value.taxId,
+              value.settlementMethod,
+              value.region,
+              value.address,
               value.notes,
               Number(value.enabled),
               now(),
@@ -735,12 +766,27 @@ export function createApp({
             ]
             if (cm)
               db.prepare(
-                'UPDATE customers SET code=?,name=?,customer_type=?,project_stage=?,contact=?,phone=?,notes=?,enabled=?,updated_at=?,version=version+1 WHERE id=?',
+                'UPDATE customers SET code=?,name=?,customer_type=?,project_stage=?,contact=?,phone=?,source=?,owner=?,wechat=?,email=?,main_brand=?,tags=?,invoice_title=?,tax_id=?,settlement_method=?,region=?,address=?,notes=?,enabled=?,updated_at=?,version=version+1 WHERE id=?',
               ).run(...args)
             else
               db.prepare(
-                'INSERT INTO customers(code,name,customer_type,project_stage,contact,phone,notes,enabled,updated_at,id) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO customers(code,name,customer_type,project_stage,contact,phone,source,owner,wechat,email,main_brand,tags,invoice_title,tax_id,settlement_method,region,address,notes,enabled,updated_at,id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
               ).run(...args)
+            db.prepare('DELETE FROM customer_contacts WHERE customer_id=?').run(id)
+            const insertContact = db.prepare(
+              'INSERT INTO customer_contacts(id,customer_id,position,name,phone,wechat,email) VALUES(?,?,?,?,?,?,?)',
+            )
+            value.additionalContacts.forEach((contact, position) =>
+              insertContact.run(
+                contact.id,
+                id,
+                position,
+                contact.name,
+                contact.phone,
+                contact.wechat,
+                contact.email,
+              ),
+            )
             if (previous && previous.project_stage !== value.projectStage)
               db.prepare(
                 'INSERT INTO customer_activities(id,customer_id,content,created_at,user_id) VALUES(?,?,?,?,?)',

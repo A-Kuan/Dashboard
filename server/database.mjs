@@ -27,6 +27,12 @@ export function openDatabase(directory) {
       id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
       content TEXT NOT NULL, created_at TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id)
     );
+    CREATE TABLE IF NOT EXISTS customer_contacts (
+      id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL,
+      wechat TEXT NOT NULL, email TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS customer_contacts_customer_position ON customer_contacts(customer_id,position);
     CREATE INDEX IF NOT EXISTS customer_activities_customer_date ON customer_activities(customer_id,created_at DESC);
     CREATE TABLE IF NOT EXISTS skus (
       id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
@@ -120,6 +126,21 @@ export function openDatabase(directory) {
     db.exec("ALTER TABLE customers ADD COLUMN customer_type TEXT NOT NULL DEFAULT '待分类'")
   if (!columns('customers').has('project_stage'))
     db.exec("ALTER TABLE customers ADD COLUMN project_stage TEXT NOT NULL DEFAULT '待跟进'")
+  for (const name of [
+    'source',
+    'owner',
+    'wechat',
+    'email',
+    'main_brand',
+    'tags',
+    'invoice_title',
+    'tax_id',
+    'settlement_method',
+    'region',
+    'address',
+  ])
+    if (!columns('customers').has(name))
+      db.exec(`ALTER TABLE customers ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`)
   db.prepare(
     `INSERT OR IGNORE INTO dictionary_groups(scope,code,name,description,editable,status,maintenance_mode,sort_order,source_id,source_json)
      VALUES('configuration',?,?,?,?,?,?,?,?,'{}')`,
@@ -179,7 +200,7 @@ export function openDatabase(directory) {
     db.exec('ALTER TABLE quote_template_parts ADD COLUMN price_minor INTEGER')
   db.exec('CREATE INDEX IF NOT EXISTS skus_enabled_code_idx ON skus(enabled,code)')
   db.exec('CREATE INDEX IF NOT EXISTS fitments_sku_series_idx ON fitments(sku_id,series)')
-  db.exec('PRAGMA user_version = 7')
+  db.exec('PRAGMA user_version = 8')
   return db
 }
 

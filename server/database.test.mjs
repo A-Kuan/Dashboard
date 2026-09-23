@@ -33,6 +33,7 @@ test('old customer and SKU data survives price schema migration', () => {
       db.prepare('SELECT project_stage FROM customers WHERE id=?').get('c1').project_stage,
       '待跟进',
     )
+    assert.equal(db.prepare('SELECT address FROM customers WHERE id=?').get('c1').address, '')
     assert.equal(
       db.prepare('SELECT trade_price_minor,repair_price_minor FROM skus WHERE id=?').get('s1')
         .trade_price_minor,
@@ -40,6 +41,7 @@ test('old customer and SKU data survives price schema migration', () => {
     )
     assert.equal(db.prepare('SELECT name FROM skus WHERE id=?').get('s1').name, '旧配件')
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='supplier_quotes'").get())
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='customer_contacts'").get())
     assert.deepEqual(
       db
         .prepare(

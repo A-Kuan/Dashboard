@@ -51,16 +51,45 @@ function integer(value, label, min = 0, max = 100000000) {
 export function customerInput(body, dictionaries = {}) {
   const customerTypes = dictionaries.customerTypes ?? catalog.customerTypes
   const customerStages = dictionaries.customerStages ?? catalog.customerStages
-  return {
+  const value = {
     code: text(body.code, '客户编码', true, 50),
     name: text(body.name, '客户名称', true),
     customerType: choice(body.customerType, customerTypes, '客户类型'),
     projectStage: choice(body.projectStage ?? customerStages[0], customerStages, '跟进阶段'),
     contact: text(body.contact, '联系人'),
     phone: text(body.phone, '电话', false, 60),
+    source: text(body.source ?? '', '客户来源', false, 120),
+    owner: text(body.owner ?? '', '负责人', false, 120),
+    wechat: text(body.wechat ?? '', '微信', false, 120),
+    email: text(body.email ?? '', '邮箱', false, 200),
+    mainBrand: text(body.mainBrand ?? '', '主营品牌', false, 120),
+    tags: text(body.tags ?? '', '客户标签', false, 300),
+    invoiceTitle: text(body.invoiceTitle ?? '', '发票抬头', false, 200),
+    taxId: text(body.taxId ?? '', '税号', false, 100),
+    settlementMethod: text(body.settlementMethod ?? '', '结算方式', false, 120),
+    region: text(body.region ?? '', '所在地区', false, 200),
+    address: text(body.address ?? '', '详细地址', false, 500),
     notes: text(body.notes, '备注', false, 2000),
     enabled: boolean(body.enabled),
+    additionalContacts: list(body.additionalContacts ?? [], '其他联系人', 20).map((contact) => ({
+      id: text(contact.id, '联系人编号', true, 36),
+      name: text(contact.name, '联系人姓名', true, 120),
+      phone: text(contact.phone ?? '', '联系人电话', false, 60),
+      wechat: text(contact.wechat ?? '', '联系人微信', false, 120),
+      email: text(contact.email ?? '', '联系人邮箱', false, 200),
+    })),
   }
+  for (const contact of value.additionalContacts)
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(contact.id)
+    )
+      throw new ApiError(400, '联系人编号无效')
+  if (
+    new Set(value.additionalContacts.map((contact) => contact.id)).size !==
+    value.additionalContacts.length
+  )
+    throw new ApiError(400, '联系人编号不能重复')
+  return value
 }
 export function quoteTemplateInput(body) {
   const value = {

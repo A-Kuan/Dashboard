@@ -12,6 +12,24 @@ export type Customer = {
   projectStage: string
   contact: string
   phone: string
+  source: string
+  owner: string
+  wechat: string
+  email: string
+  mainBrand: string
+  tags: string
+  invoiceTitle: string
+  taxId: string
+  settlementMethod: string
+  region: string
+  address: string
+  additionalContacts: {
+    id: string
+    name: string
+    phone: string
+    wechat: string
+    email: string
+  }[]
   notes: string
   enabled: boolean
   version: number

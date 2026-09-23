@@ -2,9 +2,14 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   IconCalendar,
   IconFileText,
+  IconId,
   IconMessageCircle,
+  IconMapPin,
+  IconReceipt,
+  IconTag,
   IconPlus,
   IconSearch,
+  IconTrash,
   IconUser,
   IconX,
 } from '@tabler/icons-react'
@@ -26,6 +31,18 @@ const blank: Customer = {
   projectStage: '待跟进',
   contact: '',
   phone: '',
+  source: '',
+  owner: '',
+  wechat: '',
+  email: '',
+  mainBrand: '',
+  tags: '',
+  invoiceTitle: '',
+  taxId: '',
+  settlementMethod: '',
+  region: '',
+  address: '',
+  additionalContacts: [],
   notes: '',
   enabled: true,
   version: 0,
@@ -42,12 +59,14 @@ export function CustomersPage() {
   const [rows, setRows] = useState<Customer[]>([])
   const [customerTypes, setCustomerTypes] = useState<string[]>([])
   const [stages, setStages] = useState<string[]>([])
+  const [brands, setBrands] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('全部客户')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [form, setForm] = useState<Customer | null>(null)
+  const [formSection, setFormSection] = useState('basic')
   const [activities, setActivities] = useState<Activity[]>([])
   const [activityText, setActivityText] = useState('')
   const [error, setError] = useState('')
@@ -70,11 +89,13 @@ export function CustomersPage() {
       api<Customer[]>('/customers'),
       api<DictionaryOption[]>('/dictionaries/options?scope=configuration&code=customer_type'),
       api<DictionaryOption[]>('/dictionaries/options?scope=configuration&code=customer_stage'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=product_brand'),
     ])
-      .then(([customers, typeOptions, stageRows]) => {
+      .then(([customers, typeOptions, stageRows, brandRows]) => {
         setRows(customers)
         setCustomerTypes(typeOptions.map((option) => option.label))
         setStages(stageRows.map((option) => option.label))
+        setBrands(brandRows.map((option) => option.label))
       })
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setLoading(false))
@@ -103,9 +124,10 @@ export function CustomersPage() {
   )
   const selected = rows.find((row) => row.id === selectedId) ?? null
   function openEditor(customer?: Customer, stage?: Customer['projectStage']) {
+    setFormSection('basic')
     setForm(
       customer
-        ? { ...customer }
+        ? { ...customer, additionalContacts: customer.additionalContacts ?? [] }
         : {
             ...blank,
             customerType: customerTypes.includes(blank.customerType)
@@ -120,6 +142,34 @@ export function CustomersPage() {
     )
     setFormError('')
   }
+  const formSections = [
+    { id: 'basic', label: '基本资料', icon: IconId },
+    { id: 'contact', label: '联系方式', icon: IconUser },
+    { id: 'business', label: '业务偏好', icon: IconTag },
+    { id: 'billing', label: '开票与结算', icon: IconReceipt },
+    { id: 'address', label: '地址备注', icon: IconMapPin },
+  ]
+  const completionFields: (keyof Customer)[] = [
+    'name',
+    'customerType',
+    'projectStage',
+    'contact',
+    'phone',
+    'source',
+    'owner',
+    'mainBrand',
+    'invoiceTitle',
+    'settlementMethod',
+    'region',
+    'address',
+  ]
+  const completion = form
+    ? Math.round(
+        (completionFields.filter((key) => String(form[key] ?? '').trim()).length /
+          completionFields.length) *
+          100,
+      )
+    : 0
   async function save(event: FormEvent) {
     event.preventDefault()
     if (!form) return
@@ -367,10 +417,64 @@ export function CustomersPage() {
                   <dd>{selected.phone || '未填写'}</dd>
                 </div>
                 <div>
+                  <dt>负责人</dt>
+                  <dd>{selected.owner || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>客户来源</dt>
+                  <dd>{selected.source || '未填写'}</dd>
+                </div>
+                <div>
                   <dt>最近更新</dt>
                   <dd>{shortDate(selected.updatedAt)}</dd>
                 </div>
               </dl>
+            </section>
+            <section className="customer-projects-detail-section">
+              <h3>联系与业务资料</h3>
+              <dl>
+                <div>
+                  <dt>微信</dt>
+                  <dd>{selected.wechat || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>邮箱</dt>
+                  <dd>{selected.email || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>主营品牌</dt>
+                  <dd>{selected.mainBrand || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>客户标签</dt>
+                  <dd>{selected.tags || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>结算方式</dt>
+                  <dd>{selected.settlementMethod || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>所在地区</dt>
+                  <dd>{selected.region || '未填写'}</dd>
+                </div>
+                <div>
+                  <dt>详细地址</dt>
+                  <dd>{selected.address || '未填写'}</dd>
+                </div>
+              </dl>
+              {(selected.additionalContacts?.length ?? 0) > 0 && (
+                <div className="customer-projects-extra-contacts">
+                  <strong>其他联系人</strong>
+                  {selected.additionalContacts?.map((contact) => (
+                    <p key={contact.id}>
+                      {contact.name}
+                      <span>
+                        {[contact.phone, contact.wechat, contact.email].filter(Boolean).join(' · ')}
+                      </span>
+                    </p>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="customer-projects-detail-section">
               <h3>项目备注</h3>
@@ -428,75 +532,308 @@ export function CustomersPage() {
       </aside>
       {form && (
         <Modal
+          wide
           title={form.id ? '编辑客户项目' : '新增客户项目'}
           onClose={() => {
             if (!busy) setForm(null)
           }}
         >
-          <form onSubmit={save}>
-            <div className="form-grid">
-              <label>
-                客户类型
-                <Select
-                  label="客户类型"
-                  options={customerTypeOptions}
-                  value={form.customerType}
-                  onChange={(value) =>
-                    setForm({ ...form, customerType: value as Customer['customerType'] })
-                  }
-                />
-              </label>
-              <label>
-                跟进阶段
-                <Select
-                  label="跟进阶段"
-                  options={stageOptions}
-                  value={form.projectStage}
-                  onChange={(value) =>
-                    setForm({ ...form, projectStage: value as Customer['projectStage'] })
-                  }
-                />
-              </label>
+          <form className="customer-editor" onSubmit={save}>
+            <aside className="customer-editor-nav">
+              <div className="customer-editor-avatar" aria-hidden="true">
+                {form.name.trim().charAt(0) || '客'}
+              </div>
+              <span className="customer-editor-status">{form.enabled ? '启用中' : '已停用'}</span>
+              <strong>{form.name || '新客户项目'}</strong>
+              <small>{form.id ? form.code : '客户编号将在保存后生成'}</small>
+              <nav aria-label="客户资料分区">
+                {formSections.map((section) => {
+                  const Icon = section.icon
+                  return (
+                    <button
+                      type="button"
+                      className={formSection === section.id ? 'active' : ''}
+                      key={section.id}
+                      onClick={() => setFormSection(section.id)}
+                    >
+                      <Icon size={19} />
+                      {section.label}
+                    </button>
+                  )
+                })}
+              </nav>
+            </aside>
+            <div className="customer-editor-main">
+              <header className="customer-editor-heading">
+                <h3>{formSections.find((section) => section.id === formSection)?.label}</h3>
+                <p>完善客户资料，便于后续业务跟进与服务管理。</p>
+              </header>
+              {formSection === 'basic' && (
+                <div className="customer-editor-panel form-grid">
+                  <label>
+                    客户名称 <span className="required">*</span>
+                    <input
+                      required
+                      maxLength={200}
+                      value={form.name}
+                      onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    客户编号（自动生成）
+                    <input disabled value={form.id ? form.code : '保存后自动生成'} />
+                  </label>
+                  <label>
+                    客户类型 <span className="required">*</span>
+                    <Select
+                      label="客户类型"
+                      options={customerTypeOptions}
+                      value={form.customerType}
+                      onChange={(value) => setForm({ ...form, customerType: value })}
+                    />
+                  </label>
+                  <label>
+                    跟进阶段 <span className="required">*</span>
+                    <Select
+                      label="跟进阶段"
+                      options={stageOptions}
+                      value={form.projectStage}
+                      onChange={(value) => setForm({ ...form, projectStage: value })}
+                    />
+                  </label>
+                  <label>
+                    客户来源
+                    <input
+                      maxLength={120}
+                      placeholder="例如：老客户推荐"
+                      value={form.source}
+                      onChange={(event) => setForm({ ...form, source: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    负责人
+                    <input
+                      maxLength={120}
+                      value={form.owner}
+                      onChange={(event) => setForm({ ...form, owner: event.target.value })}
+                    />
+                  </label>
+                  <label className="checkbox-label customer-editor-enabled">
+                    <input
+                      type="checkbox"
+                      checked={form.enabled}
+                      onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
+                    />
+                    启用客户
+                  </label>
+                </div>
+              )}
+              {formSection === 'contact' && (
+                <div className="customer-editor-panel customer-editor-contacts">
+                  <div className="customer-editor-panel-heading">
+                    <strong>主联系人</strong>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm({
+                          ...form,
+                          additionalContacts: [
+                            ...form.additionalContacts,
+                            { id: crypto.randomUUID(), name: '', phone: '', wechat: '', email: '' },
+                          ],
+                        })
+                      }
+                    >
+                      <IconPlus size={16} />
+                      添加联系人
+                    </button>
+                  </div>
+                  <div className="form-grid">
+                    <label>
+                      姓名
+                      <input
+                        maxLength={200}
+                        value={form.contact}
+                        onChange={(event) => setForm({ ...form, contact: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      联系电话
+                      <input
+                        maxLength={60}
+                        value={form.phone}
+                        onChange={(event) => setForm({ ...form, phone: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      微信
+                      <input
+                        maxLength={120}
+                        value={form.wechat}
+                        onChange={(event) => setForm({ ...form, wechat: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      邮箱
+                      <input
+                        type="email"
+                        maxLength={200}
+                        value={form.email}
+                        onChange={(event) => setForm({ ...form, email: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  {form.additionalContacts.map((contact, index) => (
+                    <div className="customer-editor-extra-contact" key={contact.id}>
+                      <div className="customer-editor-panel-heading">
+                        <strong>其他联系人 {index + 1}</strong>
+                        <button
+                          type="button"
+                          aria-label={`删除其他联系人 ${index + 1}`}
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              additionalContacts: form.additionalContacts.filter(
+                                (item) => item.id !== contact.id,
+                              ),
+                            })
+                          }
+                        >
+                          <IconTrash size={16} />
+                          删除
+                        </button>
+                      </div>
+                      <div className="form-grid">
+                        {(['name', 'phone', 'wechat', 'email'] as const).map((key) => (
+                          <label key={key}>
+                            {
+                              { name: '姓名', phone: '联系电话', wechat: '微信', email: '邮箱' }[
+                                key
+                              ]
+                            }
+                            <input
+                              required={key === 'name'}
+                              type={key === 'email' ? 'email' : 'text'}
+                              maxLength={key === 'phone' ? 60 : key === 'email' ? 200 : 120}
+                              value={contact[key]}
+                              onChange={(event) =>
+                                setForm({
+                                  ...form,
+                                  additionalContacts: form.additionalContacts.map((item) =>
+                                    item.id === contact.id
+                                      ? { ...item, [key]: event.target.value }
+                                      : item,
+                                  ),
+                                })
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {formSection === 'business' && (
+                <div className="customer-editor-panel form-grid">
+                  <label>
+                    主营品牌
+                    <Select
+                      label="主营品牌"
+                      options={[
+                        { value: '', label: '未选择' },
+                        ...brands.map((brand) => ({ value: brand, label: brand })),
+                      ]}
+                      value={form.mainBrand}
+                      onChange={(value) => setForm({ ...form, mainBrand: value })}
+                    />
+                  </label>
+                  <label>
+                    客户标签
+                    <input
+                      maxLength={300}
+                      placeholder="例如：重点客户、华东区"
+                      value={form.tags}
+                      onChange={(event) => setForm({ ...form, tags: event.target.value })}
+                    />
+                  </label>
+                </div>
+              )}
+              {formSection === 'billing' && (
+                <div className="customer-editor-panel form-grid">
+                  <label>
+                    发票抬头
+                    <input
+                      maxLength={200}
+                      value={form.invoiceTitle}
+                      onChange={(event) => setForm({ ...form, invoiceTitle: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    税号
+                    <input
+                      maxLength={100}
+                      value={form.taxId}
+                      onChange={(event) => setForm({ ...form, taxId: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    结算方式
+                    <input
+                      maxLength={120}
+                      placeholder="例如：月结"
+                      value={form.settlementMethod}
+                      onChange={(event) =>
+                        setForm({ ...form, settlementMethod: event.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+              {formSection === 'address' && (
+                <div className="customer-editor-panel form-grid">
+                  <label>
+                    所在地区
+                    <input
+                      maxLength={200}
+                      placeholder="省 / 市 / 区"
+                      value={form.region}
+                      onChange={(event) => setForm({ ...form, region: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    详细地址
+                    <input
+                      maxLength={500}
+                      value={form.address}
+                      onChange={(event) => setForm({ ...form, address: event.target.value })}
+                    />
+                  </label>
+                  <label className="customer-editor-notes">
+                    项目备注
+                    <textarea
+                      value={form.notes}
+                      maxLength={2000}
+                      onChange={(event) => setForm({ ...form, notes: event.target.value })}
+                    />
+                  </label>
+                </div>
+              )}
+              <div className="customer-editor-completion">
+                <span>资料完整度</span>
+                <strong>{completion}%</strong>
+                <div aria-label={`资料完整度 ${completion}%`}>
+                  <span style={{ width: `${completion}%` }} />
+                </div>
+                <small>继续完善更多信息，提升客户管理效果。</small>
+              </div>
             </div>
-            <div className="form-grid">
-              {(['code', 'name', 'contact', 'phone'] as const).map((key) => (
-                <label key={key}>
-                  {
-                    { code: '客户编码', name: '客户名称', contact: '联系人', phone: '联系电话' }[
-                      key
-                    ]
-                  }
-                  <input
-                    required={key === 'code' || key === 'name'}
-                    maxLength={key === 'code' ? 50 : key === 'phone' ? 60 : 200}
-                    value={form[key]}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                  />
-                </label>
-              ))}
-            </div>
-            <label>
-              项目备注
-              <textarea
-                value={form.notes}
-                maxLength={2000}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              />
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-              />
-              启用客户
-            </label>
             {formError && (
               <p role="alert" className="error">
                 {formError}
               </p>
             )}
-            <footer className="form-actions">
+            <footer className="form-actions customer-editor-actions">
               <button type="button" disabled={busy} onClick={() => setForm(null)}>
                 取消
               </button>

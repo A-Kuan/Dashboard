@@ -252,7 +252,7 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
       400,
     )
   })
-  await t.test('persists customers with duplicate and version protection', async () => {
+  await t.test('persists customers with automatic codes and version protection', async () => {
     const typeOptions = await call('/dictionaries/options?scope=configuration&code=customer_type')
     const stageOptions = await call('/dictionaries/options?scope=configuration&code=customer_stage')
     assert.deepEqual(
@@ -273,6 +273,8 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
       enabled: true,
     }
     customerA = (await call('/customers', 'POST', input)).body
+    assert.match(customerA.code, /^KH\d{8}\d{3}$/)
+    assert.notEqual(customerA.code, input.code)
     assert.equal(customerA.projectStage, '待跟进')
     assert.equal(
       (
@@ -292,7 +294,7 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
         customerType: '修理厂',
       })
     ).body
-    assert.equal((await call('/customers', 'POST', input)).status, 409)
+    assert.notEqual(customerB.code, customerA.code)
     assert.equal(
       (await call(`/customers/${customerA.id}`, 'PUT', { ...customerA, version: 0 })).status,
       409,
@@ -300,8 +302,18 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     const moved = await call(`/customers/${customerA.id}`, 'PUT', {
       ...customerA,
       projectStage: '询价中',
+      additionalContacts: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          name: '采购联系人',
+          phone: '13800138000',
+          wechat: 'buyer-test',
+          email: 'buyer@example.com',
+        },
+      ],
     })
     assert.equal(moved.body.projectStage, '询价中')
+    assert.equal(moved.body.additionalContacts[0].name, '采购联系人')
     customerA = moved.body
     assert.equal(
       (await call(`/customers/${customerA.id}/activities`, 'POST', { content: '询价马勒空气滤芯' }))

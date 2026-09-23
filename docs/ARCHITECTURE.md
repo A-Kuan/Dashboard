@@ -50,7 +50,7 @@ docs/                     全局文档与视觉参考
 ## 登录、客户和 SKU
 
 - `/skus`：启用 SKU 列表、筛选、分页、新建、编辑及停用管理。库存零也显示，不含库存预警。
-- `/customers`：客户项目看板，按跟进阶段分列、按客户类型筛选；保留客户编码、名称、联系人、电话、备注与启停编辑，右侧显示客户详情和可持久保存的跟进记录。
+- `/customers`：客户项目看板，按跟进阶段分列、按客户类型筛选；新增与编辑采用基本资料、联系方式、业务偏好、开票结算、地址备注五个分区，客户编号由服务端自动生成，主营品牌复用商品品牌字典，可维护主联系人和多个其他联系人，右侧显示客户详情和可持久保存的跟进记录。
 - `/settings/accounts`：管理员创建和启停账号，不能停用当前账号。
 - `/settings/dictionaries`：配置中心字典，当前维护客户类型与客户跟进阶段；管理员可新增、编辑、排序、启用和停用选项。
 - `/sku-foundation`：展示当前业务实际使用的商品基础字典；管理员可维护可编辑分组的选项，固定分组只读。
@@ -60,9 +60,9 @@ docs/                     全局文档与视觉参考
 - `server/app.mjs` 处理 API、会话和静态页面；database.mjs 建表，validation.mjs 校验；scripts/dev.mjs 启动前后端。
 - shared/catalog.json 定义旧供货性质编码的回退项、历史值、产地、分类、单位、件号类型及角色；客户类型和客户跟进阶段改由数据库配置中心字典提供。
 
-SQLite 默认保存在 `.data/dashboard.sqlite`，启用 WAL 与外键。users、sessions、customers、skus、sku_numbers、fitments、stock_balances、customer_prices、quote_templates、quote_template_parts、audit_log 分表保存。测试使用隔离临时数据库。
+SQLite 默认保存在 `.data/dashboard.sqlite`，启用 WAL 与外键。users、sessions、customers、customer_contacts、customer_activities、skus、sku_numbers、fitments、stock_balances、customer_prices、quote_templates、quote_template_parts、audit_log 分表保存。测试使用隔离临时数据库。
 
-客户项目阶段保存在 `customers.project_stage`，旧数据升级时默认“待跟进”；`customer_activities` 保存客户跟进内容、作者与时间。客户类型和项目阶段分别读取配置中心字典 `customer_type` 与 `customer_stage` 的启用项，前端表单、筛选、看板分列和服务端写入校验共用同一来源。停用项不再用于新客户，但已有客户保留原值并可继续编辑其他资料。客户项目目前未和报价模板或实际报价单建立关联，右侧报价区域显示空状态。
+客户项目阶段保存在 `customers.project_stage`，旧数据升级时默认“待跟进”；客户表同时保存来源、负责人、微信、邮箱、主营品牌、标签、发票抬头、税号、结算方式、地区和详细地址，旧数据升级时这些字段保持空值。`customer_contacts` 保存其他联系人，`customer_activities` 保存客户跟进内容、作者与时间。新建客户编号按 `KH + 日期 + 当日序号` 由服务端生成，已有编号保持不变。客户类型和项目阶段分别读取配置中心字典 `customer_type` 与 `customer_stage` 的启用项，前端表单、筛选、看板分列和服务端写入校验共用同一来源；主营品牌读取商品基础字典 `product_brand`。停用项不再用于新客户，但已有客户保留原值并可继续编辑其他资料。客户项目目前未和报价模板或实际报价单建立关联，右侧报价区域显示空状态。
 
 SKU 主数据包含编码、名称、品牌、分类、厂家件号、供货性质、产地属性（国产/进口/待确认）、生产国家地区、销售单位、规格、安装位置、包装数量、图片链接、备注与启用状态。供货性质使用旧站 `sku_foundation/supply_type` 的编码与父子层级，原厂件、品牌件、待核实及其子项均可选；“德国”和“进口大众”要求产地为进口。已有 SKU 的“待确认”等旧值保留并允许继续编辑，新建使用字典编码。列表将历史“待确认”显示为“待核实（旧值）”，`UNKNOWN` 筛选同时匹配两者。同件号不同供货性质或产地可建立不同 SKU。
 
