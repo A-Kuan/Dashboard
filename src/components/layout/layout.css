@@ -6,7 +6,7 @@ body {
   box-sizing: border-box;
   min-height: 100dvh;
   display: block;
-  background: #f5f3ee;
+  background: var(--palette-warm);
 }
 
 .app-content {

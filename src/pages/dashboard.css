@@ -123,7 +123,7 @@
   min-height: 84px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--palette-line);
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .dashboard-stage-strip > div {
   display: flex;
@@ -161,7 +161,7 @@
 }
 .dashboard-home th {
   padding: 10px 16px;
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
   color: var(--palette-muted);
   font-size: 12px;
   font-weight: 550;
@@ -208,7 +208,7 @@
   text-decoration: none;
 }
 .dashboard-priority-list a:hover {
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .dashboard-priority-list a:last-child {
   border-bottom: 0;

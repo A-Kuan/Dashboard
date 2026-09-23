@@ -1,16 +1,16 @@
 :root {
-  --palette-blue: #0033a0;
-  --palette-blue-hover: #002778;
-  --palette-blue-soft: #e9effb;
-  --palette-warm: #f5f3ee;
-  --palette-warm-soft: #f8f7f3;
-  --palette-warm-light: #fffdfa;
+  --palette-blue: #0047c3;
+  --palette-blue-hover: #00399d;
+  --palette-blue-soft: #eaf2ff;
+  --palette-warm: #f5f3f0;
+  --palette-warm-soft: #f8f8f7;
+  --palette-warm-light: #fefdfc;
   --palette-charcoal: #343b47;
-  --palette-charcoal-deep: #1e2430;
-  --palette-ink: #1e2430;
-  --palette-muted: #6b7280;
-  --palette-line: #e2ded7;
-  --palette-surface: #fffdfa;
+  --palette-charcoal-deep: #0d1630;
+  --palette-ink: #0d1630;
+  --palette-muted: #6a7993;
+  --palette-line: #dce1e7;
+  --palette-surface: #fefdfc;
   --palette-white: #fff;
 }
 
@@ -522,7 +522,7 @@ body,
 .business th {
   padding: 12px 14px;
   border-radius: 0 !important;
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
   color: var(--palette-muted);
 }
 .business td {
@@ -534,7 +534,7 @@ body,
   border-bottom: 0;
 }
 .business tr:hover td {
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .business .pagination {
   max-width: 1520px;
@@ -567,7 +567,7 @@ body,
 }
 .dictionary-groups {
   border-right-color: var(--palette-line);
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .business .dictionary-groups button {
   position: relative;
@@ -615,7 +615,7 @@ body,
   min-height: 54px;
   padding: 0 20px;
   border-bottom-color: var(--palette-line);
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .customer-projects-board {
   gap: 12px;
@@ -625,7 +625,7 @@ body,
 .customer-projects-column.stage-1,
 .customer-projects-column.stage-2,
 .customer-projects-column.stage-3 {
-  background: #f7f6f2;
+  background: var(--palette-warm-soft);
 }
 .customer-project-card {
   border-color: var(--palette-line);
@@ -690,7 +690,7 @@ body,
   min-height: 0;
   height: 100%;
   border-right-color: var(--palette-line);
-  background: #faf9f6;
+  background: var(--palette-warm-soft);
 }
 .quotes-detail {
   min-height: 0;
