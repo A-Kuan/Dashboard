@@ -19,8 +19,9 @@ export const navigation: readonly NavigationSection[] = [
         label: '客户与报价',
         icon: IconUsers,
         children: [
-          { id: 'quote-templates', type: 'link', label: '报价模板', to: '/quotes/templates' },
+          { id: 'sales-home', type: 'link', label: '首页', to: '/', end: true },
           { id: 'customers', type: 'link', label: '客户项目', to: '/customers' },
+          { id: 'quote-templates', type: 'link', label: '报价模板', to: '/quotes/templates' },
         ],
       },
       {

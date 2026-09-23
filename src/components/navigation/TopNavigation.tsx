@@ -1,7 +1,8 @@
 import { useRef, useState, type FormEvent } from 'react'
 import {
+  IconBell,
   IconChevronDown,
-  IconLayoutDashboard,
+  IconHelpCircle,
   IconMenu2,
   IconSearch,
   IconX,
@@ -43,7 +44,10 @@ export function TopNavigation({ sections }: { sections: readonly NavigationSecti
   const groups = sections
     .flatMap((section) => section.items)
     .filter((item): item is NavigationGroup => item.type === 'group')
-  const currentGroup = groups.find((group) => isCurrent(group, pathname)) ?? groups[0]
+  const currentGroup =
+    (pathname === '/' ? groups.find((group) => group.id === 'sales') : undefined) ??
+    groups.find((group) => isCurrent(group, pathname)) ??
+    groups[0]
   const searchable = groups.flatMap(linksOf)
   const results = query.trim()
     ? searchable.filter((item) =>
@@ -68,22 +72,19 @@ export function TopNavigation({ sections }: { sections: readonly NavigationSecti
     <header className="top-navigation">
       <div className="top-navigation-main">
         <Link to="/" className="top-navigation-brand" onClick={closeMenus}>
-          <IconLayoutDashboard size={28} stroke={1.9} aria-hidden="true" />
           <span>{appConfig.name}</span>
         </Link>
         <nav className={`top-navigation-groups${mobileOpen ? ' is-open' : ''}`} aria-label="主导航">
           {groups.map((group) => {
-            const Icon = group.icon
             return (
-              <NavLink
+              <Link
                 key={group.id}
                 to={firstLink(group)}
-                className={isCurrent(group, pathname) ? 'active' : ''}
+                className={group.id === currentGroup.id ? 'active' : ''}
                 onClick={closeMenus}
               >
-                {Icon && <Icon size={18} stroke={1.8} aria-hidden="true" />}
                 {group.label}
-              </NavLink>
+              </Link>
             )
           })}
         </nav>
@@ -106,6 +107,7 @@ export function TopNavigation({ sections }: { sections: readonly NavigationSecti
               }
             }}
           />
+          <kbd>⌘ K</kbd>
           {searchOpen && query.trim() && (
             <div className="top-navigation-search-results">
               {results.length ? (
@@ -130,6 +132,16 @@ export function TopNavigation({ sections }: { sections: readonly NavigationSecti
             </div>
           )}
         </form>
+        <div className="top-navigation-utilities">
+          <button type="button" aria-label="帮助">
+            <IconHelpCircle size={20} />
+            <span>帮助</span>
+          </button>
+          <button type="button" className="top-navigation-notifications" aria-label="通知">
+            <IconBell size={21} />
+            <i />
+          </button>
+        </div>
         <div className="top-navigation-account">
           <button
             type="button"
