@@ -851,6 +851,19 @@ export function createApp({
             )
             .get(),
         )
+        const dictionaryLabels = (dictionaryCode) =>
+          db
+            .prepare(
+              "SELECT label FROM dictionary_items WHERE scope='sku_foundation' AND dictionary_code=? AND status='active'",
+            )
+            .all(dictionaryCode)
+            .map((row) => row.label)
+        const hasDictionary = (dictionaryCode) =>
+          Boolean(
+            db
+              .prepare("SELECT 1 FROM dictionary_groups WHERE scope='sku_foundation' AND code=?")
+              .get(dictionaryCode),
+          )
         const value = skuInput(body, {
           categories: [
             prior?.category,
@@ -870,6 +883,26 @@ export function createApp({
               .all()
               .map((row) => row.label),
           ].filter(Boolean),
+          brands: hasDictionary('product_brand')
+            ? [prior?.brand, ...dictionaryLabels('product_brand')].filter(Boolean)
+            : undefined,
+          positions: hasDictionary('position')
+            ? [
+                ...(prior?.position ? prior.position.split('、') : []),
+                ...dictionaryLabels('position'),
+              ].filter(Boolean)
+            : undefined,
+          vehicleBrands: hasDictionary('vehicle_brand')
+            ? [
+                ...(sm
+                  ? db
+                      .prepare('SELECT DISTINCT make FROM fitments WHERE sku_id=?')
+                      .all(sm[1])
+                      .map((row) => row.make)
+                  : []),
+                ...dictionaryLabels('vehicle_brand'),
+              ].filter(Boolean)
+            : undefined,
           natures: [
             ...(hasSupplyDictionary
               ? db

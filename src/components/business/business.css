@@ -433,6 +433,26 @@
   grid-template-columns: 1fr 1fr;
   gap: 0 18px;
 }
+.business .dictionary-selection-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+.business .dictionary-selection-tags button {
+  min-height: 28px;
+  padding: 4px 8px 4px 10px;
+  border-color: #d8e1ec;
+  border-radius: 5px;
+  background: #f5f8fc;
+  color: #425571;
+  font-size: 12px;
+}
+.business .dictionary-selection-tags button span {
+  margin-left: 7px;
+  color: #7d8ca1;
+  font-size: 15px;
+}
 .business .form-actions {
   display: flex;
   justify-content: flex-end;

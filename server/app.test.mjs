@@ -53,7 +53,7 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     country: '中国',
     unit: '个',
     specification: '',
-    position: '',
+    position: '前轴、左侧',
     packQuantity: 1,
     imageUrl: '',
     tradePriceMinor: 12000,
@@ -223,6 +223,33 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     )
     assert.equal(filtered.body.rows[0].parentLabel, '品牌件')
   })
+  await t.test('SKU fields use matching active dictionaries', async () => {
+    const addGroup = app.db.prepare(
+      `INSERT INTO dictionary_groups(scope,code,name,description,editable,status,maintenance_mode,sort_order,source_id,source_json)
+       VALUES('sku_foundation',?,?, '',1,'active','user',?,?,'{}')`,
+    )
+    addGroup.run('product_brand', '商品品牌', 3, 'test-product-brand')
+    addGroup.run('vehicle_brand', '适配汽车品牌', 4, 'test-vehicle-brand')
+    addGroup.run('position', '安装位置', 5, 'test-position')
+    const addItem = app.db.prepare(
+      `INSERT INTO dictionary_items(scope,dictionary_code,code,label,description,sort_order,status,parent_code,metadata_json,navigation_rule_json,source_id,source_json)
+       VALUES('sku_foundation',?,?,?,'',0,'active',NULL,'{}','{}',?,'{}')`,
+    )
+    addItem.run('product_brand', 'TEST_BRAND', '测试品牌', 'test-brand-item')
+    addItem.run('vehicle_brand', 'TEST_MAKE', '测试车厂', 'test-make-item')
+    addItem.run('position', 'FRONT', '前轴', 'test-position-front')
+    addItem.run('position', 'LEFT', '左侧', 'test-position-left')
+    assert.equal(
+      (
+        await call('/skus', 'POST', {
+          ...sample,
+          code: 'INVALID-DICTIONARY-SKU',
+          brand: '字典外品牌',
+        })
+      ).status,
+      400,
+    )
+  })
   await t.test('persists customers with duplicate and version protection', async () => {
     const input = {
       code: 'C-001',
@@ -275,6 +302,7 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     assert.equal(result.status, 201)
     storedSku = result.body
     assert.equal(storedSku.stocks[0].quantity, 0)
+    assert.equal(storedSku.position, '前轴、左侧')
     assert.equal(storedSku.prices.find((p) => p.customerId === customerB.id).amountMinor, 15000)
     assert.equal(storedSku.tradePriceMinor, 12000)
     assert.equal(storedSku.repairPriceMinor, 14500)

@@ -23,6 +23,7 @@ export function SkuPage() {
   const [rows, setRows] = useState<Sku[]>([])
   const [total, setTotal] = useState(0)
   const [brands, setBrands] = useState<string[]>([])
+  const [dictionaryBrands, setDictionaryBrands] = useState<string[]>([])
   const [dictionaryCategories, setDictionaryCategories] = useState<string[]>([])
   const [supplyTypes, setSupplyTypes] = useState<SupplyTypeItem[] | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -51,6 +52,11 @@ export function SkuPage() {
       '/dictionaries/options?scope=sku_foundation&code=category',
     )
       .then((items) => setDictionaryCategories(items.map((item) => item.label)))
+      .catch(() => {})
+    void api<{ code: string; label: string }[]>(
+      '/dictionaries/options?scope=sku_foundation&code=product_brand',
+    )
+      .then((items) => setDictionaryBrands(items.map((item) => item.label)))
       .catch(() => {})
     void Promise.all([
       api<SupplyTypeItem[]>('/dictionaries/options?scope=sku_foundation&code=supply_type'),
@@ -164,7 +170,7 @@ export function SkuPage() {
         <div className="filters">
           {(
             [
-              ['brand', '品牌', brands],
+              ['brand', '品牌', [...new Set([...dictionaryBrands, ...brands])]],
               [
                 'category',
                 '配件分类',

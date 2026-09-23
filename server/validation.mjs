@@ -17,6 +17,19 @@ function choice(value, values, label) {
   if (!values.includes(value)) throw new ApiError(400, `${label}无效`)
   return value
 }
+function optionalChoice(value, values, label) {
+  const result = text(value, label, false, 80)
+  if (result && !values.includes(result)) throw new ApiError(400, `${label}无效`)
+  return result
+}
+function compositeChoice(value, values, label) {
+  const result = text(value, label, false, 80)
+  if (!result) return result
+  const selected = result.split('、').filter(Boolean)
+  if (new Set(selected).size !== selected.length || selected.some((item) => !values.includes(item)))
+    throw new ApiError(400, `${label}无效`)
+  return selected.join('、')
+}
 function list(value, label, max = 100) {
   if (
     !Array.isArray(value) ||
@@ -79,7 +92,9 @@ export function skuInput(body, dictionaries = {}) {
       [...catalog.categories, ...(dictionaries.categories ?? [])],
       '分类',
     ),
-    brand: text(body.brand, '品牌', false, 80),
+    brand: dictionaries.brands
+      ? optionalChoice(body.brand, dictionaries.brands, '品牌')
+      : text(body.brand, '品牌', false, 80),
     partNumber: text(body.partNumber, '厂家件号', false, 100),
     nature: choice(
       body.nature,
@@ -90,7 +105,9 @@ export function skuInput(body, dictionaries = {}) {
     country: text(body.country, '生产国家／地区', false, 80),
     unit: choice(body.unit, [...catalog.units, ...(dictionaries.units ?? [])], '销售单位'),
     specification: text(body.specification, '规格'),
-    position: text(body.position, '安装位置', false, 80),
+    position: dictionaries.positions
+      ? compositeChoice(body.position, dictionaries.positions, '安装位置')
+      : text(body.position, '安装位置', false, 80),
     packQuantity: integer(body.packQuantity, '包装数量', 1, 100000),
     imageUrl: text(body.imageUrl, '图片地址', false, 2000),
     tradePriceMinor:
@@ -116,7 +133,9 @@ export function skuInput(body, dictionaries = {}) {
       if (yearFrom && yearTo && yearFrom > yearTo)
         throw new ApiError(400, '截止年款不能早于起始年款')
       return {
-        make: text(f.make, '汽车品牌', true, 80),
+        make: dictionaries.vehicleBrands
+          ? choice(f.make, dictionaries.vehicleBrands, '汽车品牌')
+          : text(f.make, '汽车品牌', true, 80),
         series: text(f.series, '车系', true, 80),
         chassis: text(f.chassis, '车型代号', false, 80),
         yearFrom,

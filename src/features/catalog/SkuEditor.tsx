@@ -19,6 +19,7 @@ const blankFitment: Fitment = {
   verified: false,
 }
 const tabs = ['基本信息', '件号与适配', '库存库位', '售价与供应商报价'] as const
+type DictionaryOption = { code: string; label: string }
 
 export function SkuEditor({
   initial,
@@ -44,6 +45,11 @@ export function SkuEditor({
   const [foundation, setFoundation] = useState<{
     categories: string[]
     units: string[]
+    brands: string[]
+    positions: string[]
+    vehicleBrands: string[]
+    skuStatuses: DictionaryOption[]
+    verificationStatuses: DictionaryOption[]
     supplyTypes: SupplyTypeItem[] | null
   } | null>(null)
   useEffect(() => {
@@ -56,16 +62,40 @@ export function SkuEditor({
         '/dictionaries/options?scope=sku_foundation&code=unit',
       ),
       api<SupplyTypeItem[]>('/dictionaries/options?scope=sku_foundation&code=supply_type'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=product_brand'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=position'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=vehicle_brand'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=sku_status'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=verification'),
       api<{ code: string }[]>('/dictionaries/groups?scope=sku_foundation'),
     ])
-      .then(([categories, units, supplyTypes, groups]) => {
-        if (alive)
-          setFoundation({
-            categories: categories.map((v) => v.label),
-            units: units.map((v) => v.label),
-            supplyTypes: groups.some((group) => group.code === 'supply_type') ? supplyTypes : null,
-          })
-      })
+      .then(
+        ([
+          categories,
+          units,
+          supplyTypes,
+          brands,
+          positions,
+          vehicleBrands,
+          skuStatuses,
+          verificationStatuses,
+          groups,
+        ]) => {
+          if (alive)
+            setFoundation({
+              categories: categories.map((v) => v.label),
+              units: units.map((v) => v.label),
+              brands: brands.map((v) => v.label),
+              positions: positions.map((v) => v.label),
+              vehicleBrands: vehicleBrands.map((v) => v.label),
+              skuStatuses,
+              verificationStatuses,
+              supplyTypes: groups.some((group) => group.code === 'supply_type')
+                ? supplyTypes
+                : null,
+            })
+        },
+      )
       .catch(() => {})
     return () => {
       alive = false
@@ -75,21 +105,28 @@ export function SkuEditor({
     ...new Set([...(foundation?.categories ?? catalog.categories), form.category]),
   ]
   const unitOptions = [...new Set([...(foundation?.units ?? catalog.units), form.unit])]
+  const brandOptions = [...new Set([...(foundation?.brands ?? []), form.brand].filter(Boolean))]
+  const positionOptions = [...new Set(foundation?.positions ?? [])]
+  const selectedPositions = form.position ? form.position.split('、').filter(Boolean) : []
+  const skuStatusItems = foundation?.skuStatuses.length
+    ? foundation.skuStatuses
+    : [
+        { code: 'ACTIVE', label: '启用' },
+        { code: 'DISABLED', label: '停用' },
+      ]
+  const verificationStatusItems = foundation?.verificationStatuses.length
+    ? foundation.verificationStatuses
+    : [
+        { code: 'PENDING', label: '待核实' },
+        { code: 'VERIFIED', label: '已核实' },
+      ]
   const natureOptions = supplyTypeOptions(foundation?.supplyTypes ?? null)
   if (form.nature && !natureOptions.some((item) => item.value === form.nature))
     natureOptions.push({ value: form.nature, label: `${form.nature}（旧值）` })
   const set = <K extends keyof Sku>(key: K, value: Sku[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
   const stringInput = (
-    key:
-      | 'code'
-      | 'name'
-      | 'brand'
-      | 'partNumber'
-      | 'country'
-      | 'specification'
-      | 'position'
-      | 'imageUrl',
+    key: 'code' | 'name' | 'partNumber' | 'country' | 'specification' | 'imageUrl',
     label: string,
     required = false,
   ) => (
@@ -102,7 +139,7 @@ export function SkuEditor({
         maxLength={
           key === 'imageUrl'
             ? 2000
-            : key === 'code' || key === 'brand' || key === 'country' || key === 'position'
+            : key === 'code' || key === 'country'
               ? 80
               : key === 'partNumber'
                 ? 100
@@ -207,7 +244,18 @@ export function SkuEditor({
               {stringInput('code', 'SKU 编码', true)}
               {stringInput('name', '配件名称', true)}
               {selectInput('category', '配件分类', categoryOptions)}
-              {stringInput('brand', '品牌')}
+              <label>
+                品牌
+                <Select
+                  label="品牌"
+                  options={[
+                    { value: '', label: '未设置' },
+                    ...brandOptions.map((value) => ({ value, label: value })),
+                  ]}
+                  value={form.brand}
+                  onChange={(value) => set('brand', value)}
+                />
+              </label>
               {form.sourceCategoryPath && (
                 <p className="inline-notice">
                   旧站分类：{form.sourceCategoryPath} · 旧站厂家标注：
@@ -235,7 +283,41 @@ export function SkuEditor({
               </label>
               {selectInput('origin', '产地属性', catalog.origins)}
               {stringInput('country', '生产国家／地区')}
-              {stringInput('position', '安装位置')}
+              <label>
+                安装位置
+                <Select
+                  label="添加安装位置"
+                  options={[
+                    { value: '', label: '选择安装位置' },
+                    ...positionOptions
+                      .filter((value) => !selectedPositions.includes(value))
+                      .map((value) => ({ value, label: value })),
+                  ]}
+                  value=""
+                  onChange={(value) => {
+                    if (value) set('position', [...selectedPositions, value].join('、'))
+                  }}
+                />
+                {selectedPositions.length > 0 && (
+                  <span className="dictionary-selection-tags">
+                    {selectedPositions.map((value) => (
+                      <button
+                        type="button"
+                        key={value}
+                        onClick={() =>
+                          set(
+                            'position',
+                            selectedPositions.filter((item) => item !== value).join('、'),
+                          )
+                        }
+                      >
+                        {value}
+                        <span aria-hidden="true">×</span>
+                      </button>
+                    ))}
+                  </span>
+                )}
+              </label>
               {stringInput('specification', '规格／型号')}
               <label>
                 包装数量
@@ -259,13 +341,16 @@ export function SkuEditor({
                 onChange={(e) => set('notes', e.target.value)}
               />
             </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.enabled}
-                onChange={(e) => set('enabled', e.target.checked)}
+            <label>
+              商品经营状态
+              <Select
+                label="商品经营状态"
+                options={skuStatusItems
+                  .filter((item) => item.code === 'ACTIVE' || item.code === 'DISABLED')
+                  .map((item) => ({ value: item.code, label: item.label }))}
+                value={form.enabled ? 'ACTIVE' : 'DISABLED'}
+                onChange={(value) => set('enabled', value === 'ACTIVE')}
               />
-              启用 SKU
             </label>
           </div>
           <div hidden={tab !== '件号与适配'} className="editor-panel">
@@ -355,33 +440,46 @@ export function SkuEditor({
                   </button>
                 </div>
                 <div className="form-grid">
-                  {(['make', 'series', 'chassis', 'yearFrom', 'yearTo', 'engine'] as const).map(
-                    (key) => (
-                      <label key={key}>
+                  <label>
+                    汽车品牌
+                    <Select
+                      label="汽车品牌"
+                      options={[
+                        ...new Set([...(foundation?.vehicleBrands ?? []), f.make].filter(Boolean)),
+                      ].map((value) => ({ value, label: value }))}
+                      value={f.make}
+                      onChange={(value) =>
+                        set(
+                          'fitments',
+                          form.fitments.map((v, j) => (j === i ? { ...v, make: value } : v)),
+                        )
+                      }
+                    />
+                  </label>
+                  {(['series', 'chassis', 'yearFrom', 'yearTo', 'engine'] as const).map((key) => (
+                    <label key={key}>
+                      {
                         {
-                          {
-                            make: '汽车品牌',
-                            series: '车系',
-                            chassis: '车型代号（如 E3、92A）',
-                            yearFrom: '起始年款',
-                            yearTo: '截止年款',
-                            engine: '发动机',
-                          }[key]
+                          series: '车系',
+                          chassis: '车型代号（如 E3、92A）',
+                          yearFrom: '起始年款',
+                          yearTo: '截止年款',
+                          engine: '发动机',
+                        }[key]
+                      }
+                      <input
+                        value={f[key]}
+                        onChange={(e) =>
+                          set(
+                            'fitments',
+                            form.fitments.map((v, j) =>
+                              j === i ? { ...v, [key]: e.target.value } : v,
+                            ),
+                          )
                         }
-                        <input
-                          value={f[key]}
-                          onChange={(e) =>
-                            set(
-                              'fitments',
-                              form.fitments.map((v, j) =>
-                                j === i ? { ...v, [key]: e.target.value } : v,
-                              ),
-                            )
-                          }
-                        />
-                      </label>
-                    ),
-                  )}
+                      />
+                    </label>
+                  ))}
                   <label>
                     动力类型
                     <Select
@@ -414,20 +512,23 @@ export function SkuEditor({
                     />
                   </label>
                 </div>
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={f.verified}
-                    onChange={(e) =>
+                <label>
+                  适配核实状态
+                  <Select
+                    label="适配核实状态"
+                    options={verificationStatusItems
+                      .filter((item) => item.code === 'PENDING' || item.code === 'VERIFIED')
+                      .map((item) => ({ value: item.code, label: item.label }))}
+                    value={f.verified ? 'VERIFIED' : 'PENDING'}
+                    onChange={(value) =>
                       set(
                         'fitments',
                         form.fitments.map((v, j) =>
-                          j === i ? { ...v, verified: e.target.checked } : v,
+                          j === i ? { ...v, verified: value === 'VERIFIED' } : v,
                         ),
                       )
                     }
                   />
-                  适配信息已核对
                 </label>
               </section>
             ))}
