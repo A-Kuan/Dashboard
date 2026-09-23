@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { IconCheck, IconChevronDown, IconSearch, IconX } from '@tabler/icons-react'
+import './select.css'
 
 export type SelectOption = { value: string; label: string }
 

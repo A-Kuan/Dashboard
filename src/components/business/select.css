@@ -1,0 +1,133 @@
+.business-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.business-select-trigger {
+  width: 100%;
+  min-height: 43px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d7dfe9;
+  border-radius: 7px;
+  background: #fff;
+  color: #243248;
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+
+.business-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.business-select-trigger:focus-visible,
+.business-select-search input:focus-visible,
+.business-select-list > button:focus-visible {
+  outline: 2px solid #1767e8;
+  outline-offset: 2px;
+}
+
+.business-select-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.business-select-options {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 5px);
+  left: 0;
+  width: max(100%, 180px);
+  max-width: min(380px, 80vw);
+  overflow: hidden;
+  padding: 5px;
+  border: 1px solid #d7dfe9;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 36px #15203320;
+}
+
+.business-select-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid #e6ebf2;
+  color: #8492a6;
+}
+
+.business-select-search input {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #243248;
+  font: inherit;
+}
+
+.business-select-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.business-select-search button {
+  flex: none;
+  min-height: 28px;
+  padding: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #718096;
+  cursor: pointer;
+}
+
+.business-select-list {
+  max-height: 225px;
+  overflow-y: auto;
+}
+
+.business-select-list > button {
+  width: 100%;
+  min-height: 35px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: #fff;
+  color: #243248;
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+
+.business-select-list > button:hover,
+.business-select-list > button.active {
+  background: #f4f7fb;
+}
+
+.business-select-list > button.selected {
+  color: #1459bd;
+  background: #edf4ff;
+}
+
+.business-select-empty {
+  margin: 0;
+  padding: 18px 10px;
+  color: #8795a8;
+  font-size: 13px;
+  text-align: center;
+}
