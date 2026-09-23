@@ -561,7 +561,7 @@
 .quotes-sku-drawer {
   position: absolute;
   inset: 0 0 0 auto;
-  width: min(620px, 92vw);
+  width: min(760px, 94vw);
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -595,9 +595,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 44px;
-  margin: 16px 24px 20px;
-  padding: 0 12px;
+  height: 50px;
+  margin: 18px 24px 22px;
+  padding: 0 15px;
   border: 1px solid #dbe2ec;
   border-radius: 10px;
   background: #f8fafc;
@@ -630,7 +630,7 @@
 }
 .quotes-drawer-row {
   display: grid;
-  grid-template-columns: 24px 110px minmax(0, 1fr) 92px;
+  grid-template-columns: 24px 132px minmax(0, 1fr) 112px;
   align-items: center;
   gap: 12px;
   min-height: 74px;
