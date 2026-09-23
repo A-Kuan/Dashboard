@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   IconCheck,
   IconClipboard,
+  IconDatabase,
   IconDotsVertical,
   IconEdit,
   IconFileDescription,
@@ -14,8 +15,21 @@ import {
 import './quotes.css'
 import { useAuth } from '../auth/context'
 import { api, errorMessage } from '../../lib/api'
+import type { Sku } from '../catalog/types'
+import { Select } from '../../components/business/Select'
 
-type Part = { id: string; vehicle: string; name: string; brand: string; note?: string }
+type DictionaryOption = { code: string; label: string; parentCode: string | null }
+
+type Part = {
+  id: string
+  vehicle: string
+  skuId: string
+  skuCode: string
+  name: string
+  brand: string
+  priceMinor: number | null
+  note?: string
+}
 type Template = {
   id: string
   name: string
@@ -37,9 +51,6 @@ const emptyTemplate: Template = {
   parts: [],
 }
 
-type PartForm = Omit<Part, 'id'>
-const blankPart: PartForm = { vehicle: '', name: '', brand: '', note: '' }
-
 function groupParts(parts: Part[]) {
   const groups = new Map<string, Part[]>()
   for (const part of parts) groups.set(part.vehicle, [...(groups.get(part.vehicle) ?? []), part])
@@ -56,17 +67,19 @@ export function QuoteTemplatesPage() {
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const [search, setSearch] = useState('')
-  const [partForm, setPartForm] = useState<PartForm>(blankPart)
-  const [editingPartId, setEditingPartId] = useState<string | null>(null)
-  const [dialog, setDialog] = useState<
-    'part' | 'name' | 'draft' | 'manage' | 'confirm-delete' | null
-  >(null)
+  const [dialog, setDialog] = useState<'name' | 'draft' | 'manage' | 'confirm-delete' | null>(null)
   const [nameForm, setNameForm] = useState({ name: '', customer: '', note: '', isCommon: false })
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [prices, setPrices] = useState<Record<string, string>>({})
   const [copyStatus, setCopyStatus] = useState('')
-  const [selectedPartIds, setSelectedPartIds] = useState<string[]>([])
+  const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
+  const [skuSearch, setSkuSearch] = useState('')
+  const [skuRows, setSkuRows] = useState<Sku[]>([])
+  const [skuLoading, setSkuLoading] = useState(false)
+  const [pickedSkuIds, setPickedSkuIds] = useState<string[]>([])
+  const [manualSkuCode, setManualSkuCode] = useState('')
+  const [brandOptions, setBrandOptions] = useState<string[]>([])
 
   useEffect(() => {
     let alive = true
@@ -90,9 +103,43 @@ export function QuoteTemplatesPage() {
     }
   }, [reload])
 
+  useEffect(() => {
+    let alive = true
+    void api<DictionaryOption[]>('/dictionaries/options?scope=sku_foundation&code=product_brand')
+      .then((result) => {
+        if (alive) setBrandOptions(result.map((option) => option.label))
+      })
+      .catch((cause) => {
+        if (alive) setError(errorMessage(cause))
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!skuDrawerOpen) return
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => {
+      setSkuLoading(true)
+      const params = new URLSearchParams({ page: '1', search: skuSearch.trim() })
+      void api<{ rows: Sku[] }>(`/skus/page?${params}`)
+        .then((result) => setSkuRows(result.rows))
+        .catch((cause) => {
+          if (!controller.signal.aborted) setError(errorMessage(cause))
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSkuLoading(false)
+        })
+    }, 180)
+    return () => {
+      controller.abort()
+      window.clearTimeout(timeout)
+    }
+  }, [skuDrawerOpen, skuSearch])
+
   const selected =
     templates.find((template) => template.id === selectedId) ?? templates[0] ?? emptyTemplate
-  const groups = groupParts(selected.parts)
   const filtered = templates.filter((template) =>
     `${template.name} ${template.customer}`.toLowerCase().includes(search.trim().toLowerCase()),
   )
@@ -120,59 +167,111 @@ export function QuoteTemplatesPage() {
     }
   }
 
-  function openPart(part?: Part, vehicle = '') {
-    setEditingPartId(part?.id ?? null)
-    setPartForm(
-      part
-        ? { vehicle: part.vehicle, name: part.name, brand: part.brand, note: part.note ?? '' }
-        : { ...blankPart, vehicle },
-    )
-    setDialog('part')
-  }
-
-  async function savePart(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const vehicle = partForm.vehicle.trim()
-    const name = partForm.name.trim()
-    const brand = partForm.brand.trim()
-    const note = partForm.note?.trim() ?? ''
-    if (!vehicle || !name) return
-    const saved = await updateSelected((template) => ({
-      ...template,
-      parts: editingPartId
-        ? template.parts.map((part) =>
-            part.id === editingPartId ? { ...part, vehicle, name, brand, note } : part,
-          )
-        : [...template.parts, { id: crypto.randomUUID(), vehicle, name, brand, note }],
-    }))
-    if (saved) setDialog(null)
-  }
-
   async function removePart(id: string) {
-    const saved = await updateSelected((template) => ({
+    await updateSelected((template) => ({
       ...template,
       parts: template.parts.filter((part) => part.id !== id),
     }))
-    if (saved) setSelectedPartIds((current) => current.filter((selectedId) => selectedId !== id))
   }
 
-  function togglePart(id: string) {
-    setSelectedPartIds((current) =>
-      current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
+  function priceForSku(sku: Sku) {
+    // 报价模板未绑定结构化客户类型，默认先取同行价，缺失时再取修理厂价。
+    return sku.tradePriceMinor ?? sku.repairPriceMinor
+  }
+
+  function partFromSku(sku: Sku): Part {
+    return {
+      id: crypto.randomUUID(),
+      vehicle: '',
+      skuId: sku.id,
+      skuCode: sku.code,
+      name: sku.name,
+      brand: sku.brand || sku.sourceManufacturer || '',
+      priceMinor: priceForSku(sku),
+      note: '',
+    }
+  }
+
+  async function addManualSku(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const code = manualSkuCode.trim()
+    if (!code) return
+    try {
+      const params = new URLSearchParams({ page: '1', search: code })
+      const result = await api<{ rows: Sku[] }>(`/skus/page?${params}`)
+      const match = result.rows.find((sku) => sku.code.toLowerCase() === code.toLowerCase())
+      const added = match
+        ? partFromSku(match)
+        : {
+            id: crypto.randomUUID(),
+            vehicle: '',
+            skuId: '',
+            skuCode: code,
+            name: '待填写名称',
+            brand: '',
+            priceMinor: null,
+            note: '',
+          }
+      await updateSelected((template) => ({ ...template, parts: [...template.parts, added] }))
+      setManualSkuCode('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  async function addPickedSkus() {
+    const additions = skuRows.filter((sku) => pickedSkuIds.includes(sku.id)).map(partFromSku)
+    const saved = await updateSelected((template) => ({
+      ...template,
+      parts: [
+        ...template.parts,
+        ...additions.filter(
+          (part) =>
+            !template.parts.some(
+              (existing) =>
+                (part.skuId && existing.skuId === part.skuId) ||
+                existing.skuCode.toLowerCase() === part.skuCode.toLowerCase(),
+            ),
+        ),
+      ],
+    }))
+    if (saved) {
+      setPickedSkuIds([])
+      setSkuDrawerOpen(false)
+    }
+  }
+
+  function updatePartField(id: string, field: 'brand' | 'name' | 'priceMinor', value: string) {
+    setTemplates((current) =>
+      current.map((template) =>
+        template.id === selected.id
+          ? {
+              ...template,
+              parts: template.parts.map((part) =>
+                part.id === id
+                  ? {
+                      ...part,
+                      [field]:
+                        field === 'priceMinor'
+                          ? value === ''
+                            ? null
+                            : Math.round(Number(value) * 100)
+                          : value,
+                    }
+                  : part,
+              ),
+            }
+          : template,
+      ),
     )
   }
 
-  async function removeSelectedParts() {
-    const saved = await updateSelected((template) => ({
-      ...template,
-      parts: template.parts.filter((part) => !selectedPartIds.includes(part.id)),
-    }))
-    if (saved) setSelectedPartIds([])
+  async function saveInlineChanges() {
+    await updateSelected((template) => template)
   }
 
   function editTemplate(template: Template) {
     setSelectedId(template.id)
-    setSelectedPartIds([])
     setEditingTemplateId(template.id)
     setNameForm({
       name: template.name,
@@ -233,7 +332,6 @@ export function QuoteTemplatesPage() {
       setTemplates(remaining)
       if (selectedId === id) {
         setSelectedId(remaining[0]?.id ?? '')
-        setSelectedPartIds([])
       }
       setDeletingId(null)
       setDialog('manage')
@@ -254,7 +352,6 @@ export function QuoteTemplatesPage() {
           className="quotes-template-select"
           onClick={() => {
             setSelectedId(template.id)
-            setSelectedPartIds([])
           }}
           type="button"
         >
@@ -282,7 +379,14 @@ export function QuoteTemplatesPage() {
   }
 
   function beginQuote() {
-    setPrices({})
+    setPrices(
+      Object.fromEntries(
+        selected.parts.map((part) => [
+          part.id,
+          part.priceMinor === null ? '' : (part.priceMinor / 100).toFixed(2),
+        ]),
+      ),
+    )
     setCopyStatus('')
     setDialog('draft')
   }
@@ -290,7 +394,7 @@ export function QuoteTemplatesPage() {
   async function copyQuote() {
     const lines = selected.parts.map(
       (part, index) =>
-        `${index + 1}. ${part.vehicle}｜${part.brand ? `${part.brand} ` : ''}${part.name}｜${prices[part.id]?.trim() ? `¥${prices[part.id]}` : '价格待确认'}`,
+        `${index + 1}. ${part.skuCode ? `SKU ${part.skuCode}｜` : ''}${part.brand ? `${part.brand} ` : ''}${part.name}｜${prices[part.id]?.trim() ? `¥${prices[part.id]}` : '价格待确认'}`,
     )
     const message = `您好，以下为本次配件报价：\n${lines.join('\n')}\n具体适配请以车型信息及零件号核对结果为准。`
     try {
@@ -395,92 +499,86 @@ export function QuoteTemplatesPage() {
             模板用于保存常用的车型与配件需求，帮助快速报价。每次新建报价时，请务必重新确认配件编号、适配车型、库存情况和最新价格。
           </span>
         </div>
-        <div className="quotes-section-heading">
+        <div className="quotes-section-heading quotes-sku-heading">
           <h3>
-            包含的车型与配件{' '}
-            <span>
-              共 {groups.length} 个车型 · {selected.parts.length} 个配件
-            </span>
+            配件清单 <span>共 {selected.parts.length} 个配件</span>
           </h3>
-          <div className="quotes-heading-actions">
-            {selected.id && selectedPartIds.length > 0 && (
-              <button
-                className="quotes-bulk-delete"
-                disabled={!writable || busy}
-                onClick={() => void removeSelectedParts()}
-                type="button"
-              >
-                删除已选（{selectedPartIds.length}）
-              </button>
-            )}
-            <button
-              className="quotes-outline-action"
-              disabled={!writable || !selected.id || busy}
-              onClick={() => openPart()}
-              type="button"
-            >
-              <IconPlus size={18} /> 加入其他车型或配件
-            </button>
-          </div>
         </div>
-        <div className="quotes-groups">
-          {groups.length === 0 && (
-            <div className="quotes-empty">
-              这个模板还没有配件。点击“加入其他车型或配件”开始添加。
-            </div>
+        <form className="quotes-sku-entry" onSubmit={(event) => void addManualSku(event)}>
+          <label htmlFor="quote-sku-code">输入 SKU 编码</label>
+          <input
+            id="quote-sku-code"
+            value={manualSkuCode}
+            onChange={(event) => setManualSkuCode(event.target.value)}
+            placeholder="请输入 SKU 编码，如 95850561100"
+            disabled={!writable || !selected.id || busy}
+          />
+          <button type="submit" disabled={!manualSkuCode.trim() || !writable || busy}>
+            添加
+          </button>
+          <button
+            className="quotes-library-action"
+            type="button"
+            disabled={!writable || !selected.id || busy}
+            onClick={() => setSkuDrawerOpen(true)}
+          >
+            <IconDatabase size={19} /> 从 SKU 库添加
+          </button>
+        </form>
+        <div className="quotes-sku-table" role="table" aria-label="模板配件清单">
+          <div className="quotes-sku-row quotes-sku-table-head" role="row">
+            <span role="columnheader">SKU 编码</span>
+            <span role="columnheader">品牌</span>
+            <span role="columnheader">名称</span>
+            <span role="columnheader">价格（CNY）</span>
+            <span role="columnheader">操作</span>
+          </div>
+          {selected.parts.length === 0 && (
+            <div className="quotes-empty">输入 SKU 编码，或从 SKU 库选择配件开始添加。</div>
           )}
-          {groups.map(([vehicle, parts], index) => (
-            <section className="quotes-vehicle-group" key={vehicle}>
-              <div className="quotes-vehicle-heading">
-                <span className="quotes-number">{index + 1}</span>
-                <strong>{vehicle}</strong>
-                <span>（{parts.length} 个配件）</span>
-                <button
-                  type="button"
+          {selected.parts.map((part) => (
+            <div className="quotes-sku-row" role="row" key={part.id}>
+              <strong role="cell">{part.skuCode || '—'}</strong>
+              <div className="quotes-brand-select" role="cell">
+                <Select
+                  label={`${part.skuCode}品牌`}
+                  value={part.brand}
+                  onChange={(value) => updatePartField(part.id, 'brand', value)}
                   disabled={!writable || busy}
-                  onClick={() => openPart(undefined, vehicle)}
-                  aria-label={`为${vehicle}添加配件`}
-                >
-                  <IconDotsVertical size={20} />
-                </button>
+                  options={Array.from(new Set([part.brand, ...brandOptions]))
+                    .filter(Boolean)
+                    .map((brand) => ({ value: brand, label: brand }))}
+                />
               </div>
-              <div className="quotes-parts-head">
-                <span aria-hidden="true" />
-                <span>配件名称</span>
-                <span>品牌</span>
-                <span>备注</span>
-                <span>操作</span>
-              </div>
-              {parts.map((part) => (
-                <div className="quotes-part-row" key={part.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedPartIds.includes(part.id)}
-                    onChange={() => togglePart(part.id)}
-                    aria-label={`选择${vehicle}的${part.name}`}
-                  />
-                  <span>{part.name}</span>
-                  <span>{part.brand || '待填写'}</span>
-                  <span>{part.note || '—'}</span>
-                  <span className="quotes-row-actions">
-                    <button
-                      type="button"
-                      disabled={!writable || busy}
-                      onClick={() => openPart(part)}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!writable || busy}
-                      onClick={() => void removePart(part.id)}
-                    >
-                      删除
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </section>
+              <input
+                role="cell"
+                aria-label={`${part.skuCode}名称`}
+                value={part.name}
+                onChange={(event) => updatePartField(part.id, 'name', event.target.value)}
+                disabled={!writable || busy}
+                placeholder="填写名称"
+              />
+              <label className="quotes-price-input" role="cell">
+                <span>¥</span>
+                <input
+                  aria-label={`${part.skuCode}价格`}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={part.priceMinor === null ? '' : (part.priceMinor / 100).toFixed(2)}
+                  onChange={(event) => updatePartField(part.id, 'priceMinor', event.target.value)}
+                  disabled={!writable || busy}
+                  placeholder="待填写"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={!writable || busy}
+                onClick={() => void removePart(part.id)}
+              >
+                删除
+              </button>
+            </div>
           ))}
         </div>
         <div className="quotes-bottom-actions">
@@ -495,13 +593,95 @@ export function QuoteTemplatesPage() {
           <button
             className="quotes-secondary-action"
             disabled={!writable || !selected.id || busy}
-            onClick={() => openPart()}
+            onClick={() => void saveInlineChanges()}
             type="button"
           >
-            <IconPlus size={19} /> 加入其他车型或配件
+            <IconCheck size={19} /> 保存修改
           </button>
         </div>
       </section>
+
+      {skuDrawerOpen && (
+        <div
+          className="quotes-drawer-layer"
+          role="presentation"
+          onMouseDown={() => setSkuDrawerOpen(false)}
+        >
+          <aside
+            className="quotes-sku-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="选择已有 SKU"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="quotes-drawer-heading">
+              <h2>选择已有 SKU</h2>
+              <button type="button" onClick={() => setSkuDrawerOpen(false)} aria-label="关闭">
+                <IconX size={22} />
+              </button>
+            </div>
+            <label className="quotes-drawer-search">
+              <IconSearch size={20} />
+              <input
+                value={skuSearch}
+                onChange={(event) => setSkuSearch(event.target.value)}
+                placeholder="搜索 SKU、名称或品牌"
+                autoFocus
+              />
+            </label>
+            <div className="quotes-drawer-table">
+              <div className="quotes-drawer-row quotes-drawer-head">
+                <span />
+                <span>SKU 编码</span>
+                <span>品牌 / 名称</span>
+                <span>价格</span>
+              </div>
+              {skuLoading && <p className="quotes-drawer-status">正在读取 SKU…</p>}
+              {!skuLoading && skuRows.length === 0 && (
+                <p className="quotes-drawer-status">没有匹配的 SKU</p>
+              )}
+              {!skuLoading &&
+                skuRows.map((sku) => {
+                  const checked = pickedSkuIds.includes(sku.id)
+                  const price = priceForSku(sku)
+                  return (
+                    <label className="quotes-drawer-row" key={sku.id}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setPickedSkuIds((current) =>
+                            checked ? current.filter((id) => id !== sku.id) : [...current, sku.id],
+                          )
+                        }
+                      />
+                      <strong>{sku.code}</strong>
+                      <span>
+                        <b>{sku.brand || sku.sourceManufacturer || '品牌待确认'}</b>
+                        <small>{sku.name}</small>
+                      </span>
+                      <span>{price === null ? '待设置' : `¥ ${(price / 100).toFixed(2)}`}</span>
+                    </label>
+                  )
+                })}
+            </div>
+            <div className="quotes-drawer-footer">
+              <span>已选择 {pickedSkuIds.length} 个 SKU</span>
+              <button type="button" onClick={() => setSkuDrawerOpen(false)}>
+                取消
+              </button>
+              <button
+                className="quotes-primary-action"
+                type="button"
+                disabled={pickedSkuIds.length === 0 || busy}
+                onClick={() => void addPickedSkus()}
+              >
+                添加 {pickedSkuIds.length} 个 SKU
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {dialog && (
         <div
@@ -511,69 +691,6 @@ export function QuoteTemplatesPage() {
             if (!busy) setDialog(null)
           }}
         >
-          {dialog === 'part' && (
-            <form
-              className="quotes-modal"
-              onMouseDown={(event) => event.stopPropagation()}
-              onSubmit={(event) => void savePart(event)}
-              aria-label={editingPartId ? '编辑配件' : '添加配件'}
-            >
-              <div className="quotes-modal-heading">
-                <h2>{editingPartId ? '编辑配件' : '添加车型与配件'}</h2>
-                <button type="button" onClick={() => setDialog(null)} aria-label="关闭">
-                  <IconX size={20} />
-                </button>
-              </div>
-              <label>
-                车型
-                <input
-                  required
-                  value={partForm.vehicle}
-                  onChange={(event) => setPartForm({ ...partForm, vehicle: event.target.value })}
-                  placeholder="例如：卡宴 E3"
-                />
-              </label>
-              <label>
-                配件名称
-                <input
-                  required
-                  value={partForm.name}
-                  onChange={(event) => setPartForm({ ...partForm, name: event.target.value })}
-                  placeholder="例如：刹车片、火花塞"
-                />
-              </label>
-              <label>
-                品牌
-                <input
-                  value={partForm.brand}
-                  onChange={(event) => setPartForm({ ...partForm, brand: event.target.value })}
-                  placeholder="例如：马勒"
-                />
-              </label>
-              <label>
-                备注
-                <input
-                  value={partForm.note ?? ''}
-                  onChange={(event) => setPartForm({ ...partForm, note: event.target.value })}
-                  placeholder="可选，例如需核对年款"
-                />
-              </label>
-              <p>模板只保存常用需求，报价时仍需核对具体零件号与适配。</p>
-              {error && (
-                <p className="quotes-error" role="alert">
-                  {error}
-                </p>
-              )}
-              <div className="quotes-modal-actions">
-                <button type="button" disabled={busy} onClick={() => setDialog(null)}>
-                  取消
-                </button>
-                <button className="quotes-primary-action" type="submit" disabled={busy}>
-                  <IconCheck size={18} /> {busy ? '保存中…' : '保存配件'}
-                </button>
-              </div>
-            </form>
-          )}
           {dialog === 'name' && (
             <form
               className="quotes-modal quotes-template-editor"

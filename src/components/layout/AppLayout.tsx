@@ -29,6 +29,7 @@ export function AppLayout() {
           '/skus': '汽配 SKU',
           '/customers': '客户项目',
           '/settings/accounts': '账号管理',
+          '/settings/dictionaries': '配置中心字典',
           '/sku-foundation': '商品基础字典',
         } as Record<string, string>
       )[pathname] ?? '页面未找到'

@@ -40,6 +40,15 @@ test('old customer and SKU data survives price schema migration', () => {
     )
     assert.equal(db.prepare('SELECT name FROM skus WHERE id=?').get('s1').name, '旧配件')
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='supplier_quotes'").get())
+    assert.deepEqual(
+      db
+        .prepare(
+          "SELECT name FROM dictionary_groups WHERE scope='configuration' ORDER BY sort_order",
+        )
+        .all()
+        .map((row) => row.name),
+      ['客户类型', '客户跟进阶段'],
+    )
     db.close()
   } finally {
     rmSync(directory, { recursive: true, force: true })

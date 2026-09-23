@@ -13,13 +13,11 @@ import { useAuth } from '../auth/context'
 import type { Customer } from '../catalog/types'
 import { Modal } from '../../components/business/Modal'
 import { Select } from '../../components/business/Select'
-import catalog from '../../../shared/catalog.json'
 import './customers.css'
 
 type Activity = { id: string; content: string; createdAt: string; author: string }
-type TypeFilter = '全部客户' | Customer['customerType']
-const stages = catalog.customerStages as Customer['projectStage'][]
-const types: TypeFilter[] = ['全部客户', '同行', '修理厂', '待分类']
+type DictionaryOption = { code: string; label: string; parentCode: string | null }
+type TypeFilter = '全部客户' | string
 const blank: Customer = {
   id: '',
   code: '',
@@ -33,7 +31,6 @@ const blank: Customer = {
   version: 0,
   updatedAt: '',
 }
-const options = stages.map((stage) => ({ value: stage, label: stage }))
 function shortDate(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '—' : `${date.getMonth() + 1}月${date.getDate()}日`
@@ -43,6 +40,8 @@ export function CustomersPage() {
   const { user } = useAuth()
   const writable = user.role !== 'viewer'
   const [rows, setRows] = useState<Customer[]>([])
+  const [customerTypes, setCustomerTypes] = useState<string[]>([])
+  const [stages, setStages] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showSearch, setShowSearch] = useState(false)
@@ -55,6 +54,9 @@ export function CustomersPage() {
   const [formError, setFormError] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const types: TypeFilter[] = ['全部客户', ...customerTypes]
+  const stageOptions = stages.map((stage) => ({ value: stage, label: stage }))
+  const customerTypeOptions = customerTypes.map((type) => ({ value: type, label: type }))
   function load() {
     setLoading(true)
     setError('')
@@ -64,8 +66,16 @@ export function CustomersPage() {
       .finally(() => setLoading(false))
   }
   useEffect(() => {
-    void api<Customer[]>('/customers')
-      .then(setRows)
+    void Promise.all([
+      api<Customer[]>('/customers'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=configuration&code=customer_type'),
+      api<DictionaryOption[]>('/dictionaries/options?scope=configuration&code=customer_stage'),
+    ])
+      .then(([customers, typeOptions, stageRows]) => {
+        setRows(customers)
+        setCustomerTypes(typeOptions.map((option) => option.label))
+        setStages(stageRows.map((option) => option.label))
+      })
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setLoading(false))
   }, [])
@@ -93,7 +103,21 @@ export function CustomersPage() {
   )
   const selected = rows.find((row) => row.id === selectedId) ?? null
   function openEditor(customer?: Customer, stage?: Customer['projectStage']) {
-    setForm(customer ? { ...customer } : { ...blank, projectStage: stage ?? '待跟进' })
+    setForm(
+      customer
+        ? { ...customer }
+        : {
+            ...blank,
+            customerType: customerTypes.includes(blank.customerType)
+              ? blank.customerType
+              : (customerTypes[0] ?? blank.customerType),
+            projectStage:
+              stage ??
+              (stages.includes(blank.projectStage)
+                ? blank.projectStage
+                : (stages[0] ?? blank.projectStage)),
+          },
+    )
     setFormError('')
   }
   async function save(event: FormEvent) {
@@ -216,7 +240,12 @@ export function CustomersPage() {
             {error} <button onClick={load}>重试</button>
           </p>
         )}
-        <div className="customer-projects-board">
+        <div
+          className="customer-projects-board"
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, minmax(150px, 1fr))`,
+          }}
+        >
           {stages.map((stage, index) => {
             const stageRows = visible.filter((row) => row.projectStage === stage)
             return (
@@ -270,7 +299,7 @@ export function CustomersPage() {
                           <Select
                             label={`${row.name}的跟进阶段`}
                             value={row.projectStage}
-                            options={options}
+                            options={stageOptions}
                             onChange={(value) =>
                               void changeStage(row, value as Customer['projectStage'])
                             }
@@ -410,7 +439,7 @@ export function CustomersPage() {
                 客户类型
                 <Select
                   label="客户类型"
-                  options={catalog.customerTypes.map((type) => ({ value: type, label: type }))}
+                  options={customerTypeOptions}
                   value={form.customerType}
                   onChange={(value) =>
                     setForm({ ...form, customerType: value as Customer['customerType'] })
@@ -421,7 +450,7 @@ export function CustomersPage() {
                 跟进阶段
                 <Select
                   label="跟进阶段"
-                  options={options}
+                  options={stageOptions}
                   value={form.projectStage}
                   onChange={(value) =>
                     setForm({ ...form, projectStage: value as Customer['projectStage'] })

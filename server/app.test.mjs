@@ -252,6 +252,16 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     )
   })
   await t.test('persists customers with duplicate and version protection', async () => {
+    const typeOptions = await call('/dictionaries/options?scope=configuration&code=customer_type')
+    const stageOptions = await call('/dictionaries/options?scope=configuration&code=customer_stage')
+    assert.deepEqual(
+      typeOptions.body.map((item) => item.label),
+      ['同行', '修理厂', '待分类'],
+    )
+    assert.deepEqual(
+      stageOptions.body.map((item) => item.label),
+      ['待跟进', '询价中', '已报价', '合作中'],
+    )
     const input = {
       code: 'C-001',
       name: '测试客户甲',
@@ -263,6 +273,16 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     }
     customerA = (await call('/customers', 'POST', input)).body
     assert.equal(customerA.projectStage, '待跟进')
+    assert.equal(
+      (
+        await call('/customers', 'POST', {
+          ...input,
+          code: 'C-INVALID',
+          customerType: '字典外类型',
+        })
+      ).status,
+      400,
+    )
     customerB = (
       await call('/customers', 'POST', {
         ...input,

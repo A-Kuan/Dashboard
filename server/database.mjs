@@ -120,11 +120,66 @@ export function openDatabase(directory) {
     db.exec("ALTER TABLE customers ADD COLUMN customer_type TEXT NOT NULL DEFAULT '待分类'")
   if (!columns('customers').has('project_stage'))
     db.exec("ALTER TABLE customers ADD COLUMN project_stage TEXT NOT NULL DEFAULT '待跟进'")
+  db.prepare(
+    `INSERT OR IGNORE INTO dictionary_groups(scope,code,name,description,editable,status,maintenance_mode,sort_order,source_id,source_json)
+     VALUES('configuration',?,?,?,?,?,?,?,?,'{}')`,
+  ).run(
+    'customer_type',
+    '客户类型',
+    '客户项目的业务分类，用于客户筛选和报价取价。',
+    1,
+    'active',
+    'user',
+    10,
+    'system-customer-type',
+  )
+  db.prepare(
+    `INSERT OR IGNORE INTO dictionary_groups(scope,code,name,description,editable,status,maintenance_mode,sort_order,source_id,source_json)
+     VALUES('configuration',?,?,?,?,?,?,?,?,'{}')`,
+  ).run(
+    'customer_stage',
+    '客户跟进阶段',
+    '客户项目看板的阶段列及流转选项。',
+    1,
+    'active',
+    'user',
+    20,
+    'system-customer-stage',
+  )
+  const seedDictionaryItem = db.prepare(
+    `INSERT OR IGNORE INTO dictionary_items(scope,dictionary_code,code,label,description,sort_order,status,parent_code,metadata_json,navigation_rule_json,source_id,source_json,version)
+     VALUES('configuration',?,?,?,?,?,'active',NULL,'{}','{}',?,'{}',1)`,
+  )
+  ;[
+    ['customer_type', 'PEER', '同行', 10],
+    ['customer_type', 'REPAIR_SHOP', '修理厂', 20],
+    ['customer_type', 'UNCLASSIFIED', '待分类', 30],
+    ['customer_stage', 'FOLLOW_UP', '待跟进', 10],
+    ['customer_stage', 'INQUIRY', '询价中', 20],
+    ['customer_stage', 'QUOTED', '已报价', 30],
+    ['customer_stage', 'COOPERATING', '合作中', 40],
+  ].forEach(([dictionaryCode, code, label, sortOrder]) =>
+    seedDictionaryItem.run(
+      dictionaryCode,
+      code,
+      label,
+      '',
+      sortOrder,
+      `system-${dictionaryCode}-${String(code).toLowerCase()}`,
+    ),
+  )
   for (const name of ['trade_price_minor', 'repair_price_minor'])
     if (!columns('skus').has(name)) db.exec(`ALTER TABLE skus ADD COLUMN ${name} INTEGER`)
+  const quotePartColumns = columns('quote_template_parts')
+  if (!quotePartColumns.has('sku_id'))
+    db.exec('ALTER TABLE quote_template_parts ADD COLUMN sku_id TEXT')
+  if (!quotePartColumns.has('sku_code'))
+    db.exec("ALTER TABLE quote_template_parts ADD COLUMN sku_code TEXT NOT NULL DEFAULT ''")
+  if (!quotePartColumns.has('price_minor'))
+    db.exec('ALTER TABLE quote_template_parts ADD COLUMN price_minor INTEGER')
   db.exec('CREATE INDEX IF NOT EXISTS skus_enabled_code_idx ON skus(enabled,code)')
   db.exec('CREATE INDEX IF NOT EXISTS fitments_sku_series_idx ON fitments(sku_id,series)')
-  db.exec('PRAGMA user_version = 5')
+  db.exec('PRAGMA user_version = 7')
   return db
 }
 

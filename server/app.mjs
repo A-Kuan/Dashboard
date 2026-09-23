@@ -162,9 +162,10 @@ export function createApp({
       updatedAt: row.updated_at,
       parts: db
         .prepare(
-          'SELECT id,vehicle,name,brand,note FROM quote_template_parts WHERE template_id=? ORDER BY position',
+          'SELECT id,vehicle,sku_id AS skuId,sku_code AS skuCode,name,brand,price_minor AS priceMinor,note FROM quote_template_parts WHERE template_id=? ORDER BY position',
         )
-        .all(row.id),
+        .all(row.id)
+        .map((part) => ({ ...part, skuId: part.skuId ?? '' })),
     }
   }
   function sku(row) {
@@ -427,10 +428,21 @@ export function createApp({
             ).run(id, value.name, value.customer, value.note, Number(value.isCommon), now())
           }
           const insertPart = db.prepare(
-            'INSERT INTO quote_template_parts(id,template_id,position,vehicle,name,brand,note) VALUES(?,?,?,?,?,?,?)',
+            'INSERT INTO quote_template_parts(id,template_id,position,vehicle,sku_id,sku_code,name,brand,price_minor,note) VALUES(?,?,?,?,?,?,?,?,?,?)',
           )
           value.parts.forEach((part, index) =>
-            insertPart.run(part.id, id, index, part.vehicle, part.name, part.brand, part.note),
+            insertPart.run(
+              part.id,
+              id,
+              index,
+              part.vehicle,
+              part.skuId || null,
+              part.skuCode,
+              part.name,
+              part.brand,
+              part.priceMinor,
+              part.note,
+            ),
           )
           audit(user, templateMatch ? 'quote_template.update' : 'quote_template.create', id)
           return quoteTemplate(db.prepare('SELECT * FROM quote_templates WHERE id=?').get(id))
@@ -692,10 +704,25 @@ export function createApp({
       }
       if ((path === '/api/customers' && req.method === 'POST') || (cm && req.method === 'PUT')) {
         const body = await readBody(req)
-        const value = customerInput(body)
         const id = cm?.[1] ?? randomUUID()
         const previous = cm ? db.prepare('SELECT * FROM customers WHERE id=?').get(id) : null
         if (cm) checkVersion(body, previous)
+        const activeDictionaryLabels = (code) =>
+          db
+            .prepare(
+              "SELECT label FROM dictionary_items WHERE scope='configuration' AND dictionary_code=? AND status='active' ORDER BY sort_order,code",
+            )
+            .all(code)
+            .map((item) => item.label)
+        const customerTypes = activeDictionaryLabels('customer_type')
+        const customerStages = activeDictionaryLabels('customer_stage')
+        if (previous) {
+          if (!customerTypes.includes(previous.customer_type))
+            customerTypes.push(previous.customer_type)
+          if (!customerStages.includes(previous.project_stage))
+            customerStages.push(previous.project_stage)
+        }
+        const value = customerInput(body, { customerTypes, customerStages })
         return json(
           res,
           cm ? 200 : 201,

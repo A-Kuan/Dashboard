@@ -8,8 +8,8 @@ export type Customer = {
   id: string
   code: string
   name: string
-  customerType: '同行' | '修理厂' | '待分类'
-  projectStage: '待跟进' | '询价中' | '已报价' | '合作中'
+  customerType: string
+  projectStage: string
   contact: string
   phone: string
   notes: string

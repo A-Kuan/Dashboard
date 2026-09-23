@@ -48,7 +48,16 @@ test('quote templates persist, enforce roles and delete their parts', async (t) 
   const admin = setup.cookie
   assert.deepEqual((await call('/quote-templates', 'GET', undefined, admin)).body, [])
 
-  const part = { id: randomUUID(), vehicle: '卡宴 E3', name: '空气滤芯', brand: '马勒', note: '' }
+  const part = {
+    id: randomUUID(),
+    vehicle: '卡宴 E3',
+    skuId: '',
+    skuCode: 'SKU-001',
+    name: '空气滤芯',
+    brand: '马勒',
+    priceMinor: 32000,
+    note: '',
+  }
   const input = { name: '卡宴滤芯', customer: '黄总', note: '', isCommon: true, parts: [part] }
   const created = await call('/quote-templates', 'POST', input, admin)
   assert.equal(created.status, 201)

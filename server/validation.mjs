@@ -48,12 +48,14 @@ function integer(value, label, min = 0, max = 100000000) {
     throw new ApiError(400, `${label}须为 ${min} 至 ${max} 的整数`)
   return value
 }
-export function customerInput(body) {
+export function customerInput(body, dictionaries = {}) {
+  const customerTypes = dictionaries.customerTypes ?? catalog.customerTypes
+  const customerStages = dictionaries.customerStages ?? catalog.customerStages
   return {
     code: text(body.code, '客户编码', true, 50),
     name: text(body.name, '客户名称', true),
-    customerType: choice(body.customerType, catalog.customerTypes, '客户类型'),
-    projectStage: choice(body.projectStage ?? '待跟进', catalog.customerStages, '跟进阶段'),
+    customerType: choice(body.customerType, customerTypes, '客户类型'),
+    projectStage: choice(body.projectStage ?? customerStages[0], customerStages, '跟进阶段'),
     contact: text(body.contact, '联系人'),
     phone: text(body.phone, '电话', false, 60),
     notes: text(body.notes, '备注', false, 2000),
@@ -72,9 +74,15 @@ export function quoteTemplateInput(body) {
         throw new ApiError(400, '配件编号无效')
       return {
         id,
-        vehicle: text(part.vehicle, '车型', true, 120),
+        vehicle: text(part.vehicle, '车型', false, 120),
+        skuId: text(part.skuId, 'SKU 记录编号', false, 36),
+        skuCode: text(part.skuCode, 'SKU 编码', false, 80),
         name: text(part.name, '配件名称', true, 120),
         brand: text(part.brand, '品牌', false, 120),
+        priceMinor:
+          part.priceMinor === null || part.priceMinor === undefined
+            ? null
+            : integer(part.priceMinor, '价格', 0, 10000000000),
         note: text(part.note, '配件备注', false, 500),
       }
     }),
