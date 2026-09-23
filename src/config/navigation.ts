@@ -38,10 +38,7 @@ export const navigation: readonly NavigationSection[] = [
         type: 'group',
         label: '系统设置',
         icon: IconSettings,
-        children: [
-          { id: 'dictionaries', type: 'link', label: '配置中心字典', to: '/settings/dictionaries' },
-          { id: 'accounts', type: 'link', label: '账号管理', to: '/settings/accounts' },
-        ],
+        children: [{ id: 'accounts', type: 'link', label: '账号管理', to: '/settings/accounts' }],
       },
     ],
   },

@@ -20,10 +20,6 @@ export default function App() {
             <Route path="skus" element={<SkuPage />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="settings/accounts" element={<AccountsPage />} />
-            <Route
-              path="settings/dictionaries"
-              element={<DictionariesPage scope="configuration" />}
-            />
             <Route path="sku-foundation" element={<DictionariesPage scope="sku_foundation" />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
