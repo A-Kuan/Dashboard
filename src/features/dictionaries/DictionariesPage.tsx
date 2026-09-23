@@ -147,7 +147,7 @@ export function DictionariesPage({ scope }: { scope: Scope }) {
       <header className="page-heading">
         <div>
           <h1>{scope === 'configuration' ? '配置中心字典' : '商品基础字典'}</h1>
-          <p>来源数据已保存到本地数据库。停用选项保留历史关联，编码建立后不可修改。</p>
+          <p>来源数据已保存到本地数据库。新增选项自动生成编码，停用选项保留历史关联。</p>
         </div>
       </header>
       {error && (
@@ -315,17 +315,12 @@ export function DictionariesPage({ scope }: { scope: Scope }) {
         >
           <form onSubmit={(event) => void save(event)}>
             <label>
-              编码
+              编码（系统自动生成）
               <input
-                required
                 maxLength={200}
-                disabled={!isNew}
-                value={editing.code}
-                autoCapitalize="characters"
+                disabled
+                value={isNew ? '保存后自动生成' : editing.code}
                 spellCheck={false}
-                onChange={(event) =>
-                  setEditing({ ...editing, code: event.target.value.toUpperCase() })
-                }
               />
             </label>
             <label>

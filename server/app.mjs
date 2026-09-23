@@ -542,8 +542,10 @@ export function createApp({
           if (!group) throw new ApiError(404, '字典分组不存在')
           if (!group.editable) throw new ApiError(403, '固定业务字典不可修改')
           const body = await readBody(req)
-          const submittedCode = text(body.code, '字典编码', true, 200)
-          const itemCode = req.method === 'POST' ? submittedCode.toUpperCase() : submittedCode
+          const itemCode =
+            req.method === 'POST'
+              ? `DICT_${randomUUID().replaceAll('-', '').toUpperCase()}`
+              : text(body.code, '字典编码', true, 200)
           const label = text(body.label, '字典名称', true, 200)
           const description = text(body.description, '说明', false, 600)
           const sortOrder = body.sortOrder
@@ -565,14 +567,6 @@ export function createApp({
             throw new ApiError(400, '上级字典项无效')
           const result = transaction(db, () => {
             if (req.method === 'POST') {
-              if (
-                db
-                  .prepare(
-                    'SELECT 1 FROM dictionary_items WHERE scope=? AND dictionary_code=? AND code=?',
-                  )
-                  .get(scope, code, itemCode)
-              )
-                throw new ApiError(409, '字典编码已存在')
               db.prepare(
                 `INSERT INTO dictionary_items(scope,dictionary_code,code,label,description,sort_order,status,parent_code,metadata_json,navigation_rule_json,source_id,source_json,version)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)`,

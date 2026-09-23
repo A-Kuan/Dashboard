@@ -156,7 +156,7 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
       .run()
     assert.equal((await call('/dictionaries/groups?scope=sku_foundation')).body.length, 2)
     const created = await call('/dictionaries/items?scope=sku_foundation&code=category', 'POST', {
-      code: 'special',
+      code: 'MANUAL_CODE_MUST_BE_IGNORED',
       label: '测试专用品类',
       description: '',
       sortOrder: 1,
@@ -164,7 +164,8 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
       parentCode: null,
     })
     assert.equal(created.status, 201)
-    assert.equal(created.body.code, 'SPECIAL')
+    assert.match(created.body.code, /^DICT_[0-9A-F]{32}$/)
+    assert.notEqual(created.body.code, 'MANUAL_CODE_MUST_BE_IGNORED')
     assert.equal(
       (await call('/dictionaries/items?scope=sku_foundation&code=category&page=1&search=专用')).body
         .total,
