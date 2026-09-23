@@ -2,10 +2,9 @@ import { useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { appConfig } from '../../config/app'
 import { navigation } from '../../config/navigation'
-import { Sidebar } from '../navigation/Sidebar'
+import { TopNavigation } from '../navigation/TopNavigation'
 import type { NavigationItem } from '../navigation/types'
 import './layout.css'
-import { AccountFooter } from '../../features/auth/Auth'
 import { useAuth } from '../../features/auth/context'
 
 function visibleItem(item: NavigationItem, isAdmin: boolean): NavigationItem | null {
@@ -38,14 +37,13 @@ export function AppLayout() {
 
   return (
     <div className="app-layout">
-      <Sidebar
+      <TopNavigation
         sections={navigation.map((section) => ({
           ...section,
           items: section.items
             .map((item) => visibleItem(item, user.role === 'admin'))
             .filter((item): item is NavigationItem => item !== null),
         }))}
-        footer={<AccountFooter />}
       />
       <main className="app-content">
         <Outlet />

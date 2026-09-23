@@ -5,13 +5,8 @@ body {
 .app-layout {
   box-sizing: border-box;
   min-height: 100dvh;
-  display: grid;
-  grid-template-columns: 256px minmax(0, 1fr);
-  align-items: start;
-  align-content: start;
-  gap: 0;
-  padding: 0;
-  background: #fff;
+  display: block;
+  background: #f5f3ee;
 }
 
 .app-content {
@@ -20,15 +15,10 @@ body {
 }
 
 .home-page {
-  padding: 32px;
+  padding: 32px 36px 42px;
 }
 
 @media (max-width: 720px) {
-  .app-layout {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-    padding: 0;
-  }
   .app-content {
     padding: 0;
   }
