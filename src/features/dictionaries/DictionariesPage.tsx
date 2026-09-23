@@ -321,7 +321,11 @@ export function DictionariesPage({ scope }: { scope: Scope }) {
                 maxLength={200}
                 disabled={!isNew}
                 value={editing.code}
-                onChange={(event) => setEditing({ ...editing, code: event.target.value })}
+                autoCapitalize="characters"
+                spellCheck={false}
+                onChange={(event) =>
+                  setEditing({ ...editing, code: event.target.value.toUpperCase() })
+                }
               />
             </label>
             <label>

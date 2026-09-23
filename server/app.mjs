@@ -530,7 +530,8 @@ export function createApp({
           if (!group) throw new ApiError(404, '字典分组不存在')
           if (!group.editable) throw new ApiError(403, '固定业务字典不可修改')
           const body = await readBody(req)
-          const itemCode = text(body.code, '字典编码', true, 200)
+          const submittedCode = text(body.code, '字典编码', true, 200)
+          const itemCode = req.method === 'POST' ? submittedCode.toUpperCase() : submittedCode
           const label = text(body.label, '字典名称', true, 200)
           const description = text(body.description, '说明', false, 600)
           const sortOrder = body.sortOrder
