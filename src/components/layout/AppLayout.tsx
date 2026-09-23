@@ -26,12 +26,13 @@ export function AppLayout() {
           '/': '首页',
           '/quotes/templates': '报价模板',
           '/skus': '汽配 SKU',
+          '/vehicles': '保时捷车型库',
           '/customers': '客户项目',
           '/settings/accounts': '账号管理',
           '/settings/dictionaries': '配置中心字典',
           '/sku-foundation': '商品基础字典',
         } as Record<string, string>
-      )[pathname] ?? '页面未找到'
+      )[pathname] ?? (pathname.startsWith('/vehicles/') ? '车型代际详情' : '页面未找到')
     document.title = `${pageTitle} · ${appConfig.name}`
   }, [pathname])
 

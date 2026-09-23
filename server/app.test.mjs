@@ -123,6 +123,24 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     const row = app.db.prepare('SELECT password_hash FROM users').get()
     assert.ok(!row.password_hash.includes('short'))
   })
+  await t.test('serves the authenticated Porsche vehicle archive', async () => {
+    const result = await call('/vehicle-models')
+    assert.equal(result.status, 200)
+    const macan = result.body.families.find((family) => family.id === 'macan')
+    assert.equal(macan.codes[0], '95B.1')
+    assert.equal(
+      macan.generations.find((generation) => generation.code === '95B.3').years,
+      '2022–2024',
+    )
+    assert.deepEqual(
+      result.body.families
+        .filter((family) => ['356', '914', '924', '944', '968', '918'].includes(family.id))
+        .map((family) => family.id),
+      ['356', '914', '924', '944', '968', '918'],
+    )
+    assert.deepEqual(result.body.eras[0].familyIds, ['356', '911', '914'])
+    assert.ok(result.body.families.every((family) => family.image.endsWith('.png')))
+  })
   await t.test('proxy login limits are isolated by validated client IP', async () => {
     for (let attempt = 0; attempt < 20; attempt++) {
       const result = await call('/auth/login', 'POST', {}, '', { 'X-Real-IP': '198.51.100.10' })

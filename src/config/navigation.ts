@@ -31,6 +31,7 @@ export const navigation: readonly NavigationSection[] = [
         icon: IconCube,
         children: [
           { id: 'skus', type: 'link', label: 'SKU 档案', to: '/skus' },
+          { id: 'vehicles', type: 'link', label: '车型库', to: '/vehicles', end: false },
           { id: 'sku-foundation', type: 'link', label: '商品基础字典', to: '/sku-foundation' },
         ],
       },

@@ -1,0 +1,383 @@
+{
+  "eras": [
+    {
+      "name": "经典时代",
+      "codes": "356 / 911 F / 914",
+      "years": "1948–1973",
+      "image": "/vehicles/356.png",
+      "familyIds": ["356", "911", "914"],
+      "generationCodes": ["356", "356 A", "356 B", "356 C", "901", "914"]
+    },
+    {
+      "name": "前置发动机",
+      "codes": "924 / 944 / 968",
+      "years": "1974–1997",
+      "image": "/vehicles/944.png",
+      "familyIds": ["924", "944", "968"],
+      "generationCodes": ["924", "944", "968"]
+    },
+    {
+      "name": "现代跑车",
+      "codes": "996 / 987 / 918",
+      "years": "1998–2016",
+      "image": "/vehicles/918.png",
+      "familyIds": ["911", "718", "918"],
+      "generationCodes": ["996", "997", "991", "986", "987", "981", "918"]
+    },
+    {
+      "name": "当代产品",
+      "codes": "992 / 982 / 95B / XAB",
+      "years": "2017–至今",
+      "image": "/vehicles/911-transparent.png",
+      "familyIds": ["911", "718", "cayenne", "macan", "panamera", "taycan"],
+      "generationCodes": [
+        "992",
+        "982",
+        "E3",
+        "95B.1",
+        "95B.2",
+        "95B.3",
+        "XAB",
+        "971",
+        "976",
+        "Y1A/Y1B/Y1C"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "356",
+      "name": "356",
+      "category": "跑车",
+      "image": "/vehicles/356.png",
+      "codes": ["356", "356 A", "356 B", "356 C"],
+      "generations": [
+        {
+          "code": "356",
+          "label": "初代",
+          "years": "1948–1955",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "356 A",
+          "label": "第一阶段改进型",
+          "years": "1955–1959",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "356 B",
+          "label": "第二阶段改进型",
+          "years": "1959–1963",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "356 C",
+          "label": "最终改进型",
+          "years": "1963–1965",
+          "power": "燃油",
+          "status": "已停产"
+        }
+      ]
+    },
+    {
+      "id": "911",
+      "name": "911",
+      "category": "跑车",
+      "image": "/vehicles/911-transparent.png",
+      "codes": ["901", "930", "964", "993", "996", "997", "991", "992"],
+      "generations": [
+        {
+          "code": "901",
+          "label": "初代",
+          "years": "1964–1973",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "930",
+          "label": "Turbo 时代",
+          "years": "1975–1989",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "964",
+          "label": "第三代",
+          "years": "1988–1994",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "993",
+          "label": "第四代",
+          "years": "1993–1998",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "996",
+          "label": "第五代",
+          "years": "1997–2005",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "997",
+          "label": "第六代",
+          "years": "2004–2012",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "991",
+          "label": "第七代",
+          "years": "2011–2019",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "992",
+          "label": "第八代",
+          "years": "2018–至今",
+          "power": "燃油/混动",
+          "status": "在售"
+        }
+      ]
+    },
+    {
+      "id": "718",
+      "name": "718",
+      "category": "跑车",
+      "image": "/vehicles/718-transparent.png",
+      "codes": ["986", "987", "981", "982"],
+      "generations": [
+        {
+          "code": "986",
+          "label": "第一代 Boxster",
+          "years": "1996–2004",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "987",
+          "label": "第二代",
+          "years": "2004–2012",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "981",
+          "label": "第三代",
+          "years": "2012–2016",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        { "code": "982", "label": "718", "years": "2016–2025", "power": "燃油", "status": "已停产" }
+      ]
+    },
+    {
+      "id": "cayenne",
+      "name": "Cayenne",
+      "category": "SUV",
+      "image": "/vehicles/cayenne-transparent.png",
+      "codes": ["955", "957", "958", "E3"],
+      "generations": [
+        {
+          "code": "955/957",
+          "label": "第一代 E1",
+          "years": "2002–2010",
+          "power": "燃油",
+          "status": "已停产"
+        },
+        {
+          "code": "958",
+          "label": "第二代 E2",
+          "years": "2010–2018",
+          "power": "燃油/混动",
+          "status": "已停产"
+        },
+        {
+          "code": "E3",
+          "label": "第三代",
+          "years": "2017–至今",
+          "power": "燃油/混动",
+          "status": "在售"
+        }
+      ]
+    },
+    {
+      "id": "macan",
+      "name": "Macan",
+      "category": "SUV",
+      "image": "/vehicles/macan-transparent.png",
+      "codes": ["95B.1", "95B.2", "95B.3", "XAB"],
+      "generations": [
+        {
+          "code": "95B.1",
+          "label": "第一代 · 前期款",
+          "years": "2014–2018",
+          "power": "燃油",
+          "status": "已停产",
+          "feature": "分体式尾灯 · 实体按键中控",
+          "trims": ["Macan", "S", "GTS", "Turbo"]
+        },
+        {
+          "code": "95B.2",
+          "label": "第一代 · 第一次改款",
+          "years": "2019–2021",
+          "power": "燃油",
+          "status": "已停产",
+          "feature": "贯穿式尾灯 · 实体按键中控",
+          "trims": ["Macan", "S", "GTS", "Turbo"]
+        },
+        {
+          "code": "95B.3",
+          "label": "第一代 · 第二次改款",
+          "years": "2022–2024",
+          "power": "燃油",
+          "status": "因市场而异",
+          "feature": "触控中控面板 · GTS 成为旗舰",
+          "trims": ["Macan", "T", "S", "GTS"]
+        },
+        {
+          "code": "XAB",
+          "label": "第二代纯电",
+          "years": "2024–至今",
+          "power": "纯电",
+          "status": "在售",
+          "feature": "PPE 纯电平台 · 分体式前灯",
+          "trims": ["Macan", "4", "4S", "GTS", "Turbo"]
+        }
+      ]
+    },
+    {
+      "id": "panamera",
+      "name": "Panamera",
+      "category": "轿跑",
+      "image": "/vehicles/panamera-transparent.png",
+      "codes": ["970", "971", "976"],
+      "generations": [
+        {
+          "code": "970",
+          "label": "第一代",
+          "years": "2009–2016",
+          "power": "燃油/混动",
+          "status": "已停产"
+        },
+        {
+          "code": "971",
+          "label": "第二代",
+          "years": "2016–2023",
+          "power": "燃油/混动",
+          "status": "已停产"
+        },
+        {
+          "code": "976",
+          "label": "第三代",
+          "years": "2023–至今",
+          "power": "燃油/混动",
+          "status": "在售"
+        }
+      ]
+    },
+    {
+      "id": "taycan",
+      "name": "Taycan",
+      "category": "轿跑",
+      "image": "/vehicles/taycan-transparent.png",
+      "codes": ["Y1A", "Y1B", "Y1C"],
+      "generations": [
+        {
+          "code": "Y1A/Y1B/Y1C",
+          "label": "第一代",
+          "years": "2019–至今",
+          "power": "纯电",
+          "status": "在售"
+        }
+      ]
+    },
+    {
+      "id": "914",
+      "name": "914",
+      "category": "跑车",
+      "image": "/vehicles/914.png",
+      "codes": ["914"],
+      "generations": [
+        {
+          "code": "914",
+          "label": "中置发动机 Targa",
+          "years": "1969–1976",
+          "power": "燃油",
+          "status": "已停产"
+        }
+      ]
+    },
+    {
+      "id": "924",
+      "name": "924",
+      "category": "跑车",
+      "image": "/vehicles/924.png",
+      "codes": ["924"],
+      "generations": [
+        {
+          "code": "924",
+          "label": "前置发动机入门跑车",
+          "years": "1975–1988",
+          "power": "燃油",
+          "status": "已停产"
+        }
+      ]
+    },
+    {
+      "id": "944",
+      "name": "944",
+      "category": "跑车",
+      "image": "/vehicles/944.png",
+      "codes": ["944"],
+      "generations": [
+        {
+          "code": "944",
+          "label": "前置发动机跑车",
+          "years": "1982–1991",
+          "power": "燃油",
+          "status": "已停产"
+        }
+      ]
+    },
+    {
+      "id": "968",
+      "name": "968",
+      "category": "跑车",
+      "image": "/vehicles/968.png",
+      "codes": ["968"],
+      "generations": [
+        {
+          "code": "968",
+          "label": "前置发动机系列终章",
+          "years": "1991–1995",
+          "power": "燃油",
+          "status": "已停产"
+        }
+      ]
+    },
+    {
+      "id": "918",
+      "name": "918 Spyder",
+      "category": "超级跑车",
+      "image": "/vehicles/918.png",
+      "codes": ["918"],
+      "generations": [
+        {
+          "code": "918",
+          "label": "插电式混合动力超级跑车",
+          "years": "2013–2015",
+          "power": "混动",
+          "status": "已停产"
+        }
+      ]
+    }
+  ]
+}

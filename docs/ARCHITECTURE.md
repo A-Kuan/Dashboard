@@ -56,6 +56,7 @@ docs/                     全局文档与视觉参考
 - `/settings/dictionaries`：配置中心字典，当前维护客户类型与客户跟进阶段；管理员可新增、编辑、排序、启用和停用选项。
 - `/sku-foundation`：展示当前业务实际使用的商品基础字典；管理员可维护可编辑分组的选项，固定分组只读。
 - `src/features/auth`、`customers`、`catalog` 承载对应页面；`src/components/business` 提供共用表单、居中 dialog 和表格样式。
+- `src/features/vehicles` 提供保时捷车型档案馆、年代与家族/代际联动、组合筛选、筛选结果与代际详情；数据由 `/api/vehicle-models` 读取，基础资料和年代映射维护在 `shared/vehicle-models.json`，透明车型图片位于 `public/vehicles`。
 - `src/components/business/Select.tsx` 提供业务下拉列表的统一外观、选项搜索和键盘交互；所有引用该组件的筛选与表单下拉自动支持按名称或值搜索，页面不直接使用原生 select 弹出菜单。
 - `src/features/dictionaries` 提供两套来源独立的字典页面、服务端分页、搜索与选项编辑。所有字典分组新增选项时均由服务端生成 `DICT_` 前缀的唯一编码，前端不接受人工填写；已有迁移编码保持原样且编辑时不可修改，避免破坏历史关联。有父子关系的选项按父项排序分组，页面突出一级项并缩进显示子项；搜索单独命中子项时仍返回上级名称作为上下文。共享 `Select` 组件在组件目录内加载自身样式，不依赖页面是否带有 `.business` 容器。
 - `server/app.mjs` 处理 API、会话和静态页面；database.mjs 建表，validation.mjs 校验；scripts/dev.mjs 启动前后端。

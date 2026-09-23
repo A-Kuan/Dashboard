@@ -8,6 +8,7 @@ import { AccountsPage } from './features/auth/AccountsPage'
 import { CustomersPage } from './features/customers/CustomersPage'
 import { SkuPage } from './features/catalog/SkuPage'
 import { DictionariesPage } from './features/dictionaries/DictionariesPage'
+import { VehicleLibraryPage } from './features/vehicles/VehicleLibraryPage'
 
 export default function App() {
   return (
@@ -18,6 +19,8 @@ export default function App() {
             <Route index element={<DashboardPage />} />
             <Route path="quotes/templates" element={<QuoteTemplatesPage />} />
             <Route path="skus" element={<SkuPage />} />
+            <Route path="vehicles" element={<VehicleLibraryPage />} />
+            <Route path="vehicles/:familyId/:generationCode" element={<VehicleLibraryPage />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="settings/accounts" element={<AccountsPage />} />
             <Route

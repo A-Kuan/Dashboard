@@ -7,6 +7,7 @@ import { resolve, join, extname, sep } from 'node:path'
 import { openDatabase, transaction } from './database.mjs'
 import { ApiError, text, customerInput, skuInput, quoteTemplateInput } from './validation.mjs'
 import catalog from '../shared/catalog.json' with { type: 'json' }
+import vehicleModels from '../shared/vehicle-models.json' with { type: 'json' }
 
 const deriveKey = promisify(scrypt)
 const hash = (value) => createHash('sha256').update(value).digest('hex')
@@ -403,6 +404,8 @@ export function createApp({
         return json(res, 200, publicUser(found))
       }
       if (!user) throw new ApiError(401, '请先登录')
+      if (path === '/api/vehicle-models' && req.method === 'GET')
+        return json(res, 200, vehicleModels)
       if (path === '/api/auth/logout' && req.method === 'POST') {
         const token = req.headers.cookie
           ?.split(';')
