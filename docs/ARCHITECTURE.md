@@ -14,6 +14,7 @@
 src/
   App.tsx                 根组件与路由
   main.tsx                React 启动入口
+  theme.css               全站色板变量与跨模块视觉覆盖
   config/app.ts           公开应用配置
   config/navigation.ts    导航分区、分组与链接配置
   components/layout/      共享布局入口与承载布局样式
@@ -33,7 +34,7 @@ docs/                     全局文档与视觉参考
 | /quotes/templates | 报价模板 | 模板编辑和报价草稿 |
 | 其他地址          | 404 页面 | 返回首页链接       |
 
-共享布局包含 Sidebar 和主内容区域。Sidebar 从 config/navigation.ts 读取配置；按工作台、客户与报价、商品资料、系统设置分组。应用名称从 VITE_APP_NAME 读取，默认 Dashboard。
+共享布局包含 Sidebar 和主内容区域。Sidebar 从 config/navigation.ts 读取配置；按工作台、客户与报价、商品资料、系统设置分组。应用名称从 VITE_APP_NAME 读取，默认 Dashboard。`main.tsx` 在各业务样式之后加载 `theme.css`，以 `#0033a0` 克莱因蓝、`#e6e4df` 浅灰和 `#4a4a4a` 深灰为全站色板，统一导航、页面底色、表单、表格、弹窗、抽屉和主要操作状态；各功能模块仍负责自身布局和交互样式。
 
 报价模板按可编辑的“常用模板”和“其他模板”分组，支持搜索、新建、编辑和删除。模板行右侧三点打开居中编辑弹窗，可修改名称、适用客户、模板备注和分组。详情页提供两种添加方式：直接输入 SKU 编码（精确命中时带出现有 SKU 资料，未命中时创建待补充的自定义条目），或在右侧抽屉搜索并多选现有 SKU。品牌使用商品基础字典 `product_brand` 的启用项选择；已有 SKU 自动带出名称、品牌及售价，模板未绑定结构化客户类型时优先取同行价，缺失时取修理厂价。模板条目保存 SKU 编码、品牌、名称和价格快照，并允许表格内调整。数据保存在 SQLite 的 `quote_templates` 和 `quote_template_parts`，更新使用版本号防止覆盖，删除时级联移除配件。只有一次性报价草稿留在页面内存中；库存、适配与最新价格仍需在报价时人工核对。
 

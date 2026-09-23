@@ -1,0 +1,430 @@
+:root {
+  --palette-blue: #0033a0;
+  --palette-blue-hover: #00277a;
+  --palette-blue-soft: #e2e7f1;
+  --palette-warm: #e6e4df;
+  --palette-warm-soft: #f3f1ed;
+  --palette-warm-light: #faf9f6;
+  --palette-charcoal: #4a4a4a;
+  --palette-charcoal-deep: #373737;
+  --palette-ink: #252525;
+  --palette-muted: #70706d;
+  --palette-line: #d1cfc9;
+  --palette-white: #fff;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: var(--palette-warm);
+  color: var(--palette-ink);
+}
+
+.app-layout,
+.app-content,
+.business-page,
+.home-page {
+  background: var(--palette-warm);
+}
+
+/* Global navigation */
+.sidebar {
+  --nav-surface: var(--palette-charcoal);
+  --nav-text: #fff;
+  --nav-muted: #d0cec8;
+  --nav-text-secondary: #c2c0bb;
+  --nav-selected: var(--palette-blue);
+  --nav-hover: #5a5a5a;
+  --nav-line: #656565;
+  --nav-focus: #fff;
+  border-right-color: #5d5d5d;
+  background: var(--palette-charcoal);
+  color: #fff;
+}
+
+.sidebar-row.is-current,
+.sidebar-children .sidebar-row.is-current {
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.sidebar .sidebar-group-trigger.is-current {
+  background: #575757;
+  color: #fff;
+}
+
+.sidebar-row.is-current .sidebar-icon,
+.sidebar-children .sidebar-row.is-current .sidebar-icon {
+  color: #fff;
+}
+
+.sidebar-badge {
+  border-color: #767676;
+  background: var(--palette-charcoal-deep);
+  color: #e8e6e1;
+  box-shadow: none;
+}
+
+.sidebar .account-footer {
+  border-top-color: #666;
+  color: #fff;
+}
+
+.sidebar .account-footer small {
+  color: #c8c6c0;
+}
+
+.sidebar .account-footer button {
+  color: #f0eee9;
+}
+
+.sidebar .account-footer button:hover {
+  background: #595959;
+}
+
+/* Shared business surfaces and controls */
+.business {
+  color: var(--palette-ink);
+}
+
+.business h1,
+.business h2,
+.business h3,
+.business label,
+.business button {
+  color: var(--palette-ink);
+}
+
+.business .muted,
+.business small,
+.page-heading p {
+  color: var(--palette-muted);
+}
+
+.business button {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-light);
+}
+
+.business button:hover {
+  background: var(--palette-warm-soft);
+}
+
+.business :focus-visible,
+.quotes-workspace :focus-visible {
+  outline-color: var(--palette-blue);
+}
+
+.business .primary,
+.customer-projects .customer-projects-create {
+  border-color: var(--palette-blue);
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.business .primary:hover,
+.customer-projects .customer-projects-create:hover {
+  border-color: var(--palette-blue-hover);
+  background: var(--palette-blue-hover);
+}
+
+.business input,
+.business textarea,
+.business .search-field,
+.business .business-select-trigger,
+.business .business-select-options,
+.business .tabs button {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-light);
+  color: var(--palette-ink);
+}
+
+.business input:disabled,
+.business textarea:disabled,
+.business .business-select-trigger:disabled {
+  background: var(--palette-warm);
+  color: var(--palette-muted);
+}
+
+.business .business-select-search {
+  border-bottom-color: var(--palette-line);
+}
+
+.business .business-select-list > button.selected,
+.business .tabs button.active,
+.business .tag,
+.business .dictionary-selection-tags button {
+  background: var(--palette-blue-soft);
+  color: var(--palette-blue);
+}
+
+.business table,
+.business th,
+.business td,
+.business .form-actions,
+.pagination {
+  border-color: var(--palette-line);
+}
+
+.business th {
+  background: var(--palette-warm);
+  color: var(--palette-charcoal);
+}
+
+.business tr:hover td {
+  background: var(--palette-warm-light);
+}
+
+.business .cell-link,
+.business .text-button,
+.business .subheading button {
+  color: var(--palette-blue);
+}
+
+.business.modal {
+  background: var(--palette-warm-soft);
+  box-shadow: 0 24px 80px rgb(44 44 44 / 28%);
+}
+
+.business.modal::backdrop,
+.quotes-modal-backdrop,
+.quotes-drawer-layer {
+  background: rgb(44 44 44 / 52%);
+}
+
+.business .checkbox-label input:checked,
+.quotes-part-row input[type='checkbox']:checked,
+.quotes-common-toggle span.is-on {
+  border-color: var(--palette-blue);
+  background: var(--palette-blue);
+}
+
+/* Customer projects */
+.customer-projects,
+.customer-projects-main,
+.customer-projects-heading,
+.customer-projects-toolbar,
+.customer-projects-detail {
+  background: var(--palette-warm-soft);
+  color: var(--palette-ink);
+}
+
+.customer-projects-heading,
+.customer-projects-toolbar,
+.customer-projects-detail,
+.customer-projects-detail-section,
+.customer-project-card,
+.customer-project-card-top {
+  border-color: var(--palette-line);
+}
+
+.customer-projects .customer-projects-type-tabs button.active,
+.customer-projects .customer-projects-section-heading button,
+.business .customer-editor-panel-heading button {
+  border-bottom-color: var(--palette-blue);
+  color: var(--palette-blue);
+}
+
+.customer-projects-column,
+.customer-projects-column.stage-1,
+.customer-projects-column.stage-2,
+.customer-projects-column.stage-3 {
+  background: var(--palette-warm);
+}
+
+.customer-project-card,
+.customer-projects .customer-project-card-open,
+.customer-projects-detail-tags span {
+  background: var(--palette-warm-light);
+}
+
+.customer-project-card.selected {
+  outline-color: var(--palette-blue);
+}
+
+.business.modal:has(.customer-editor) > .modal-title,
+.customer-editor-main,
+.business .customer-editor-actions {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-soft);
+}
+
+.customer-editor-nav {
+  border-color: #606060;
+  background: var(--palette-charcoal);
+  color: #fff;
+}
+
+.customer-editor-nav > strong,
+.customer-editor-nav > small,
+.customer-editor-nav nav button,
+.customer-editor-status {
+  color: #f2f0eb;
+}
+
+.customer-editor-status {
+  background: #5c5c5c;
+}
+
+.customer-editor-avatar {
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.business .customer-editor-nav nav button.active {
+  border-left-color: #fff;
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.business .customer-editor-nav nav button:hover:not(.active) {
+  background: #595959;
+  color: #fff;
+}
+
+.customer-editor-heading h3,
+.business.modal:has(.customer-editor) > .modal-title h2 {
+  color: var(--palette-ink);
+}
+
+.customer-editor-completion,
+.customer-editor-extra-contact {
+  border-color: var(--palette-line);
+}
+
+.customer-editor-completion strong,
+.customer-editor-completion > div span {
+  color: var(--palette-blue);
+  background: var(--palette-blue);
+}
+
+.customer-editor-completion > div {
+  background: #cac8c3;
+}
+
+/* Dictionaries */
+.dictionary-layout,
+.dictionary-groups,
+.dictionary-parent-row td {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-light);
+}
+
+.business .dictionary-groups button.active {
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.dictionary-content {
+  background: var(--palette-warm-soft);
+}
+
+/* Quote workspace */
+.quotes-workspace {
+  --quote-blue: var(--palette-blue);
+  background: var(--palette-warm-soft);
+  color: var(--palette-ink);
+}
+
+.quotes-template-list,
+.quotes-detail,
+.quotes-sku-drawer,
+.quotes-modal {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-soft);
+}
+
+.quotes-search,
+.quotes-sku-entry input,
+.quotes-brand-select .business-select-trigger,
+.quotes-price-input,
+.quotes-drawer-search,
+.quotes-modal input,
+.quotes-template-editor input,
+.quotes-template-editor textarea {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-light);
+  color: var(--palette-ink);
+}
+
+.quotes-create-action,
+.quotes-primary-action,
+.quotes-template-editor .quotes-editor-actions > .quotes-editor-save {
+  border-color: var(--palette-blue);
+  background: var(--palette-blue);
+  color: #fff;
+}
+
+.quotes-create-action:hover,
+.quotes-primary-action:hover,
+.quotes-template-editor .quotes-editor-actions > .quotes-editor-save:hover {
+  background: var(--palette-blue-hover);
+}
+
+.quotes-template-item,
+.quotes-part-row,
+.quotes-sku-row,
+.quotes-drawer-row,
+.quotes-draft-row,
+.quotes-manage-row {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-light);
+  color: var(--palette-ink);
+}
+
+.quotes-template-item.selected,
+.quotes-notice,
+.quotes-sku-table-head,
+.quotes-parts-head,
+.quotes-drawer-head {
+  background: var(--palette-blue-soft);
+  color: var(--palette-charcoal-deep);
+}
+
+.quotes-template-item:hover:not(.selected),
+.quotes-row-actions button:hover,
+.quotes-drawer-heading button:hover {
+  background: var(--palette-warm);
+}
+
+.quotes-section-heading,
+.quotes-list-footer,
+.quotes-other-templates,
+.quotes-bottom-actions,
+.quotes-drawer-heading,
+.quotes-drawer-footer,
+.quotes-modal-heading,
+.quotes-modal-actions,
+.quotes-template-editor .quotes-editor-actions {
+  border-color: var(--palette-line);
+}
+
+.quotes-text-action,
+.quotes-template-item.selected .quotes-item-dots,
+.quotes-template-item.selected .quotes-template-select > svg:first-child,
+.quotes-list-footer button:hover {
+  color: var(--palette-blue);
+}
+
+/* Authentication and home */
+.auth-screen {
+  background: var(--palette-warm);
+}
+
+.auth-card,
+.home-page > section,
+.empty-state {
+  border-color: var(--palette-line);
+  background: var(--palette-warm-soft);
+}
+
+@media (max-width: 760px) {
+  .customer-editor-nav {
+    border-bottom-color: #606060;
+  }
+
+  .business .customer-editor-nav nav button.active {
+    border-bottom-color: #fff;
+  }
+}
