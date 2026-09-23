@@ -54,7 +54,7 @@ docs/                     全局文档与视觉参考
 - `/settings/accounts`：管理员创建和启停账号，不能停用当前账号。
 - `/settings/dictionaries` 与 `/sku-foundation`：分别展示配置中心字典和商品基础字典；管理员可维护可编辑分组的选项，固定分组只读。
 - `src/features/auth`、`customers`、`catalog` 承载对应页面；`src/components/business` 提供共用表单、居中 dialog 和表格样式。
-- `src/components/business/Select.tsx` 提供业务下拉列表的统一外观与键盘交互，页面不直接使用原生 select 弹出菜单。
+- `src/components/business/Select.tsx` 提供业务下拉列表的统一外观、选项搜索和键盘交互；所有引用该组件的筛选与表单下拉自动支持按名称或值搜索，页面不直接使用原生 select 弹出菜单。
 - `src/features/dictionaries` 提供两套来源独立的字典页面、服务端分页、搜索与选项编辑。有父子关系的选项按父项排序分组，页面突出一级项并缩进显示子项；搜索单独命中子项时仍返回上级名称作为上下文。
 - `server/app.mjs` 处理 API、会话和静态页面；database.mjs 建表，validation.mjs 校验；scripts/dev.mjs 启动前后端。
 - shared/catalog.json 为前后端共用字典与缺省选项，定义旧供货性质编码的回退项、历史值、产地、分类、单位、件号类型及角色。
