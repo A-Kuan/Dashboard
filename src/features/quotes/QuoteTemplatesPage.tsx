@@ -80,6 +80,7 @@ export function QuoteTemplatesPage() {
   const [pickedSkuIds, setPickedSkuIds] = useState<string[]>([])
   const [manualSkuCode, setManualSkuCode] = useState('')
   const [brandOptions, setBrandOptions] = useState<string[]>([])
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({})
 
   useEffect(() => {
     let alive = true
@@ -241,7 +242,7 @@ export function QuoteTemplatesPage() {
     }
   }
 
-  function updatePartField(id: string, field: 'brand' | 'name' | 'priceMinor', value: string) {
+  function updatePartField(id: string, field: 'brand' | 'name', value: string) {
     setTemplates((current) =>
       current.map((template) =>
         template.id === selected.id
@@ -251,12 +252,7 @@ export function QuoteTemplatesPage() {
                 part.id === id
                   ? {
                       ...part,
-                      [field]:
-                        field === 'priceMinor'
-                          ? value === ''
-                            ? null
-                            : Math.round(Number(value) * 100)
-                          : value,
+                      [field]: value,
                     }
                   : part,
               ),
@@ -264,6 +260,40 @@ export function QuoteTemplatesPage() {
           : template,
       ),
     )
+  }
+
+  function commitPrice(id: string) {
+    const draft = priceDrafts[id]
+    if (draft === undefined) return
+    if (draft !== '' && !/^\d+(\.\d{0,2})?$/.test(draft)) {
+      setError('价格最多保留两位小数')
+      setPriceDrafts((current) => {
+        const next = { ...current }
+        delete next[id]
+        return next
+      })
+      return
+    }
+    setTemplates((current) =>
+      current.map((template) =>
+        template.id === selected.id
+          ? {
+              ...template,
+              parts: template.parts.map((part) =>
+                part.id === id
+                  ? { ...part, priceMinor: draft === '' ? null : Math.round(Number(draft) * 100) }
+                  : part,
+              ),
+            }
+          : template,
+      ),
+    )
+    setPriceDrafts((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    setError('')
   }
 
   async function saveInlineChanges() {
@@ -565,8 +595,17 @@ export function QuoteTemplatesPage() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={part.priceMinor === null ? '' : (part.priceMinor / 100).toFixed(2)}
-                  onChange={(event) => updatePartField(part.id, 'priceMinor', event.target.value)}
+                  value={
+                    priceDrafts[part.id] ??
+                    (part.priceMinor === null ? '' : (part.priceMinor / 100).toFixed(2))
+                  }
+                  onChange={(event) =>
+                    setPriceDrafts((current) => ({
+                      ...current,
+                      [part.id]: event.target.value,
+                    }))
+                  }
+                  onBlur={() => commitPrice(part.id)}
                   disabled={!writable || busy}
                   placeholder="待填写"
                 />
