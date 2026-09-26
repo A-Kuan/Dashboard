@@ -70,6 +70,7 @@ export function createApp({
   origins = ['http://127.0.0.1:4179'],
   secureCookie = false,
   trustLoopbackProxy = false,
+  devAuthBypass = false,
   distDir = resolve('dist'),
 }) {
   const db = openDatabase(dataDir)
@@ -136,6 +137,18 @@ export function createApp({
           'SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND u.enabled=1',
         )
         .get(hash(token)) ?? null
+    )
+  }
+  function authenticatedUser(req) {
+    return (
+      session(req) ??
+      (devAuthBypass
+        ? db
+            .prepare(
+              "SELECT * FROM users WHERE enabled=1 ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,created_at,id LIMIT 1",
+            )
+            .get()
+        : null)
     )
   }
   function checkVersion(body, row) {
@@ -357,7 +370,7 @@ export function createApp({
         (!origins.includes(req.headers.origin) || req.headers['x-dashboard-request'] !== '1')
       )
         throw new ApiError(403, '请求来源不被允许，请从本站页面操作')
-      const user = session(req)
+      const user = authenticatedUser(req)
       if (path === '/api/auth/session' && req.method === 'GET')
         return json(res, 200, { user: user ? publicUser(user) : null, setupRequired: !hasUsers() })
       if (path === '/api/auth/setup' && req.method === 'POST') {

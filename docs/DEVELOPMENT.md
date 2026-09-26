@@ -4,7 +4,7 @@
 
 Node.js 24.16.0 及以上的 24.x，npm 11.x。使用 npm 与 package-lock.json；换环境执行 npm ci。
 执行 npm run dev 同时启动 Vite 4179 和 Node API 4182，访问 http://127.0.0.1:4179，默认仅本机。
-首次读取 .data/setup-token.txt 的一次性初始化码，在页面自行设置管理员账号和密码（必填，最多 128 位）。初始化后文件移除。后续账号由管理员创建，无公开注册。正式业务数据库初始为空。
+本地开发默认免登录：数据库已有启用账号时，API 自动使用管理员优先的首个账号；数据库为空时仍读取 `.data/setup-token.txt` 的一次性初始化码完成首次管理员初始化。设置 `DEV_AUTH_BYPASS=0` 可恢复登录页以测试鉴权流程。生产环境始终禁用免登录，即使误配该变量也不会生效。后续账号由管理员创建，无公开注册，正式业务数据库初始为空。
 
 ## 环境变量
 
@@ -18,6 +18,7 @@ Node.js 24.16.0 及以上的 24.x，npm 11.x。使用 npm 与 package-lock.json�
 | APP_ORIGIN           | http://127.0.0.1:4179 | 写请求允许的完整来源                                                   |
 | DATA_DIR             | .data                 | 数据目录                                                               |
 | TRUST_LOOPBACK_PROXY | 0                     | 仅当直接连接来自本机回环地址时信任代理提供的真实 IP，生产 Nginx 设为 1 |
+| DEV_AUTH_BYPASS      | 1（仅开发）           | 本地已有账号时免登录；设为 0 可测试登录，生产环境强制关闭              |
 | NODE_ENV             | 未设置                | production 要求 HTTPS 并启用 Secure Cookie                             |
 
 更改前端端口需同步 APP_ORIGIN，更改后端端口需同步 vite.config.ts 代理。VITE_ 变量进入浏览器，不可保存秘密。

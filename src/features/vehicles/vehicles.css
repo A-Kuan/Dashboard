@@ -639,6 +639,64 @@
     grid-template-columns: repeat(3, 1fr);
   }
 }
+@media (min-width: 1600px) and (max-height: 1000px) {
+  .vehicle-detail {
+    padding: 14px 72px 24px;
+  }
+  .vehicle-detail-top,
+  .vehicle-detail-hero,
+  .vehicle-lifecycle,
+  .vehicle-detail-lower {
+    max-width: 1680px;
+  }
+  .vehicle-detail-top {
+    margin-bottom: 12px;
+  }
+  .vehicle-detail h1 {
+    font-size: 30px;
+  }
+  .vehicle-detail-top a {
+    margin: 6px 0;
+  }
+  .vehicle-hero-image {
+    height: 310px;
+  }
+  .vehicle-detail-hero dl {
+    padding: 10px 22px;
+  }
+  .vehicle-detail-hero dl > div {
+    padding: 7px 0;
+  }
+  .vehicle-detail-hero dl > p {
+    margin: 8px 0 0;
+    padding: 10px 12px;
+  }
+  .vehicle-lifecycle a {
+    min-height: 76px;
+    padding: 6px 14px;
+  }
+  .vehicle-lifecycle img {
+    width: 118px;
+    height: 54px;
+  }
+  .vehicle-detail-lower > section {
+    padding: 12px 16px;
+  }
+  .vehicle-detail-lower h2 {
+    margin-bottom: 9px;
+    font-size: 22px;
+  }
+  .vehicle-identify img {
+    height: 96px;
+  }
+  .vehicle-identify strong {
+    padding: 7px;
+  }
+  .vehicle-detail-lower th,
+  .vehicle-detail-lower td {
+    padding: 7px 9px;
+  }
+}
 @media (max-width: 1200px) {
   .vehicle-library,
   .vehicle-detail {

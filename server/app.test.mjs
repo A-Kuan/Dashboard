@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApp } from './app.mjs'
+import { createApp, hashPassword } from './app.mjs'
 
 test('authenticated persistent customer and SKU workflow', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'dashboard-api-test-'))
@@ -572,4 +572,34 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     assert.equal((await call('/auth/logout', 'POST', {}, editorCookie)).status, 200)
     assert.equal((await call('/skus', 'GET', undefined, editorCookie)).status, 401)
   })
+})
+
+test('development auth bypass reuses an enabled local account only when explicitly enabled', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dashboard-dev-auth-test-'))
+  let app = createApp({ dataDir: directory, origins: ['http://app.test'], devAuthBypass: true })
+  app.db
+    .prepare('INSERT INTO users VALUES(?,?,?,?,?,?)')
+    .run(
+      'local-admin',
+      'localadmin',
+      await hashPassword('unused'),
+      'admin',
+      1,
+      new Date().toISOString(),
+    )
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
+  let base = `http://127.0.0.1:${app.server.address().port}`
+  let response = await fetch(`${base}/api/auth/session`)
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).user.username, 'localadmin')
+  assert.equal((await fetch(`${base}/api/vehicle-models`)).status, 200)
+  await app.close()
+
+  app = createApp({ dataDir: directory, origins: ['http://app.test'] })
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
+  base = `http://127.0.0.1:${app.server.address().port}`
+  response = await fetch(`${base}/api/vehicle-models`)
+  assert.equal(response.status, 401)
+  await app.close()
+  rmSync(directory, { recursive: true, force: true })
 })

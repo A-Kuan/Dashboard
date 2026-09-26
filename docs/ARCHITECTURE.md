@@ -60,6 +60,7 @@ docs/                     全局文档与视觉参考
 - `src/components/business/Select.tsx` 提供业务下拉列表的统一外观、选项搜索和键盘交互；所有引用该组件的筛选与表单下拉自动支持按名称或值搜索，页面不直接使用原生 select 弹出菜单。
 - `src/features/dictionaries` 提供两套来源独立的字典页面、服务端分页、搜索与选项编辑。所有字典分组新增选项时均由服务端生成 `DICT_` 前缀的唯一编码，前端不接受人工填写；已有迁移编码保持原样且编辑时不可修改，避免破坏历史关联。有父子关系的选项按父项排序分组，页面突出一级项并缩进显示子项；搜索单独命中子项时仍返回上级名称作为上下文。共享 `Select` 组件在组件目录内加载自身样式，不依赖页面是否带有 `.business` 容器。
 - `server/app.mjs` 处理 API、会话和静态页面；database.mjs 建表，validation.mjs 校验；scripts/dev.mjs 启动前后端。
+- 本地开发服务器默认通过 `DEV_AUTH_BYPASS` 复用数据库内首个启用账号，前后端权限上下文保持完整；生产模式无条件关闭该旁路并继续使用服务端会话校验。
 - shared/catalog.json 定义旧供货性质编码的回退项、历史值、产地、分类、单位、件号类型及角色；客户类型和客户跟进阶段改由数据库配置中心字典提供。
 
 SQLite 默认保存在 `.data/dashboard.sqlite`，启用 WAL 与外键。users、sessions、customers、customer_contacts、customer_activities、skus、sku_numbers、fitments、stock_balances、customer_prices、quote_templates、quote_template_parts、audit_log 分表保存。测试使用隔离临时数据库。

@@ -6,14 +6,17 @@ if (production && (!process.env.APP_ORIGIN || !process.env.APP_ORIGIN.startsWith
   throw new Error('生产环境须配置 HTTPS APP_ORIGIN')
 const port = Number(process.env.PORT ?? 4182)
 const dataDir = resolve(process.env.DATA_DIR ?? '.data')
+const devAuthBypass = !production && process.env.DEV_AUTH_BYPASS !== '0'
 const app = createApp({
   dataDir,
   origins: [process.env.APP_ORIGIN ?? 'http://127.0.0.1:4179'],
   secureCookie: production,
   trustLoopbackProxy: process.env.TRUST_LOOPBACK_PROXY === '1',
+  devAuthBypass,
 })
 app.server.listen(port, process.env.HOST ?? '127.0.0.1', () => {
   console.log(`Dashboard API listening on port ${port}. Database directory: ${dataDir}`)
+  if (devAuthBypass) console.log('Local development authentication bypass is enabled.')
   if (!app.db.prepare('SELECT id FROM users LIMIT 1').get())
     console.log('首次登录请使用数据目录内 setup-token.txt 中的一次性初始化码创建管理员。')
 })
