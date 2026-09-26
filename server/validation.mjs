@@ -91,6 +91,59 @@ export function customerInput(body, dictionaries = {}) {
     throw new ApiError(400, '联系人编号不能重复')
   return value
 }
+
+export function garageOwnerInput(body) {
+  return {
+    name: text(body.name, '车主姓名', true, 120),
+    phone: text(body.phone ?? '', '车主电话', false, 60),
+    wechat: text(body.wechat ?? '', '车主微信', false, 120),
+    notes: text(body.notes ?? '', '车主备注', false, 1000),
+  }
+}
+
+export function garageVehicleInput(body) {
+  const modelYear = text(body.modelYear ?? '', '车辆年款', false, 4)
+  if (
+    modelYear &&
+    (!/^\d{4}$/.test(modelYear) || Number(modelYear) < 1900 || Number(modelYear) > 2100)
+  )
+    throw new ApiError(400, '车辆年款须为 1900 至 2100')
+  return {
+    ownerId: text(body.ownerId, '车主', true, 36),
+    brand: text(body.brand, '车辆品牌', true, 80),
+    series: text(body.series, '车系', true, 80),
+    generationCode: text(body.generationCode ?? '', '车型代号', false, 80),
+    modelYear,
+    engine: text(body.engine ?? '', '发动机', false, 100),
+    vin: text(body.vin ?? '', 'VIN', false, 40).toUpperCase(),
+    plateNumber: text(body.plateNumber ?? '', '车牌号', false, 40).toUpperCase(),
+    notes: text(body.notes ?? '', '车辆备注', false, 1000),
+    enabled: boolean(body.enabled ?? true),
+  }
+}
+
+export function garageInquiryInput(body) {
+  return {
+    ownerId: text(body.ownerId, '车主', true, 36),
+    vehicleId: text(body.vehicleId, '车辆', true, 36),
+    status: choice(
+      body.status ?? '待识别',
+      ['待识别', '待核价', '待报价', '已报价', '已关闭'],
+      '询价状态',
+    ),
+    source: text(body.source ?? '', '询价来源', false, 80),
+    notes: text(body.notes ?? '', '询价备注', false, 2000),
+    items: list(body.items ?? [], '询价配件', 100).map((item) => ({
+      skuId: text(item.skuId ?? '', 'SKU 记录编号', false, 36),
+      oeNumber: text(item.oeNumber ?? '', 'OE 件号', false, 100),
+      name: text(item.name, '配件名称', true, 200),
+      quantity: integer(item.quantity ?? 1, '数量', 1, 100000),
+      priceMinor:
+        item.priceMinor == null ? null : integer(item.priceMinor, '询价单价', 0, 10000000000),
+      notes: text(item.notes ?? '', '配件备注', false, 500),
+    })),
+  }
+}
 export function quoteTemplateInput(body) {
   const value = {
     name: text(body.name, '模板名称', true, 120),

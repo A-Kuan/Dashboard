@@ -1,15 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
+  IconAlertTriangle,
+  IconArrowDown,
+  IconArrowUp,
   IconCheck,
   IconClipboard,
+  IconCopy,
   IconDatabase,
   IconDotsVertical,
   IconEdit,
   IconFileDescription,
+  IconGripVertical,
   IconInfoCircle,
   IconPlus,
   IconSearch,
   IconSettings,
+  IconTrash,
   IconX,
 } from '@tabler/icons-react'
 import './quotes.css'
@@ -81,6 +87,7 @@ export function QuoteTemplatesPage() {
   const [manualSkuCode, setManualSkuCode] = useState('')
   const [brandOptions, setBrandOptions] = useState<string[]>([])
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({})
+  const [selectedPartId, setSelectedPartId] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -146,6 +153,10 @@ export function QuoteTemplatesPage() {
   )
   const commonTemplates = filtered.filter((template) => template.isCommon)
   const otherTemplates = filtered.filter((template) => !template.isCommon)
+  const selectedPart =
+    selected.parts.find((part) => part.id === selectedPartId) ?? selected.parts[0]
+  const selectedPartIndex = selected.parts.findIndex((part) => part.id === selectedPart?.id)
+  const templateTotalMinor = selected.parts.reduce((sum, part) => sum + (part.priceMinor ?? 0), 0)
 
   async function updateSelected(change: (template: Template) => Template) {
     if (!selected.id || busy) return false
@@ -169,10 +180,13 @@ export function QuoteTemplatesPage() {
   }
 
   async function removePart(id: string) {
-    await updateSelected((template) => ({
+    const currentIndex = selected.parts.findIndex((part) => part.id === id)
+    const fallback = selected.parts[currentIndex + 1] ?? selected.parts[currentIndex - 1]
+    const saved = await updateSelected((template) => ({
       ...template,
       parts: template.parts.filter((part) => part.id !== id),
     }))
+    if (saved) setSelectedPartId(fallback?.id ?? '')
   }
 
   function priceForSku(sku: Sku) {
@@ -242,7 +256,11 @@ export function QuoteTemplatesPage() {
     }
   }
 
-  function updatePartField(id: string, field: 'brand' | 'name', value: string) {
+  function updatePartField(
+    id: string,
+    field: 'brand' | 'name' | 'vehicle' | 'note',
+    value: string,
+  ) {
     setTemplates((current) =>
       current.map((template) =>
         template.id === selected.id
@@ -298,6 +316,29 @@ export function QuoteTemplatesPage() {
 
   async function saveInlineChanges() {
     await updateSelected((template) => template)
+  }
+
+  async function duplicatePart(part: Part) {
+    const duplicate = { ...part, id: crypto.randomUUID() }
+    const saved = await updateSelected((template) => {
+      const index = template.parts.findIndex((item) => item.id === part.id)
+      const parts = [...template.parts]
+      parts.splice(index + 1, 0, duplicate)
+      return { ...template, parts }
+    })
+    if (saved) setSelectedPartId(duplicate.id)
+  }
+
+  async function movePart(partId: string, direction: -1 | 1) {
+    const index = selected.parts.findIndex((part) => part.id === partId)
+    const targetIndex = index + direction
+    if (index < 0 || targetIndex < 0 || targetIndex >= selected.parts.length) return
+    await updateSelected((template) => {
+      const parts = [...template.parts]
+      const [part] = parts.splice(index, 1)
+      parts.splice(targetIndex, 0, part)
+      return { ...template, parts }
+    })
   }
 
   function editTemplate(template: Template) {
@@ -506,136 +547,252 @@ export function QuoteTemplatesPage() {
       </div>
 
       <section className="quotes-detail" aria-label="报价模板详情">
-        <div className="quotes-detail-heading">
-          <div>
-            <div className="quotes-title-line">
-              <h2>{selected.name || '请选择或新建报价模板'}</h2>
-              <button
-                className="quotes-text-action"
-                disabled={!writable || !selected.id || busy}
-                onClick={() => editTemplate(selected)}
-                type="button"
-              >
-                <IconEdit size={19} /> 编辑
-              </button>
+        <div className="quotes-editor-main">
+          <div className="quotes-detail-heading">
+            <div>
+              <div className="quotes-title-line">
+                <h2>{selected.name || '请选择或新建报价模板'}</h2>
+                <button
+                  className="quotes-text-action"
+                  disabled={!writable || !selected.id || busy}
+                  onClick={() => editTemplate(selected)}
+                  type="button"
+                >
+                  <IconEdit size={18} /> 编辑
+                </button>
+              </div>
+              <p>适用客户：{selected.customer || '未指定'}</p>
             </div>
-            <p>适用客户：{selected.customer || '未指定'}</p>
-            {selected.note && <p className="quotes-template-note">备注：{selected.note}</p>}
+          </div>
+
+          <form className="quotes-sku-entry" onSubmit={(event) => void addManualSku(event)}>
+            <label className="quotes-sku-input" htmlFor="quote-sku-code">
+              <IconSearch size={19} aria-hidden="true" />
+              <input
+                id="quote-sku-code"
+                value={manualSkuCode}
+                onChange={(event) => setManualSkuCode(event.target.value)}
+                placeholder="输入 SKU 编码，如 95850561100"
+                disabled={!writable || !selected.id || busy}
+              />
+            </label>
+            <button type="submit" disabled={!manualSkuCode.trim() || !writable || busy}>
+              添加
+            </button>
+            <button
+              className="quotes-library-action"
+              type="button"
+              disabled={!writable || !selected.id || busy}
+              onClick={() => setSkuDrawerOpen(true)}
+            >
+              <IconDatabase size={19} /> 从 SKU 库添加
+            </button>
+          </form>
+
+          <div className="quotes-sku-table" role="table" aria-label="模板配件清单">
+            <div className="quotes-sku-row quotes-sku-table-head" role="row">
+              <span aria-hidden="true" />
+              <span role="columnheader">序号</span>
+              <span role="columnheader">状态</span>
+              <span role="columnheader">SKU 编码</span>
+              <span role="columnheader">品牌</span>
+              <span role="columnheader">名称</span>
+              <span role="columnheader">单价（CNY）</span>
+            </div>
+            {selected.parts.length === 0 && (
+              <div className="quotes-empty">输入 SKU 编码，或从 SKU 库选择配件开始添加。</div>
+            )}
+            {selected.parts.map((part, index) => {
+              const active = part.id === selectedPart?.id
+              return (
+                <div
+                  className={`quotes-sku-row${active ? ' is-selected' : ''}`}
+                  role="row"
+                  tabIndex={0}
+                  aria-selected={active}
+                  key={part.id}
+                  onClick={() => setSelectedPartId(part.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelectedPartId(part.id)
+                    }
+                  }}
+                >
+                  <IconGripVertical size={18} aria-hidden="true" />
+                  <span role="cell">{index + 1}</span>
+                  <span className="quotes-part-status" role="cell">
+                    <IconCheck size={14} aria-hidden="true" />
+                    已加入
+                  </span>
+                  <strong role="cell">{part.skuCode || '—'}</strong>
+                  <span role="cell">{part.brand || '待补充'}</span>
+                  <span role="cell">{part.name || '待填写名称'}</span>
+                  <span role="cell">
+                    {part.priceMinor === null
+                      ? '待填写'
+                      : `¥ ${(part.priceMinor / 100).toFixed(2)}`}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </div>
-        <div className="quotes-notice">
-          <IconInfoCircle size={23} aria-hidden="true" />
-          <span>
-            模板用于保存常用的车型与配件需求，帮助快速报价。每次新建报价时，请务必重新确认配件编号、适配车型、库存情况和最新价格。
-          </span>
-        </div>
-        <div className="quotes-section-heading quotes-sku-heading">
-          <h3>
-            配件清单 <span>共 {selected.parts.length} 个配件</span>
-          </h3>
-        </div>
-        <form className="quotes-sku-entry" onSubmit={(event) => void addManualSku(event)}>
-          <label htmlFor="quote-sku-code">输入 SKU 编码</label>
-          <input
-            id="quote-sku-code"
-            value={manualSkuCode}
-            onChange={(event) => setManualSkuCode(event.target.value)}
-            placeholder="请输入 SKU 编码，如 95850561100"
-            disabled={!writable || !selected.id || busy}
-          />
-          <button type="submit" disabled={!manualSkuCode.trim() || !writable || busy}>
-            添加
-          </button>
-          <button
-            className="quotes-library-action"
-            type="button"
-            disabled={!writable || !selected.id || busy}
-            onClick={() => setSkuDrawerOpen(true)}
-          >
-            <IconDatabase size={19} /> 从 SKU 库添加
-          </button>
-        </form>
-        <div className="quotes-sku-table" role="table" aria-label="模板配件清单">
-          <div className="quotes-sku-row quotes-sku-table-head" role="row">
-            <span role="columnheader">SKU 编码</span>
-            <span role="columnheader">品牌</span>
-            <span role="columnheader">名称</span>
-            <span role="columnheader">价格（CNY）</span>
-            <span role="columnheader">操作</span>
-          </div>
-          {selected.parts.length === 0 && (
-            <div className="quotes-empty">输入 SKU 编码，或从 SKU 库选择配件开始添加。</div>
-          )}
-          {selected.parts.map((part) => (
-            <div className="quotes-sku-row" role="row" key={part.id}>
-              <strong role="cell">{part.skuCode || '—'}</strong>
-              <div className="quotes-brand-select" role="cell">
+
+        <aside className="quotes-part-inspector" aria-label="配件详情">
+          <h3>配件详情</h3>
+          {selectedPart ? (
+            <>
+              <div className="quotes-stock-warning">
+                <IconAlertTriangle size={18} aria-hidden="true" />
+                报价前重新确认库存与最新价格。
+              </div>
+              <label>
+                SKU 编码
+                <input value={selectedPart.skuCode} disabled />
+              </label>
+              <label>
+                品牌
                 <Select
-                  label={`${part.skuCode}品牌`}
-                  value={part.brand}
-                  onChange={(value) => updatePartField(part.id, 'brand', value)}
+                  label={`${selectedPart.skuCode}品牌`}
+                  value={selectedPart.brand}
+                  onChange={(value) => updatePartField(selectedPart.id, 'brand', value)}
                   disabled={!writable || busy}
-                  options={Array.from(new Set([part.brand, ...brandOptions]))
+                  options={Array.from(new Set([selectedPart.brand, ...brandOptions]))
                     .filter(Boolean)
                     .map((brand) => ({ value: brand, label: brand }))}
                 />
-              </div>
-              <input
-                role="cell"
-                aria-label={`${part.skuCode}名称`}
-                value={part.name}
-                onChange={(event) => updatePartField(part.id, 'name', event.target.value)}
-                disabled={!writable || busy}
-                placeholder="填写名称"
-              />
-              <label className="quotes-price-input" role="cell">
-                <span>¥</span>
+              </label>
+              <label>
+                名称
                 <input
-                  aria-label={`${part.skuCode}价格`}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={
-                    priceDrafts[part.id] ??
-                    (part.priceMinor === null ? '' : (part.priceMinor / 100).toFixed(2))
-                  }
-                  onChange={(event) =>
-                    setPriceDrafts((current) => ({
-                      ...current,
-                      [part.id]: event.target.value,
-                    }))
-                  }
-                  onBlur={() => commitPrice(part.id)}
+                  value={selectedPart.name}
+                  onChange={(event) => updatePartField(selectedPart.id, 'name', event.target.value)}
                   disabled={!writable || busy}
-                  placeholder="待填写"
                 />
               </label>
-              <button
-                type="button"
-                disabled={!writable || busy}
-                onClick={() => void removePart(part.id)}
-              >
-                删除
-              </button>
+              <label>
+                单价（CNY）
+                <span className="quotes-inspector-price">
+                  ¥
+                  <input
+                    aria-label={`${selectedPart.skuCode}价格`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={
+                      priceDrafts[selectedPart.id] ??
+                      (selectedPart.priceMinor === null
+                        ? ''
+                        : (selectedPart.priceMinor / 100).toFixed(2))
+                    }
+                    onChange={(event) =>
+                      setPriceDrafts((current) => ({
+                        ...current,
+                        [selectedPart.id]: event.target.value,
+                      }))
+                    }
+                    onBlur={() => commitPrice(selectedPart.id)}
+                    disabled={!writable || busy}
+                    placeholder="待填写"
+                  />
+                </span>
+              </label>
+              <div className="quotes-inspector-divider" />
+              <label>
+                适用车型
+                <input
+                  value={selectedPart.vehicle}
+                  onChange={(event) =>
+                    updatePartField(selectedPart.id, 'vehicle', event.target.value)
+                  }
+                  disabled={!writable || busy}
+                  placeholder="例如：卡宴 E3"
+                />
+              </label>
+              <label>
+                备注
+                <textarea
+                  value={selectedPart.note ?? ''}
+                  onChange={(event) => updatePartField(selectedPart.id, 'note', event.target.value)}
+                  disabled={!writable || busy}
+                  placeholder="输入备注（可选）"
+                  maxLength={200}
+                />
+                <small>{(selectedPart.note ?? '').length}/200</small>
+              </label>
+              <div className="quotes-inspector-actions">
+                <button
+                  className="quotes-primary-action"
+                  type="button"
+                  disabled={!writable || busy}
+                  onClick={() => void saveInlineChanges()}
+                >
+                  <IconCheck size={18} /> 保存当前配件
+                </button>
+                <div>
+                  <button
+                    type="button"
+                    disabled={!writable || busy}
+                    onClick={() => void duplicatePart(selectedPart)}
+                  >
+                    <IconCopy size={17} /> 复制
+                  </button>
+                  <button
+                    className="is-danger"
+                    type="button"
+                    disabled={!writable || busy}
+                    onClick={() => void removePart(selectedPart.id)}
+                  >
+                    <IconTrash size={17} /> 删除
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!writable || busy || selectedPartIndex <= 0}
+                    onClick={() => void movePart(selectedPart.id, -1)}
+                  >
+                    <IconArrowUp size={17} /> 上移
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!writable || busy || selectedPartIndex === selected.parts.length - 1}
+                    onClick={() => void movePart(selectedPart.id, 1)}
+                  >
+                    <IconArrowDown size={17} /> 下移
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="quotes-inspector-empty">
+              <IconInfoCircle size={22} aria-hidden="true" />
+              选择一条配件后在这里编辑详情。
             </div>
-          ))}
-        </div>
-        <div className="quotes-bottom-actions">
-          <button
-            className="quotes-primary-action"
-            onClick={beginQuote}
-            disabled={selected.parts.length === 0 || busy}
-            type="button"
-          >
-            <IconFileDescription size={21} /> 使用模板开始报价
-          </button>
+          )}
+        </aside>
+
+        <div className="quotes-workspace-footer">
+          <div>
+            <strong>{selected.parts.length} 个配件</strong>
+            <span>·</span>
+            <span>合计</span>
+            <b>¥ {(templateTotalMinor / 100).toFixed(2)}</b>
+          </div>
           <button
             className="quotes-secondary-action"
             disabled={!writable || !selected.id || busy}
             onClick={() => void saveInlineChanges()}
             type="button"
           >
-            <IconCheck size={19} /> 保存修改
+            保存模板
+          </button>
+          <button
+            className="quotes-primary-action"
+            onClick={beginQuote}
+            disabled={selected.parts.length === 0 || busy}
+            type="button"
+          >
+            <IconFileDescription size={20} /> 使用模板开始报价
           </button>
         </div>
       </section>

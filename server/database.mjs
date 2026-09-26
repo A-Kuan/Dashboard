@@ -34,6 +34,45 @@ export function openDatabase(directory) {
     );
     CREATE INDEX IF NOT EXISTS customer_contacts_customer_position ON customer_contacts(customer_id,position);
     CREATE INDEX IF NOT EXISTS customer_activities_customer_date ON customer_activities(customer_id,created_at DESC);
+    CREATE TABLE IF NOT EXISTS customer_vehicle_owners (
+      id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, phone TEXT NOT NULL, wechat TEXT NOT NULL, notes TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS customer_vehicle_owners_customer_name
+      ON customer_vehicle_owners(customer_id,name);
+    CREATE TABLE IF NOT EXISTS customer_vehicles (
+      id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES customer_vehicle_owners(id) ON DELETE CASCADE,
+      brand TEXT NOT NULL, series TEXT NOT NULL, generation_code TEXT NOT NULL,
+      model_year TEXT NOT NULL, engine TEXT NOT NULL, vin TEXT NOT NULL,
+      plate_number TEXT NOT NULL, notes TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+      version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS customer_vehicles_customer_owner
+      ON customer_vehicles(customer_id,owner_id,updated_at DESC);
+    CREATE TABLE IF NOT EXISTS customer_inquiries (
+      id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES customer_vehicle_owners(id) ON DELETE CASCADE,
+      vehicle_id TEXT NOT NULL REFERENCES customer_vehicles(id) ON DELETE CASCADE,
+      code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      status TEXT NOT NULL CHECK(status IN ('待识别','待核价','待报价','已报价','已关闭')),
+      source TEXT NOT NULL, notes TEXT NOT NULL,
+      quoted_total_minor INTEGER CHECK(quoted_total_minor IS NULL OR quoted_total_minor >= 0),
+      quoted_at TEXT, version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS customer_inquiries_customer_vehicle
+      ON customer_inquiries(customer_id,vehicle_id,updated_at DESC);
+    CREATE TABLE IF NOT EXISTS customer_inquiry_items (
+      id TEXT PRIMARY KEY, inquiry_id TEXT NOT NULL REFERENCES customer_inquiries(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL, sku_id TEXT REFERENCES skus(id) ON DELETE SET NULL,
+      oe_number TEXT NOT NULL, name TEXT NOT NULL,
+      quantity INTEGER NOT NULL CHECK(quantity > 0),
+      price_minor INTEGER CHECK(price_minor IS NULL OR price_minor >= 0), notes TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS customer_inquiry_items_order
+      ON customer_inquiry_items(inquiry_id,position);
     CREATE TABLE IF NOT EXISTS skus (
       id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
       category TEXT NOT NULL, brand TEXT NOT NULL, part_number TEXT NOT NULL,
@@ -200,7 +239,7 @@ export function openDatabase(directory) {
     db.exec('ALTER TABLE quote_template_parts ADD COLUMN price_minor INTEGER')
   db.exec('CREATE INDEX IF NOT EXISTS skus_enabled_code_idx ON skus(enabled,code)')
   db.exec('CREATE INDEX IF NOT EXISTS fitments_sku_series_idx ON fitments(sku_id,series)')
-  db.exec('PRAGMA user_version = 8')
+  db.exec('PRAGMA user_version = 9')
   return db
 }
 

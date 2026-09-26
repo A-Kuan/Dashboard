@@ -1,6 +1,6 @@
 .vehicle-library,
 .vehicle-detail {
-  min-height: calc(100dvh - 113px);
+  min-height: calc(100dvh - 76px);
   padding: 20px 44px 32px;
   background: var(--palette-warm);
   color: var(--palette-ink);

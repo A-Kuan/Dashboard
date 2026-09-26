@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router'
 import {
   IconCalendar,
+  IconCar,
   IconFileText,
   IconId,
   IconMessageCircle,
@@ -54,6 +56,7 @@ function shortDate(value: string) {
 }
 
 export function CustomersPage() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const writable = user.role !== 'viewer'
   const [rows, setRows] = useState<Customer[]>([])
@@ -393,6 +396,13 @@ export function CustomersPage() {
             <div className="customer-projects-detail-tags">
               <span>{selected.customerType}</span>
               <span>{selected.projectStage}</span>
+              <button
+                className="customer-projects-garage"
+                onClick={() => navigate(`/customers/${selected.id}/garage`)}
+              >
+                <IconCar size={16} />
+                车主、车辆与询价
+              </button>
             </div>
             <section className="customer-projects-detail-section">
               <div className="customer-projects-section-heading">

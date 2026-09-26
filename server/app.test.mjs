@@ -371,6 +371,110 @@ test('authenticated persistent customer and SKU workflow', async (t) => {
     )
     assert.equal((await call('/skus', 'POST', sample)).status, 409)
   })
+  await t.test(
+    'keeps vehicle owners, vehicles and inquiries under the direct customer',
+    async () => {
+      const owner = await call(`/customers/${customerA.id}/garage/owners`, 'POST', {
+        name: '王先生',
+        phone: '13800138000',
+        wechat: 'owner-wang',
+        notes: '',
+      })
+      assert.equal(owner.status, 201)
+
+      const vehicle = await call(`/customers/${customerA.id}/garage/vehicles`, 'POST', {
+        ownerId: owner.body.id,
+        brand: '保时捷',
+        series: '911',
+        generationCode: '992',
+        modelYear: '2021',
+        engine: '3.0T',
+        vin: 'WP0ZZZ99ZMS123456',
+        plateNumber: '沪A12345',
+        notes: '',
+        enabled: true,
+      })
+      assert.equal(vehicle.status, 201)
+
+      const inquiry = await call(`/customers/${customerA.id}/garage/inquiries`, 'POST', {
+        ownerId: owner.body.id,
+        vehicleId: vehicle.body.id,
+        status: '待核价',
+        source: '微信',
+        notes: '前刹车片询价',
+        items: [
+          {
+            skuId: storedSku.id,
+            oeNumber: 'TEST-OE',
+            name: '测试空气滤芯',
+            quantity: 2,
+            priceMinor: 12800,
+            notes: '',
+          },
+        ],
+      })
+      assert.equal(inquiry.status, 201)
+      assert.match(inquiry.body.code, /^XJ\d{8}\d{3}$/)
+
+      assert.equal(
+        (
+          await call(`/customers/${customerA.id}/garage/inquiries`, 'POST', {
+            ownerId: owner.body.id,
+            vehicleId: vehicle.body.id,
+            status: '已报价',
+            source: '微信',
+            notes: '',
+            items: [
+              {
+                skuId: storedSku.id,
+                oeNumber: 'TEST-OE',
+                name: '测试空气滤芯',
+                quantity: 1,
+                priceMinor: null,
+                notes: '',
+              },
+            ],
+          })
+        ).status,
+        400,
+      )
+
+      const workspace = await call(`/customers/${customerA.id}/garage`)
+      assert.equal(workspace.status, 200)
+      assert.equal(workspace.body.customer.id, customerA.id)
+      assert.equal(workspace.body.owners[0].name, '王先生')
+      assert.equal(workspace.body.vehicles[0].ownerId, owner.body.id)
+      assert.equal(workspace.body.inquiries[0].items[0].skuId, storedSku.id)
+
+      const quoted = await call(
+        `/customers/${customerA.id}/garage/inquiries/${inquiry.body.id}`,
+        'PUT',
+        { ...inquiry.body, status: '已报价' },
+      )
+      assert.equal(quoted.status, 200)
+      assert.equal(quoted.body.quotedTotalMinor, 25600)
+      assert.ok(quoted.body.quotedAt)
+      assert.equal(
+        (
+          await call(`/customers/${customerA.id}/garage/inquiries/${inquiry.body.id}`, 'PUT', {
+            ...inquiry.body,
+            status: '已关闭',
+          })
+        ).status,
+        409,
+      )
+
+      assert.equal(
+        (
+          await call(`/customers/${customerB.id}/garage/vehicles`, 'POST', {
+            ...vehicle.body,
+            ownerId: owner.body.id,
+          })
+        ).status,
+        400,
+      )
+    },
+  )
   await t.test('supplier quote history stays separate from selling prices', async () => {
     const path = `/skus/${storedSku.id}/supplier-quotes`
     assert.equal(

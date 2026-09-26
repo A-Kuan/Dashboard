@@ -35,6 +35,63 @@ export type Customer = {
   version: number
   updatedAt: string
 }
+export type GarageOwner = {
+  id: string
+  customerId: string
+  name: string
+  phone: string
+  wechat: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+export type GarageVehicle = {
+  id: string
+  customerId: string
+  ownerId: string
+  brand: string
+  series: string
+  generationCode: string
+  modelYear: string
+  engine: string
+  vin: string
+  plateNumber: string
+  notes: string
+  enabled: boolean
+  version: number
+  updatedAt: string
+}
+export type GarageInquiryItem = {
+  id: string
+  skuId: string
+  oeNumber: string
+  name: string
+  quantity: number
+  priceMinor: number | null
+  notes: string
+}
+export type GarageInquiry = {
+  id: string
+  customerId: string
+  ownerId: string
+  vehicleId: string
+  code: string
+  status: '待识别' | '待核价' | '待报价' | '已报价' | '已关闭'
+  source: string
+  notes: string
+  quotedTotalMinor: number | null
+  quotedAt: string | null
+  version: number
+  createdAt: string
+  updatedAt: string
+  items: GarageInquiryItem[]
+}
+export type CustomerGarage = {
+  customer: Customer
+  owners: GarageOwner[]
+  vehicles: GarageVehicle[]
+  inquiries: GarageInquiry[]
+}
 export type Fitment = {
   make: string
   series: string

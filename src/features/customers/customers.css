@@ -336,6 +336,8 @@
 }
 .customer-projects-detail-tags {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 13px 0 21px;
 }
@@ -345,6 +347,14 @@
   background: #f3f4f4;
   color: #737b83;
   font-size: 11px;
+}
+.customer-projects .customer-projects-garage {
+  margin-left: auto;
+  padding: 5px 8px;
+  border-color: #c9d8ef;
+  background: #edf3ff;
+  color: #2057d4;
+  font-size: 12px;
 }
 .customer-projects-detail-section {
   padding: 20px 0;

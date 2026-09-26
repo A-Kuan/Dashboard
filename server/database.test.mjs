@@ -8,6 +8,7 @@ import { openDatabase } from './database.mjs'
 
 test('old customer and SKU data survives price schema migration', () => {
   const directory = mkdtempSync(join(tmpdir(), 'dashboard-migration-test-'))
+  let db
   try {
     const legacy = new DatabaseSync(join(directory, 'dashboard.sqlite'))
     legacy.exec(`
@@ -24,7 +25,7 @@ test('old customer and SKU data survives price schema migration', () => {
       INSERT INTO skus VALUES ('s1','OLD-S','旧配件','滤清系统','旧品牌','','品牌件','国产','','个','','',1,'','',1,1,'2026-01-01');
     `)
     legacy.close()
-    const db = openDatabase(directory)
+    db = openDatabase(directory)
     assert.equal(
       db.prepare('SELECT customer_type FROM customers WHERE id=?').get('c1').customer_type,
       '待分类',
@@ -42,6 +43,15 @@ test('old customer and SKU data survives price schema migration', () => {
     assert.equal(db.prepare('SELECT name FROM skus WHERE id=?').get('s1').name, '旧配件')
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='supplier_quotes'").get())
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='customer_contacts'").get())
+    assert.ok(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='customer_vehicle_owners'").get(),
+    )
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='customer_vehicles'").get())
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='customer_inquiries'").get())
+    assert.ok(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='customer_inquiry_items'").get(),
+    )
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9)
     assert.deepEqual(
       db
         .prepare(
@@ -51,8 +61,8 @@ test('old customer and SKU data survives price schema migration', () => {
         .map((row) => row.name),
       ['客户类型', '客户跟进阶段'],
     )
-    db.close()
   } finally {
+    db?.close()
     rmSync(directory, { recursive: true, force: true })
   }
 })

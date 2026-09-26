@@ -1,16 +1,16 @@
 :root {
-  --palette-blue: #0047c3;
-  --palette-blue-hover: #00399d;
-  --palette-blue-soft: #eaf2ff;
-  --palette-warm: #f5f3f0;
-  --palette-warm-soft: #f8f8f7;
-  --palette-warm-light: #fefdfc;
-  --palette-charcoal: #343b47;
-  --palette-charcoal-deep: #0d1630;
-  --palette-ink: #0d1630;
-  --palette-muted: #6a7993;
-  --palette-line: #dce1e7;
-  --palette-surface: #fefdfc;
+  --palette-blue: #2057d4;
+  --palette-blue-hover: #1748b8;
+  --palette-blue-soft: #edf3ff;
+  --palette-warm: #f3f6fa;
+  --palette-warm-soft: #f7f9fc;
+  --palette-warm-light: #fff;
+  --palette-charcoal: #334155;
+  --palette-charcoal-deep: #172033;
+  --palette-ink: #172033;
+  --palette-muted: #6f7f96;
+  --palette-line: #d9e2ec;
+  --palette-surface: #fff;
   --palette-white: #fff;
 }
 
@@ -432,11 +432,11 @@ body,
 
 /* 2026 top-navigation redesign */
 .app-content {
-  min-height: calc(100dvh - 113px);
+  min-height: calc(100dvh - 76px);
   background: var(--palette-warm);
 }
 .business-page {
-  min-height: calc(100dvh - 113px);
+  min-height: calc(100dvh - 76px);
   padding: 28px 36px 32px;
 }
 .page-heading {
@@ -554,7 +554,7 @@ body,
   background: rgb(30 36 48 / 42%);
 }
 .dictionary-page {
-  min-height: calc(100dvh - 113px);
+  min-height: calc(100dvh - 76px);
 }
 .dictionary-layout {
   max-width: 1520px;
@@ -592,7 +592,7 @@ body,
   background: var(--palette-surface);
 }
 .customer-projects {
-  min-height: calc(100dvh - 113px);
+  min-height: calc(100dvh - 76px);
   grid-template-columns: minmax(0, 1fr) 350px;
   gap: 18px;
   padding: 24px 36px 32px;
@@ -640,7 +640,7 @@ body,
 .customer-projects-detail {
   position: sticky;
   top: 137px;
-  height: calc(100dvh - 161px);
+  height: calc(100dvh - 124px);
 }
 .customer-projects-detail,
 .customer-projects-detail-section {
@@ -677,8 +677,8 @@ body,
   color: var(--palette-ink);
 }
 .quotes-workspace {
-  min-height: calc(100dvh - 161px);
-  height: calc(100dvh - 161px);
+  min-height: calc(100dvh - 124px);
+  height: calc(100dvh - 124px);
   grid-template-columns: 350px minmax(0, 1fr);
   margin: 24px 36px;
   overflow: hidden;

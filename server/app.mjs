@@ -5,7 +5,16 @@ import { promisify } from 'node:util'
 import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'node:fs'
 import { resolve, join, extname, sep } from 'node:path'
 import { openDatabase, transaction } from './database.mjs'
-import { ApiError, text, customerInput, skuInput, quoteTemplateInput } from './validation.mjs'
+import {
+  ApiError,
+  text,
+  customerInput,
+  garageInquiryInput,
+  garageOwnerInput,
+  garageVehicleInput,
+  skuInput,
+  quoteTemplateInput,
+} from './validation.mjs'
 import catalog from '../shared/catalog.json' with { type: 'json' }
 import vehicleModels from '../shared/vehicle-models.json' with { type: 'json' }
 
@@ -178,6 +187,89 @@ export function createApp({
     const prefix = `KH${now().slice(0, 10).replaceAll('-', '')}`
     const latest = db
       .prepare('SELECT code FROM customers WHERE code LIKE ? ORDER BY code DESC LIMIT 1')
+      .get(`${prefix}%`)
+    const sequence = latest ? Number(latest.code.slice(prefix.length)) + 1 : 1
+    return `${prefix}${String(Number.isSafeInteger(sequence) ? sequence : 1).padStart(3, '0')}`
+  }
+  function garageOwner(row) {
+    return {
+      id: row.id,
+      customerId: row.customer_id,
+      name: row.name,
+      phone: row.phone,
+      wechat: row.wechat,
+      notes: row.notes,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }
+  }
+  function garageVehicle(row) {
+    return {
+      id: row.id,
+      customerId: row.customer_id,
+      ownerId: row.owner_id,
+      brand: row.brand,
+      series: row.series,
+      generationCode: row.generation_code,
+      modelYear: row.model_year,
+      engine: row.engine,
+      vin: row.vin,
+      plateNumber: row.plate_number,
+      notes: row.notes,
+      enabled: Boolean(row.enabled),
+      version: row.version,
+      updatedAt: row.updated_at,
+    }
+  }
+  function garageInquiry(row) {
+    return {
+      id: row.id,
+      customerId: row.customer_id,
+      ownerId: row.owner_id,
+      vehicleId: row.vehicle_id,
+      code: row.code,
+      status: row.status,
+      source: row.source,
+      notes: row.notes,
+      quotedTotalMinor: row.quoted_total_minor,
+      quotedAt: row.quoted_at,
+      version: row.version,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      items: db
+        .prepare(
+          'SELECT id,sku_id AS skuId,oe_number AS oeNumber,name,quantity,price_minor AS priceMinor,notes FROM customer_inquiry_items WHERE inquiry_id=? ORDER BY position',
+        )
+        .all(row.id),
+    }
+  }
+  function garageWorkspace(customerId) {
+    const customerRow = db.prepare('SELECT * FROM customers WHERE id=?').get(customerId)
+    if (!customerRow) throw new ApiError(404, '客户不存在')
+    return {
+      customer: customer(customerRow),
+      owners: db
+        .prepare(
+          'SELECT * FROM customer_vehicle_owners WHERE customer_id=? ORDER BY updated_at DESC,name',
+        )
+        .all(customerId)
+        .map(garageOwner),
+      vehicles: db
+        .prepare(
+          'SELECT * FROM customer_vehicles WHERE customer_id=? ORDER BY enabled DESC,updated_at DESC,id',
+        )
+        .all(customerId)
+        .map(garageVehicle),
+      inquiries: db
+        .prepare('SELECT * FROM customer_inquiries WHERE customer_id=? ORDER BY updated_at DESC,id')
+        .all(customerId)
+        .map(garageInquiry),
+    }
+  }
+  function nextInquiryCode() {
+    const prefix = `XJ${now().slice(0, 10).replaceAll('-', '')}`
+    const latest = db
+      .prepare('SELECT code FROM customer_inquiries WHERE code LIKE ? ORDER BY code DESC LIMIT 1')
       .get(`${prefix}%`)
     const sequence = latest ? Number(latest.code.slice(prefix.length)) + 1 : 1
     return `${prefix}${String(Number.isSafeInteger(sequence) ? sequence : 1).padStart(3, '0')}`
@@ -816,6 +908,194 @@ export function createApp({
             audit(user, cm ? 'customer.update' : 'customer.create', id)
             return customer(db.prepare('SELECT * FROM customers WHERE id=?').get(id))
           }),
+        )
+      }
+      const garageMatch = path.match(/^\/api\/customers\/([a-f0-9-]+)\/garage$/i)
+      const garageOwnerMatch = path.match(
+        /^\/api\/customers\/([a-f0-9-]+)\/garage\/owners(?:\/([a-f0-9-]+))?$/i,
+      )
+      const garageVehicleMatch = path.match(
+        /^\/api\/customers\/([a-f0-9-]+)\/garage\/vehicles(?:\/([a-f0-9-]+))?$/i,
+      )
+      const garageInquiryMatch = path.match(
+        /^\/api\/customers\/([a-f0-9-]+)\/garage\/inquiries(?:\/([a-f0-9-]+))?$/i,
+      )
+      if (garageMatch && req.method === 'GET')
+        return json(res, 200, garageWorkspace(garageMatch[1]))
+      if (garageOwnerMatch && ['POST', 'PUT'].includes(req.method)) {
+        const customerId = garageOwnerMatch[1]
+        if (!db.prepare('SELECT id FROM customers WHERE id=?').get(customerId))
+          throw new ApiError(404, '客户不存在')
+        const body = await readBody(req)
+        const value = garageOwnerInput(body)
+        const id = garageOwnerMatch[2] ?? randomUUID()
+        const createdAt = now()
+        transaction(db, () => {
+          if (garageOwnerMatch[2]) {
+            const changed = db
+              .prepare(
+                'UPDATE customer_vehicle_owners SET name=?,phone=?,wechat=?,notes=?,updated_at=? WHERE id=? AND customer_id=?',
+              )
+              .run(value.name, value.phone, value.wechat, value.notes, createdAt, id, customerId)
+            if (!changed.changes) throw new ApiError(404, '车主不存在')
+          } else {
+            db.prepare(
+              'INSERT INTO customer_vehicle_owners(id,customer_id,name,phone,wechat,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            ).run(
+              id,
+              customerId,
+              value.name,
+              value.phone,
+              value.wechat,
+              value.notes,
+              createdAt,
+              createdAt,
+            )
+          }
+          audit(user, garageOwnerMatch[2] ? 'garage_owner.update' : 'garage_owner.create', id)
+        })
+        return json(
+          res,
+          garageOwnerMatch[2] ? 200 : 201,
+          garageOwner(db.prepare('SELECT * FROM customer_vehicle_owners WHERE id=?').get(id)),
+        )
+      }
+      if (garageVehicleMatch && ['POST', 'PUT'].includes(req.method)) {
+        const customerId = garageVehicleMatch[1]
+        if (!db.prepare('SELECT id FROM customers WHERE id=?').get(customerId))
+          throw new ApiError(404, '客户不存在')
+        const body = await readBody(req)
+        const value = garageVehicleInput(body)
+        if (
+          !db
+            .prepare('SELECT id FROM customer_vehicle_owners WHERE id=? AND customer_id=?')
+            .get(value.ownerId, customerId)
+        )
+          throw new ApiError(400, '所选车主不属于当前客户')
+        const id = garageVehicleMatch[2] ?? randomUUID()
+        const previous = garageVehicleMatch[2]
+          ? db
+              .prepare('SELECT * FROM customer_vehicles WHERE id=? AND customer_id=?')
+              .get(id, customerId)
+          : null
+        if (garageVehicleMatch[2]) checkVersion(body, previous)
+        const updatedAt = now()
+        transaction(db, () => {
+          const args = [
+            value.ownerId,
+            value.brand,
+            value.series,
+            value.generationCode,
+            value.modelYear,
+            value.engine,
+            value.vin,
+            value.plateNumber,
+            value.notes,
+            Number(value.enabled),
+            updatedAt,
+          ]
+          if (previous)
+            db.prepare(
+              'UPDATE customer_vehicles SET owner_id=?,brand=?,series=?,generation_code=?,model_year=?,engine=?,vin=?,plate_number=?,notes=?,enabled=?,updated_at=?,version=version+1 WHERE id=?',
+            ).run(...args, id)
+          else
+            db.prepare(
+              'INSERT INTO customer_vehicles(id,customer_id,owner_id,brand,series,generation_code,model_year,engine,vin,plate_number,notes,enabled,version,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?)',
+            ).run(id, customerId, ...args)
+          audit(user, previous ? 'garage_vehicle.update' : 'garage_vehicle.create', id)
+        })
+        return json(
+          res,
+          previous ? 200 : 201,
+          garageVehicle(db.prepare('SELECT * FROM customer_vehicles WHERE id=?').get(id)),
+        )
+      }
+      if (garageInquiryMatch && ['POST', 'PUT'].includes(req.method)) {
+        const customerId = garageInquiryMatch[1]
+        if (!db.prepare('SELECT id FROM customers WHERE id=?').get(customerId))
+          throw new ApiError(404, '客户不存在')
+        const body = await readBody(req)
+        const value = garageInquiryInput(body)
+        const owner = db
+          .prepare('SELECT id FROM customer_vehicle_owners WHERE id=? AND customer_id=?')
+          .get(value.ownerId, customerId)
+        const vehicle = db
+          .prepare('SELECT id FROM customer_vehicles WHERE id=? AND customer_id=? AND owner_id=?')
+          .get(value.vehicleId, customerId, value.ownerId)
+        if (!owner || !vehicle) throw new ApiError(400, '询价关联的车主或车辆无效')
+        for (const item of value.items)
+          if (item.skuId && !db.prepare('SELECT id FROM skus WHERE id=?').get(item.skuId))
+            throw new ApiError(400, '询价关联的 SKU 不存在')
+        const id = garageInquiryMatch[2] ?? randomUUID()
+        const previous = garageInquiryMatch[2]
+          ? db
+              .prepare('SELECT * FROM customer_inquiries WHERE id=? AND customer_id=?')
+              .get(id, customerId)
+          : null
+        if (garageInquiryMatch[2]) checkVersion(body, previous)
+        if (value.status === '已报价' && value.items.some((item) => item.priceMinor == null))
+          throw new ApiError(400, '生成报价前须完成全部配件核价')
+        const updatedAt = now()
+        const quotedTotalMinor =
+          value.status === '已报价'
+            ? value.items.reduce((total, item) => total + (item.priceMinor ?? 0) * item.quantity, 0)
+            : null
+        transaction(db, () => {
+          if (previous) {
+            db.prepare(
+              'UPDATE customer_inquiries SET owner_id=?,vehicle_id=?,status=?,source=?,notes=?,quoted_total_minor=?,quoted_at=?,updated_at=?,version=version+1 WHERE id=?',
+            ).run(
+              value.ownerId,
+              value.vehicleId,
+              value.status,
+              value.source,
+              value.notes,
+              quotedTotalMinor,
+              value.status === '已报价' ? (previous.quoted_at ?? updatedAt) : null,
+              updatedAt,
+              id,
+            )
+            db.prepare('DELETE FROM customer_inquiry_items WHERE inquiry_id=?').run(id)
+          } else {
+            db.prepare(
+              'INSERT INTO customer_inquiries(id,customer_id,owner_id,vehicle_id,code,status,source,notes,quoted_total_minor,quoted_at,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)',
+            ).run(
+              id,
+              customerId,
+              value.ownerId,
+              value.vehicleId,
+              nextInquiryCode(),
+              value.status,
+              value.source,
+              value.notes,
+              quotedTotalMinor,
+              value.status === '已报价' ? updatedAt : null,
+              updatedAt,
+              updatedAt,
+            )
+          }
+          const insertItem = db.prepare(
+            'INSERT INTO customer_inquiry_items(id,inquiry_id,position,sku_id,oe_number,name,quantity,price_minor,notes) VALUES(?,?,?,?,?,?,?,?,?)',
+          )
+          value.items.forEach((item, position) =>
+            insertItem.run(
+              randomUUID(),
+              id,
+              position,
+              item.skuId || null,
+              item.oeNumber,
+              item.name,
+              item.quantity,
+              item.priceMinor,
+              item.notes,
+            ),
+          )
+          audit(user, previous ? 'garage_inquiry.update' : 'garage_inquiry.create', id)
+        })
+        return json(
+          res,
+          previous ? 200 : 201,
+          garageInquiry(db.prepare('SELECT * FROM customer_inquiries WHERE id=?').get(id)),
         )
       }
       if (path === '/api/skus/page' && req.method === 'GET') {
