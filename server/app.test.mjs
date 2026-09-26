@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp, hashPassword } from './app.mjs'
@@ -600,6 +600,22 @@ test('development auth bypass reuses an enabled local account only when explicit
   base = `http://127.0.0.1:${app.server.address().port}`
   response = await fetch(`${base}/api/vehicle-models`)
   assert.equal(response.status, 401)
+  await app.close()
+  rmSync(directory, { recursive: true, force: true })
+})
+
+test('SPA fallback accepts generation codes containing dots', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dashboard-spa-fallback-test-'))
+  const distDir = join(directory, 'dist')
+  mkdirSync(distDir)
+  writeFileSync(join(distDir, 'index.html'), '<!doctype html><title>Dashboard</title>')
+  const app = createApp({ dataDir: join(directory, 'data'), distDir })
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${app.server.address().port}`
+  const detail = await fetch(`${base}/vehicles/macan/95B.3`)
+  assert.equal(detail.status, 200)
+  assert.match(await detail.text(), /Dashboard/)
+  assert.equal((await fetch(`${base}/assets/missing.js`)).status, 404)
   await app.close()
   rmSync(directory, { recursive: true, force: true })
 })

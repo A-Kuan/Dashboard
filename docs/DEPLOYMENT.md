@@ -5,6 +5,7 @@
 ## 构建与本机预览
 
 Node.js 24.16+ 的 24.x，执行 npm ci 和 npm run check。Node 同时提供 dist、SPA 回退与 /api，不能只上传静态文件。
+SPA 回退允许车型代际等业务路由段包含点号（例如 `95B.3`），仅对已知静态资源扩展名的缺失文件返回 404。
 本机预览时在 .env.local 设置 APP_ORIGIN=http://127.0.0.1:4182，执行 npm start，访问该地址。切回开发时恢复来源为 http://127.0.0.1:4179。Vite preview 仅预览静态资源。
 
 ## 现有公网部署

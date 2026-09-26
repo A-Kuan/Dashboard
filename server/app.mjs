@@ -345,7 +345,7 @@ export function createApp({
         let file = resolve(distDir, '.' + decodeURIComponent(path))
         if (!file.startsWith(resolve(distDir) + sep)) file = join(distDir, 'index.html')
         if (!existsSync(file) || !statSync(file).isFile()) {
-          if (extname(path)) throw new ApiError(404, '文件不存在')
+          if (/\.(?:html|js|css|png|svg|ico)$/i.test(path)) throw new ApiError(404, '文件不存在')
           file = join(distDir, 'index.html')
         }
         if (!existsSync(file)) throw new ApiError(503, '请先构建前端')
