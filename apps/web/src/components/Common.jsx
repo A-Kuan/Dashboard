@@ -4,7 +4,8 @@ import { ALL_DICTIONARY_VALUE } from '../services/dictionaryService'
 
 export function StatusBadge({ status }) {
   const low = status === '低库存'
-  return <span className={low ? 'status-badge low' : 'status-badge'}><span className="status-dot" />{status}</span>
+  const draft = status === '草稿' || status === '待复核'
+  return <span className={`status-badge${low ? ' low' : ''}${draft ? ' draft' : ''}`}><span className="status-dot" />{status}</span>
 }
 
 export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, value, onChange, disabled = false, allowAll = true, showLabel = true, className = '' }) {

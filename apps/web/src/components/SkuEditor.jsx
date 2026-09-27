@@ -1,93 +1,131 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowLeft, Camera, CheckCircle, Circle, FloppyDisk,
-  ImageSquare, MagnifyingGlassPlus, Plus, SealCheck, Warning, X,
+  ArrowLeft, Camera, CheckCircle, Circle, FloppyDisk, ImageSquare,
+  MagnifyingGlassPlus, Plus, SealCheck, Warning, X,
 } from '@phosphor-icons/react'
 import { DictionarySelect } from './Common'
+import { createSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
 import { assetPath } from '../utils/assetPath'
 
 const editorTabs = ['基本信息', 'OE 与替代', '适配车型', '技术规格', '采购与库存', '媒体资料', '变更记录']
-
-const initialOeRows = [
-  { type: '主 OE', oe: '95B 867 288 OM8', brand: 'Porsche', relation: '—', source: 'Porsche EPC', confidence: '高' },
-  { type: '旧号', oe: '95B 867 288 L', brand: 'Porsche', relation: '被当前号替代', source: 'Porsche EPC', confidence: '中' },
-]
-
-const initialFitments = [
-  { vehicle: 'Porsche Cayenne (9YA)', years: '2018–2023', engine: '全部', body: 'SUV', condition: '—', source: 'Porsche EPC' },
-  { vehicle: 'Porsche Cayenne E-Hybrid', years: '2019–2023', engine: '3.0T Hybrid', body: 'SUV', condition: '不适用于 PR: 3U5', source: 'Porsche EPC' },
-]
-
-function EditorField({ label, required = false, children, hint, className = '' }) {
-  return <label className={`editor-field ${className}`.trim()}><span>{label}{required ? <b aria-hidden="true"> *</b> : null}</span>{children}{hint ? <small>{hint}</small> : null}</label>
+const blankForm = {
+  skuCode: '', chineseName: '', brand: 'Porsche', category: '车身及内饰', subcategory: '',
+  manufacturerPartNumber: '', primaryOe: '', unit: '件', lifecycleStatus: '草稿', barcode: '',
+  imageUrl: '', dataSource: '', sourceEvidence: null, conflictResolution: null,
+  createdAt: '', updatedAt: '', updatedBy: '张伟',
 }
 
-function TextField({ label, value, onChange, required, readOnly = false, valid = false }) {
-  return <EditorField label={label} required={required}><div className={valid ? 'editor-input valid' : 'editor-input'}><input value={value} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} />{valid ? <CheckCircle size={16} weight="fill" /> : null}</div></EditorField>
+function formatDate(value) {
+  if (!value) return '—'
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
 
-function StaticSelect({ label, value, required, status = false }) {
-  return <EditorField label={label} required={required}><button className="editor-static-select" type="button"><span className={status ? 'select-status' : ''}>{status ? <i /> : null}{value}</span><span aria-hidden="true">⌄</span></button></EditorField>
+function EditorField({ label, required = false, children }) {
+  return <label className="editor-field"><span>{label}{required ? <b aria-hidden="true"> *</b> : null}</span>{children}</label>
+}
+
+function TextField({ label, value, onChange, required, readOnly = false, valid = false, onBlur }) {
+  return <EditorField label={label} required={required}><div className={valid ? 'editor-input valid' : 'editor-input'}><input value={value} onBlur={onBlur} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} />{valid ? <CheckCircle size={16} weight="fill" /> : null}</div></EditorField>
+}
+
+function SelectField({ label, value, onChange, options, required, status = false }) {
+  return <EditorField label={label} required={required}><div className={status ? 'editor-native-select has-status' : 'editor-native-select'}>{status ? <i /> : null}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></EditorField>
 }
 
 function SectionHeading({ title, description, action }) {
   return <header className="editor-section-heading"><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div>{action}</header>
 }
 
-function RowActions({ onRemove }) {
-  return <div className="editor-row-actions"><button type="button">编辑</button><button onClick={onRemove} type="button">删除</button></div>
+function EditableCell({ value, onChange, label }) {
+  return <input aria-label={label} className="table-cell-input" value={value} onChange={(event) => onChange(event.target.value)} />
 }
 
 function OeRelations({ rows, setRows }) {
-  const addOe = () => setRows((current) => [...current, { type: '替代号', oe: '958 867 288 00', brand: 'Porsche', relation: '可互换', source: '供应商数据', confidence: '待核验' }])
+  const update = (index, key, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row))
+  const addOe = () => setRows((current) => [...current, { type: current.length ? '替代号' : '主 OE', oeNumber: '', brand: '', relation: '', source: '人工录入', confidence: '待核验' }])
   return <section className="editor-section" id="oe-relations">
-    <SectionHeading title="OE 与替代关系" description="维护该零件的 OE 号及替代关系，便于零件互换查询" action={<div className="section-actions"><button onClick={addOe} type="button"><Plus size={16} />添加 OE 号</button><button onClick={addOe} type="button"><Plus size={16} />建立替代关系</button></div>} />
-    <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>品牌</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.oe}-${index}`}><td><span className={`relation-type relation-${index}`}>{row.type}</span></td><td>{row.oe}</td><td>{row.brand}</td><td>{row.relation}</td><td>{row.source}</td><td>{row.confidence}</td><td><RowActions onRemove={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table></div>
+    <SectionHeading title="OE 与替代关系" description="维护该零件的 OE 号及替代关系，保存后同步写入数据库" action={<div className="section-actions"><button onClick={addOe} type="button"><Plus size={16} />添加 OE 号</button></div>} />
+    {rows.length ? <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>品牌</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-oe'}-${index}`}><td><EditableCell label={`OE 类型 ${index + 1}`} value={row.type} onChange={(value) => update(index, 'type', value)} /></td><td><EditableCell label={`OE 编号 ${index + 1}`} value={row.oeNumber} onChange={(value) => update(index, 'oeNumber', value)} /></td><td><EditableCell label={`OE 品牌 ${index + 1}`} value={row.brand} onChange={(value) => update(index, 'brand', value)} /></td><td><EditableCell label={`OE 关系 ${index + 1}`} value={row.relation} onChange={(value) => update(index, 'relation', value)} /></td><td><EditableCell label={`OE 来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><EditableCell label={`OE 可信度 ${index + 1}`} value={row.confidence} onChange={(value) => update(index, 'confidence', value)} /></td><td><button className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加 OE 或替代关系</div>}
   </section>
 }
 
 function FitmentTable({ rows, setRows }) {
-  const addFitment = () => setRows((current) => [...current, { vehicle: 'Porsche Cayenne Coupe (9YB)', years: '2019–2023', engine: '全部', body: 'Coupe', condition: '待确认', source: '人工添加' }])
+  const update = (index, key, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row))
+  const addFitment = () => setRows((current) => [...current, { vehicle: '', years: '', engine: '', body: '', condition: '', source: '人工录入', verificationStatus: '待验证' }])
   return <section className="editor-section" id="fitments">
-    <SectionHeading title="适配车型" description="指定适用的车型范围，支持按车型、年款、发动机等条件精准匹配" action={<div className="section-actions"><button onClick={addFitment} type="button"><Plus size={16} />添加适配车型</button></div>} />
-    <div className="editor-table-wrap"><table className="editor-table fitment-editor-table"><thead><tr><th>#</th><th>品牌 / 车型</th><th>年份</th><th>发动机</th><th>车身形式</th><th>适配条件</th><th>来源</th><th>验证状态</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.vehicle}-${index}`}><td>{index + 1}</td><td>{row.vehicle}</td><td>{row.years}</td><td>{row.engine}</td><td>{row.body}</td><td>{row.condition}</td><td>{row.source}</td><td><span className={row.source === '人工添加' ? 'verification pending' : 'verification'}><i />{row.source === '人工添加' ? '待验证' : '已验证'}</span></td><td><RowActions onRemove={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table></div>
+    <SectionHeading title="适配车型" description="指定适用的车型、年款、发动机和限制条件" action={<div className="section-actions"><button onClick={addFitment} type="button"><Plus size={16} />添加适配车型</button></div>} />
+    {rows.length ? <div className="editor-table-wrap"><table className="editor-table fitment-editor-table"><thead><tr><th>#</th><th>品牌 / 车型</th><th>年份</th><th>发动机</th><th>车身形式</th><th>适配条件</th><th>来源</th><th>验证状态</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-fitment'}-${index}`}><td>{index + 1}</td><td><EditableCell label={`适配车型 ${index + 1}`} value={row.vehicle} onChange={(value) => update(index, 'vehicle', value)} /></td><td><EditableCell label={`适配年份 ${index + 1}`} value={row.years} onChange={(value) => update(index, 'years', value)} /></td><td><EditableCell label={`适配发动机 ${index + 1}`} value={row.engine} onChange={(value) => update(index, 'engine', value)} /></td><td><EditableCell label={`车身形式 ${index + 1}`} value={row.body} onChange={(value) => update(index, 'body', value)} /></td><td><EditableCell label={`适配条件 ${index + 1}`} value={row.condition} onChange={(value) => update(index, 'condition', value)} /></td><td><EditableCell label={`适配来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><EditableCell label={`验证状态 ${index + 1}`} value={row.verificationStatus} onChange={(value) => update(index, 'verificationStatus', value)} /></td><td><button className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加适配车型</div>}
   </section>
 }
 
-function EvidencePanel({ conflictResolved, onResolve, onKeep, onZoom }) {
+function PublishCheck({ form, oeRows, fitmentRows, sourceEvidence }) {
   const checks = [
-    ['OE 号', '一致', '与 EPC 记录一致', true],
-    ['名称', '已翻译', '已从英文翻译为中文', true],
-    ['车型', '已匹配', '车型信息与 EPC 一致', true],
-    ['替代链', conflictResolved ? '已确认' : '1 项待确认', conflictResolved ? '替代关系已完成复核' : '存在前序 OE 号，需要确认是否保留', conflictResolved],
+    ['基本信息', Boolean(form.skuCode && form.chineseName && form.brand && form.category && form.subcategory && form.manufacturerPartNumber && form.primaryOe)],
+    ['图片', Boolean(form.imageUrl)], ['OE 与替代关系', oeRows.length > 0], ['条形码', Boolean(form.barcode)],
+    ['适配车型', fitmentRows.length > 0], ['来源证据', Boolean(sourceEvidence)],
   ]
-  return <aside className="evidence-panel">
-    <header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：2026-09-27</small></header>
-    <section className="source-record"><h3>Porsche EPC 原始记录</h3><div className="source-record-main"><div className="epc-editor-image"><img src={assetPath('assets/parts/epc-diagram.png')} alt="Porsche EPC 图组 867-05，位置 9" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></div><dl><div><dt>OE 号</dt><dd>95B 867 288 OM8</dd></div><div><dt>原始名称</dt><dd>Trim panel, luggage<br />compartment, black</dd></div><div><dt>图组</dt><dd>867–05</dd></div><div><dt>位置</dt><dd>9</dd></div><div><dt>适配车型</dt><dd>Cayenne (9YA), 2018–2023</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>¥ 1,120.50</dd></div></dl></div></section>
-    <section className="field-comparison"><h3>字段对比结果</h3>{checks.map(([label, result, note, passed]) => <div className={passed ? 'comparison-row' : 'comparison-row warning-row'} key={label}>{passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{label}</b><strong className={passed ? '' : 'warning'}>{result}</strong><span>{note}</span></div>)}</section>
-    {!conflictResolved ? <section className="evidence-conflict"><div><Warning size={19} weight="fill" /><span><b>存在需要确认的差异</b><small>EPC 记录显示前序 OE 号 95B 867 288 L 被当前号替代，请确认追溯链。</small></span></div><footer><button onClick={onResolve} type="button">采用 EPC 数据</button><button onClick={onKeep} type="button">保留当前值</button></footer></section> : <section className="resolved-message"><CheckCircle size={18} weight="fill" />替代链差异已完成确认</section>}
-    <section className="publish-check"><h3>发布前检查 <b>{conflictResolved ? '6/6' : '5/6'}</b></h3><div className="publish-progress"><span style={{ width: conflictResolved ? '100%' : '83.33%' }} /></div><div className="publish-check-grid">{['基本信息', '图片', 'OE 与替代关系', '条形码', '适配车型', '替代链确认'].map((item, index) => { const complete = index < 5 || conflictResolved; return <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '待完成'}</em></span> })}</div></section>
-  </aside>
+  const completed = checks.filter(([, value]) => value).length
+  return <section className="publish-check"><h3>发布前检查 <b>{completed}/6</b></h3><div className="publish-progress"><span style={{ width: `${completed / 6 * 100}%` }} /></div><div className="publish-check-grid">{checks.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '待完成'}</em></span>)}</div></section>
 }
 
-export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', onBack }) {
+function EvidencePanel({ form, oeRows, fitmentRows, onZoom }) {
+  const evidence = form.sourceEvidence
+  if (!evidence) return <aside className="evidence-panel evidence-empty"><header className="evidence-title"><div><h2>来源证据</h2></div></header><div className="evidence-empty-state"><ImageSquare size={38} /><h3>尚未关联 EPC 来源</h3><p>通过 EPC 导入或来源匹配后，原始图组、OE 编号、车型和参考价会在这里显示。</p></div><PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} sourceEvidence={evidence} /></aside>
+
+  const comparisons = evidence.comparisons || []
+  return <aside className="evidence-panel"><header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：{evidence.syncedAt || '—'}</small></header><section className="source-record"><h3>{evidence.title || 'EPC 原始记录'}</h3><div className="source-record-main"><div className="epc-editor-image"><img src={evidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 图组" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></div><dl><div><dt>OE 号</dt><dd>{evidence.oe || form.primaryOe}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>图组</dt><dd>{evidence.group || '—'}</dd></div><div><dt>位置</dt><dd>{evidence.position || '—'}</dd></div><div><dt>适配车型</dt><dd>{evidence.fitment || '—'}</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>{evidence.referencePrice || '—'}</dd></div></dl></div></section>{comparisons.length ? <section className="field-comparison"><h3>字段对比结果</h3>{comparisons.map((item) => <div className={item.passed ? 'comparison-row' : 'comparison-row warning-row'} key={item.label}>{item.passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{item.label}</b><strong className={item.passed ? '' : 'warning'}>{item.result}</strong><span>{item.note}</span></div>)}</section> : null}<PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} sourceEvidence={evidence} /></aside>
+}
+
+export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', skuId, onBack, onSaved }) {
   const [activeTab, setActiveTab] = useState('基本信息')
-  const [brand, setBrand] = useState('Porsche')
-  const [category, setCategory] = useState('车身及内饰')
-  const [name, setName] = useState(mode === 'new' ? '' : '行李厢内饰板（黑色）')
-  const [sku, setSku] = useState(mode === 'new' ? '' : '95B-867-288-OM8')
-  const [partImage, setPartImage] = useState(assetPath('assets/parts/selected-part.png'))
-  const [oeRows, setOeRows] = useState(initialOeRows)
-  const [fitmentRows, setFitmentRows] = useState(initialFitments)
-  const [conflictResolved, setConflictResolved] = useState(false)
-  const [saveState, setSaveState] = useState('已于 14:32 自动保存')
+  const [form, setForm] = useState(blankForm)
+  const [oeRows, setOeRows] = useState([])
+  const [fitmentRows, setFitmentRows] = useState([])
+  const [saveState, setSaveState] = useState(mode === 'new' ? '尚未保存' : '正在读取…')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(mode === 'edit')
+  const [codeAvailable, setCodeAvailable] = useState(null)
   const [zoomOpen, setZoomOpen] = useState(false)
   const imageInputRef = useRef(null)
-  const completion = useMemo(() => conflictResolved ? 100 : 82, [conflictResolved])
+  const setValue = (key, value) => setForm((current) => ({ ...current, [key]: value }))
 
-  const save = (published = false) => {
-    setSaveState(published ? 'SKU 已保存，发布检查已通过' : '草稿已保存')
-    window.setTimeout(() => setSaveState('已于 14:32 自动保存'), 2200)
+  useEffect(() => {
+    if (mode !== 'edit' || !skuId) return
+    const controller = new AbortController()
+    getSku(skuId, { signal: controller.signal }).then((item) => {
+      setForm({ ...blankForm, ...item })
+      setOeRows(item.oeRelations || [])
+      setFitmentRows(item.fitments || [])
+      setCodeAvailable(true)
+      setSaveState(`更新于 ${formatDate(item.updatedAt)}`)
+    }).catch((reason) => { if (reason.name !== 'AbortError') setError(reason.message) }).finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [mode, skuId])
+
+  const completion = useMemo(() => {
+    const values = [form.skuCode, form.chineseName, form.brand, form.category, form.subcategory, form.manufacturerPartNumber, form.primaryOe, form.barcode]
+    return Math.round(values.filter(Boolean).length / values.length * 100)
+  }, [form])
+
+  const checkCode = async () => {
+    if (!form.skuCode) return setCodeAvailable(null)
+    try { setCodeAvailable((await validateSkuCode(form.skuCode, mode === 'edit' ? form.id : null)).available) } catch { setCodeAvailable(null) }
+  }
+  const save = async (publish = false) => {
+    setError('')
+    setSaveState('正在保存…')
+    const payload = { ...form, oeRelations: oeRows, fitments: fitmentRows }
+    try {
+      let item
+      if (mode === 'new') item = await createSku(payload)
+      else item = publish ? await publishSku(form.id || skuId, payload) : await updateSku(form.id || skuId, payload)
+      setSaveState(publish ? 'SKU 已保存并发布' : '草稿已保存到数据库')
+      if (mode === 'new') onSaved(item.id)
+      else setForm((current) => ({ ...current, ...item }))
+    } catch (reason) {
+      setError(reason.message)
+      setSaveState('保存失败')
+    }
   }
   const selectTab = (tab) => {
     setActiveTab(tab)
@@ -95,30 +133,25 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', on
     document.getElementById(targets[tab] || 'basic-information')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  if (loading) return <main className="sku-editor-page editor-loading"><span />正在读取 SKU 数据…</main>
   return <main className="sku-editor-page">
-    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>草稿</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') ? 'save-message success' : 'save-message'}><CheckCircle size={15} weight="fill" />{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button><button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button><button className="primary-button" onClick={() => save(true)} type="button">保存 SKU</button></div></header>
+    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button><button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button><button className="primary-button" onClick={() => save(true)} type="button">保存 SKU</button></div></header>
+    {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
-    <div className="sku-editor-layout">
-      <div className="sku-editor-main">
-        <section className="identity-section" id="basic-information"><div className="identity-image"><div><img src={partImage} alt="行李厢内饰板（黑色）" /><button aria-label="查看商品图片" type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />更换图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) setPartImage(URL.createObjectURL(file)) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{sku || '待生成 SKU 编码'}</h2>{sku ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{name || '请输入零件中文名称'}</h3><p>品牌　<b>{brand}</b><i />零件大类　<b>{category}</b><i />零件小类　<b>内饰件</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>Porsche EPC</dd></div><div><dt>状态</dt><dd>待复核</dd></div></dl></div></header><div className="editor-fields">
-          <TextField label="SKU 编码" value={sku} onChange={setSku} required valid={Boolean(sku)} />
-          <TextField label="中文名称" value={name} onChange={setName} required />
-          <EditorField label="品牌" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={brand} onChange={setBrand} disabled={dictionariesLoading} /></EditorField>
-          <EditorField label="零件大类" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={category} onChange={setCategory} disabled={dictionariesLoading} /></EditorField>
-          <StaticSelect label="零件小类" value="内饰件" required />
-          <TextField label="制造商零件号" value="95B 867 288 OM8" required />
-          <TextField label="主 OE 号" value="95B 867 288 OM8" required />
-          <StaticSelect label="计量单位" value="件" required />
-          <StaticSelect label="生命周期状态" value="在售" required status />
-          <TextField label="创建时间" value="2024-11-15" readOnly />
-          <TextField label="最后更新" value="2026-09-27 14:32" readOnly />
-          <TextField label="更新者" value="张伟" readOnly />
-        </div></div></section>
-        <OeRelations rows={oeRows} setRows={setOeRows} />
-        <FitmentTable rows={fitmentRows} setRows={setFitmentRows} />
-      </div>
-      <EvidencePanel conflictResolved={conflictResolved} onResolve={() => { setConflictResolved(true); setSaveState('已采用 EPC 替代关系') }} onKeep={() => { setConflictResolved(true); setSaveState('已保留当前替代关系') }} onZoom={() => setZoomOpen(true)} />
-    </div>
-    {zoomOpen ? <div className="epc-zoom-backdrop" onMouseDown={() => setZoomOpen(false)}><section onMouseDown={(event) => event.stopPropagation()}><header><div><ImageSquare size={19} /><b>Porsche EPC · 图组 867-05 · 位置 9</b></div><button aria-label="关闭 EPC 大图" onClick={() => setZoomOpen(false)} type="button"><X size={19} /></button></header><img src={assetPath('assets/parts/epc-diagram.png')} alt="Porsche EPC 大图" /></section></div> : null}
+    <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{form.brand || '—'}</b><i />零件大类　<b>{form.category || '—'}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '人工录入'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
+      <TextField label="SKU 编码" value={form.skuCode} onChange={(value) => { setValue('skuCode', value); setCodeAvailable(null) }} onBlur={checkCode} required valid={codeAvailable === true} />
+      <TextField label="中文名称" value={form.chineseName} onChange={(value) => setValue('chineseName', value)} required />
+      <EditorField label="品牌" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={form.brand} onChange={(value) => setValue('brand', value)} disabled={dictionariesLoading} /></EditorField>
+      <EditorField label="零件大类" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={form.category} onChange={(value) => setValue('category', value)} disabled={dictionariesLoading} /></EditorField>
+      <TextField label="零件小类" value={form.subcategory} onChange={(value) => setValue('subcategory', value)} required />
+      <TextField label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setValue('manufacturerPartNumber', value)} required />
+      <TextField label="主 OE 号" value={form.primaryOe} onChange={(value) => setValue('primaryOe', value)} required />
+      <SelectField label="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} options={['件', '套', '盒', '支']} required />
+      <SelectField label="生命周期状态" value={form.lifecycleStatus} onChange={(value) => setValue('lifecycleStatus', value)} options={['草稿', '待复核', '在售', '停产']} required status />
+      <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />
+      <TextField label="最后更新" value={formatDate(form.updatedAt)} readOnly />
+      <TextField label="更新者" value={form.updatedBy || '张伟'} readOnly />
+    </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
+    {zoomOpen && form.sourceEvidence ? <div className="epc-zoom-backdrop" onMouseDown={() => setZoomOpen(false)}><section onMouseDown={(event) => event.stopPropagation()}><header><div><ImageSquare size={19} /><b>{form.sourceEvidence.title || 'EPC 来源图'}</b></div><button aria-label="关闭 EPC 大图" onClick={() => setZoomOpen(false)} type="button"><X size={19} /></button></header><img src={form.sourceEvidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 大图" /></section></div> : null}
   </main>
 }

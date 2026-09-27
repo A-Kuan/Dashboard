@@ -5,7 +5,7 @@ SKU 编辑页用于统一维护零件身份、OE 对照、车型适配和 EPC �
 - 新建：`/skus/new`
 - 编辑：`/skus/:skuId/edit`
 
-当前版本使用测试数据完成交互与视觉验收，后续通过独立 API 接入后端，不在页面组件中直接访问数据库。
+当前版本通过独立 Node.js API 访问 PostgreSQL。前端不直接访问数据库，数据库默认不写入演示 SKU。
 
 ## 信息模型
 
@@ -58,9 +58,9 @@ SKU 主数据保存默认供应商、供应商件号、采购单位、最小起�
 - `FitmentTable`：车型适配表。
 - `EvidencePanel`：EPC 原始记录、字段对比、差异处理和发布检查。
 
-## 后端接口建议
+## 后端接口
 
-前后端分离时建议提供：
+SKU API 位于 `apps/api`，提供：
 
 - `GET /api/v1/skus/:id`：读取 SKU 聚合详情。
 - `POST /api/v1/skus`：创建 SKU。
@@ -70,4 +70,6 @@ SKU 主数据保存默认供应商、供应商件号、采购单位、最小起�
 - `GET /api/v1/skus/:id/source-evidence`：读取 EPC/供应商来源证据。
 - `POST /api/v1/skus/:id/conflicts/:conflictId/resolve`：记录差异处理结论。
 
-正式接口应使用乐观锁或版本号防止覆盖他人修改，并对 OE、适配和来源证据保留独立审计记录。
+数据库使用 `sku`、`sku_oe_relation`、`sku_fitment` 三张表。每次更新递增 `sku.version`，OE 与适配记录使用外键级联并在同一事务中替换。后续多人协作阶段应在接口中增加版本条件，拒绝覆盖过期版本，并扩展独立变更审计表。
+
+本地开发先启动 API，再启动前端；Vite 将 `/api` 代理到 `127.0.0.1:4183`。生产环境由 Nginx 将 `/sku-preview/api/` 转发到同一端口。

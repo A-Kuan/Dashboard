@@ -27,6 +27,29 @@ npm run test:e2e
 npm run test:sites
 ```
 
+## SKU 数据库与 API
+
+- API 服务目录：`/opt/dashboard-sku-api`
+- systemd 服务：`dashboard-sku-api.service`
+- 监听地址：`127.0.0.1:4183`
+- PostgreSQL 数据库：`dashboard_sku`
+- PostgreSQL / 系统用户：`dashboard-sku`
+- 外部接口前缀：`/sku-preview/api/`
+
+API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
+
+```bash
+cd /opt/dashboard-sku-api/releases/<version>
+sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku npm run migrate
+```
+
+清空演示数据前必须先备份：
+
+```bash
+sudo -u postgres pg_dump -p 5432 -Fc dashboard_sku > /opt/dashboard-sku-api/backups/<timestamp>.dump
+sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
+```
+
 ## 发布结构
 
 ```text

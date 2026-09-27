@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CaretDown, DotsThree, Funnel, GearSix, Plus } from '@phosphor-icons/react'
+import { CaretDown, DotsThree, Funnel, GearSix, Package, Plus, Warning } from '@phosphor-icons/react'
 import { AppHeader } from './components/AppHeader'
 import { CommandCenter } from './components/CommandCenter'
 import { DictionarySelect } from './components/Common'
@@ -7,16 +7,17 @@ import { DictionaryManagement } from './components/DictionarySettings'
 import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
 import { SkuEditor } from './components/SkuEditor'
-import { skuRows } from './data/mockData'
 import { useDictionaries } from './hooks/useDictionaries'
 import { ALL_DICTIONARY_VALUE } from './services/dictionaryService'
+import { listSkus } from './services/skuService'
 import { assetPath } from './utils/assetPath'
-
-const summaryTabs = [['全部零件', '12,348'], ['待补全', '256'], ['低库存', '318'], ['适配冲突', '72']]
 
 export function App() {
   const { dictionaries, loading: dictionariesLoading, saveDictionaries, resetDictionaries } = useDictionaries()
-  const [selectedId, setSelectedId] = useState('95B-867-288-OM8')
+  const [records, setRecords] = useState([])
+  const [recordsLoading, setRecordsLoading] = useState(true)
+  const [recordsError, setRecordsError] = useState('')
+  const [selectedId, setSelectedId] = useState(null)
   const [summaryTab, setSummaryTab] = useState('全部零件')
   const [brand, setBrand] = useState(ALL_DICTIONARY_VALUE)
   const [category, setCategory] = useState(ALL_DICTIONARY_VALUE)
@@ -35,6 +36,18 @@ export function App() {
   const isSkuEditor = Boolean(editorMatch)
 
   useEffect(() => {
+    if (isDictionaryModule || isSkuEditor) return
+    const controller = new AbortController()
+    setRecordsLoading(true)
+    listSkus({ signal: controller.signal }).then((items) => {
+      setRecords(items)
+      setSelectedId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id || null)
+      setRecordsError('')
+    }).catch((error) => { if (error.name !== 'AbortError') setRecordsError(error.message) }).finally(() => setRecordsLoading(false))
+    return () => controller.abort()
+  }, [isDictionaryModule, isSkuEditor])
+
+  useEffect(() => {
     const openCommandPanel = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -50,25 +63,43 @@ export function App() {
     return () => window.removeEventListener('keydown', openCommandPanel)
   }, [])
 
+  const skuRows = useMemo(() => records.map((item) => ({
+    id: item.id,
+    image: item.imageUrl || assetPath('assets/parts/selected-part.png'),
+    sku: item.skuCode,
+    oe: item.primaryOe,
+    name: item.chineseName,
+    category: item.category,
+    brand: item.brand,
+    vehicle: item.fitmentCount ? `${item.fitmentCount} 个适配车型` : '未配置',
+    stock: '—',
+    purchasePrice: '—',
+    salePrice: '—',
+    source: item.dataSource || '人工录入',
+    status: item.lifecycleStatus,
+  })), [records])
+  const summaryTabs = useMemo(() => [['全部零件', String(skuRows.length)], ['待补全', String(skuRows.filter((row) => !row.vehicle || row.vehicle === '未配置').length)], ['低库存', '0'], ['适配冲突', '0']], [skuRows])
   const filteredRows = useMemo(() => skuRows.filter((row) => {
     const matchesSummary = summaryTab === '全部零件'
       || (summaryTab === '低库存' && row.status === '低库存')
-      || (summaryTab === '待补全' && ['958-807-421', 'A-205-320-01-13'].includes(row.id))
-      || (summaryTab === '适配冲突' && row.id === 'A-247-880-12-04')
+      || (summaryTab === '待补全' && row.vehicle === '未配置')
+      || summaryTab === '适配冲突' && false
     return matchesSummary && (brand === ALL_DICTIONARY_VALUE || row.brand === brand)
       && (category === ALL_DICTIONARY_VALUE || row.category === category)
       && (status === ALL_DICTIONARY_VALUE || row.status === status)
-  }), [brand, category, status, summaryTab])
+  }), [brand, category, skuRows, status, summaryTab])
 
-  const selectedItem = skuRows.find((row) => row.id === selectedId) ?? skuRows[3]
-  const commandCenter = commandState !== 'closed' ? <CommandCenter state={commandState} value={searchValue} onChange={setSearchValue} onClose={() => { setCommandState('closed'); setSearchValue('') }} onSubmit={(event) => { event.preventDefault(); const query = searchValue.trim(); setCommandState('loading'); window.setTimeout(() => { if (/^WP1/i.test(query)) setCommandState('vin'); else if (/228/.test(query)) setCommandState('empty'); else if (/error/i.test(query)) setCommandState('error'); else setCommandState('oe') }, 650) }} onStateChange={(nextState, nextValue = searchValue) => { setSearchValue(nextValue); setCommandState(nextState); if (nextState === 'loading') window.setTimeout(() => setCommandState('oe'), 650) }} onSelect={(id) => { setSelectedId(id); setCommandState('closed'); setSearchValue('') }} /> : null
+  const selectedItem = skuRows.find((row) => row.id === selectedId) ?? null
+  const commandCenter = commandState !== 'closed' ? <CommandCenter rows={skuRows} state={commandState} value={searchValue} onChange={setSearchValue} onClose={() => { setCommandState('closed'); setSearchValue('') }} onSubmit={(event) => { event.preventDefault(); const query = searchValue.trim(); setCommandState('loading'); window.setTimeout(() => { if (/^WP1/i.test(query)) setCommandState('vin'); else if (/error/i.test(query)) setCommandState('error'); else setCommandState(skuRows.length ? 'oe' : 'empty') }, 650) }} onStateChange={(nextState, nextValue = searchValue) => { setSearchValue(nextValue); setCommandState(nextState); if (nextState === 'loading') window.setTimeout(() => setCommandState(skuRows.length ? 'oe' : 'empty'), 650) }} onSelect={(id) => { setSelectedId(id); setCommandState('closed'); setSearchValue('') }} /> : null
 
   if (isDictionaryModule) {
     return <div className="app-shell"><AppHeader activeNav="" currentSpace="字典管理" onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><DictionaryManagement dictionaries={dictionaries} onReset={resetDictionaries} onSave={saveDictionaries} />{commandCenter}</div>
   }
 
   if (isSkuEditor) {
-    return <div className="app-shell"><AppHeader onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><SkuEditor dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} mode={editorMatch[1] === 'new' ? 'new' : 'edit'} onBack={() => window.location.assign(assetPath(''))} />{commandCenter}</div>
+    const mode = editorMatch[1] === 'new' ? 'new' : 'edit'
+    const skuId = mode === 'edit' ? decodeURIComponent(editorMatch[1].replace(/\/edit$/, '')) : null
+    return <div className="app-shell"><AppHeader onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><SkuEditor dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} mode={mode} skuId={skuId} onBack={() => window.location.assign(assetPath(''))} onSaved={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{commandCenter}</div>
   }
 
   return (
@@ -93,8 +124,10 @@ export function App() {
           <div className="filters-right"><button className="secondary-button" type="button"><Funnel size={17} /> 更多筛选</button><button className="secondary-button sort-button" type="button">默认排序 <CaretDown size={13} weight="bold" /></button></div>
         </div>
 
-        <SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />
-        <DetailPanels item={selectedItem} activeTab={detailTab} onTabChange={setDetailTab} />
+        {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}
+        {!recordsLoading && recordsError ? <div className="sku-data-state error"><Warning size={23} weight="fill" /><b>无法读取 SKU 数据</b><span>{recordsError}</span><button className="secondary-button" onClick={() => window.location.reload()} type="button">重新加载</button></div> : null}
+        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedItem ? <DetailPanels item={selectedItem} activeTab={detailTab} onTabChange={setDetailTab} /> : null}</> : null}
+        {!recordsLoading && !recordsError && !filteredRows.length ? <div className="sku-data-state empty"><Package size={38} /><h2>{records.length ? '当前筛选没有结果' : '还没有 SKU'}</h2><p>{records.length ? '调整筛选条件后再试。' : '数据库已准备好，从第一条真实 SKU 开始建立零件主数据。'}</p>{records.length ? null : <button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={17} />新建第一个 SKU</button>}</div> : null}
       </main>
 
       {commandCenter}

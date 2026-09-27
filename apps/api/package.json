@@ -1,0 +1,16 @@
+{
+  "name": "dashboard-sku-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.mjs",
+    "start": "node src/server.mjs",
+    "migrate": "node src/migrate.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fastify": "^5.6.1",
+    "pg": "^8.16.3"
+  }
+}
