@@ -53,7 +53,7 @@ The detail comparison was used to verify the reusable card grid, selected SKU su
 - Open and cancel the New SKU dialog.
 - Verify the default selected row and default collapsed search state.
 - Check browser console and page errors: none.
-- Repeat the complete interaction suite against the deployed HTTPS address: 2 tests passed.
+- Repeat the complete interaction suite against the deployed HTTPS address: 9 tests passed.
 - Open all six command-center states deterministically and capture visual evidence.
 - Submit an OE/SKU query through loading to exact results.
 - Submit a VIN through loading to recognized-vehicle fitment results.
