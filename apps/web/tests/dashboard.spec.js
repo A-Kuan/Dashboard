@@ -72,16 +72,19 @@ test('supports command search transitions, filtering, row selection and the new 
 
 test('configures dictionaries from the page entry and persists the result', async ({ page }) => {
   await page.getByRole('button', { name: '更多操作' }).click()
-  await page.getByRole('menuitem', { name: /字典配置/ }).click()
-  await expect(page.getByRole('heading', { name: '字典配置' })).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-settings.png', fullPage: false })
+  await page.getByRole('menuitem', { name: /字典管理/ }).click()
+  await expect(page).toHaveURL(/\/dictionaries$/)
+  await expect(page.getByRole('heading', { name: '字典管理' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-module.png', fullPage: false })
 
   await page.getByRole('button', { name: '新增选项' }).click()
-  const newRow = page.locator('.dictionary-edit-row').last()
+  const newRow = page.locator('.dictionary-table-row').last()
   await newRow.locator('input').nth(0).fill('测试品牌')
   await newRow.locator('input').nth(1).fill('TEST_BRAND')
   await page.getByRole('button', { name: '保存配置' }).click()
+  await expect(page.getByText('配置已保存')).toBeVisible()
 
+  await page.getByRole('link', { name: /返回 SKU 管理/ }).click()
   const brandDictionary = page.locator('[data-dictionary="sku_brand"]')
   await brandDictionary.getByRole('combobox').click()
   await expect(brandDictionary.getByRole('option', { name: '测试品牌' })).toBeVisible()
@@ -105,4 +108,19 @@ test('supports VIN recognition, correction suggestion and service retry', async 
   await page.getByRole('button', { name: '重新搜索' }).click()
   await expect(page.getByText('正在搜索零件数据...')).toBeVisible()
   await expect(page.getByText('精确匹配')).toBeVisible()
+})
+
+test('scales the dashboard and dictionary module for 1920 by 1080', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await page.goto('./')
+  await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expect.poll(() => page.locator('.app-header').evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(1920)
+  await page.screenshot({ path: 'qa-artifacts/implementation-default-1920.png', fullPage: false })
+
+  await page.goto('./dictionaries')
+  await expect(page.getByRole('heading', { name: '字典管理' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expect.poll(() => page.locator('.app-header').evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(1920)
+  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-module-1920.png', fullPage: false })
 })

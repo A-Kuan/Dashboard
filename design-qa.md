@@ -53,7 +53,7 @@ The detail comparison was used to verify the reusable card grid, selected SKU su
 - Open and cancel the New SKU dialog.
 - Verify the default selected row and default collapsed search state.
 - Check browser console and page errors: none.
-- Repeat the complete interaction suite against the deployed HTTPS address: 10 tests passed.
+- Repeat the complete interaction suite against the deployed HTTPS address: 11 tests passed.
 - Open all six command-center states deterministically and capture visual evidence.
 - Submit an OE/SKU query through loading to exact results.
 - Submit a VIN through loading to recognized-vehicle fitment results.
@@ -102,10 +102,11 @@ No actionable P0, P1 or P2 findings remain.
 
 ## Dictionary configuration follow-up
 
-- Entry: the page-level more-actions menu exposes “字典配置” next to the primary New SKU action.
-- Editor: the right-side configuration panel supports dictionary tabs, add/delete, label/value editing, enable/disable, ordering, reset and save.
+- Entry: the page-level more-actions menu exposes “字典管理” next to the primary New SKU action and navigates to the standalone `/dictionaries` module.
+- Editor: the full-page module uses a dictionary catalog plus configuration table and supports add/delete, label/value editing, enable/disable, ordering, reset and save.
 - Picker: brand, part category and status use the same searchable custom picker with selected-state feedback and keyboard dismissal.
-- Evidence: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-dictionary-settings.png` and `implementation-dictionary-picker.png` at 1680 × 945.
+- 1920 × 1080: the complete application scales from the 1680 × 945 baseline at 1.143×; header width, module width and typography remain proportional with no horizontal overflow.
+- Evidence: `implementation-dictionary-module.png`, `implementation-dictionary-picker.png`, `implementation-default-1920.png` and `implementation-dictionary-module-1920.png`.
 - Interaction verification covers adding a brand, saving it, exposing it in the filter picker and retaining it after reload.
 
 ## Follow-up polish

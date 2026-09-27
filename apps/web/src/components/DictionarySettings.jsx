@@ -1,20 +1,31 @@
-import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Plus, SlidersHorizontal, Trash, X } from '@phosphor-icons/react'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowDown, ArrowLeft, ArrowUp, CheckCircle, Plus, SlidersHorizontal, Trash } from '@phosphor-icons/react'
 import { ALL_DICTIONARY_VALUE } from '../services/dictionaryService'
+import { assetPath } from '../utils/assetPath'
 
 function cloneDictionaries(dictionaries) {
   return JSON.parse(JSON.stringify(dictionaries))
 }
 
-export function DictionarySettings({ dictionaries, onClose, onReset, onSave }) {
+export function DictionaryManagement({ dictionaries, onReset, onSave }) {
   const codes = Object.keys(dictionaries)
   const [activeCode, setActiveCode] = useState(codes[0])
   const [draft, setDraft] = useState(() => cloneDictionaries(dictionaries))
   const [error, setError] = useState('')
-  const activeDictionary = draft[activeCode]
+  const [saved, setSaved] = useState(false)
+  const currentCode = activeCode ?? codes[0]
+  const activeDictionary = draft[currentCode] ?? dictionaries[currentCode]
   const activeItems = useMemo(() => activeDictionary?.items ?? [], [activeDictionary])
 
-  const updateItems = (items) => setDraft((current) => ({ ...current, [activeCode]: { ...current[activeCode], items: items.map((item, index) => ({ ...item, sort: index * 10 })) } }))
+  useEffect(() => {
+    setDraft(cloneDictionaries(dictionaries))
+    setActiveCode((current) => current && dictionaries[current] ? current : Object.keys(dictionaries)[0])
+  }, [dictionaries])
+
+  const updateItems = (items) => {
+    setSaved(false)
+    setDraft((current) => ({ ...current, [currentCode]: { ...(current[currentCode] ?? dictionaries[currentCode]), items: items.map((item, index) => ({ ...item, sort: index * 10 })) } }))
+  }
   const updateItem = (index, changes) => updateItems(activeItems.map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item))
   const moveItem = (index, direction) => {
     const target = index + direction
@@ -35,21 +46,24 @@ export function DictionarySettings({ dictionaries, onClose, onReset, onSave }) {
       return
     }
     onSave(draft)
+    setError('')
+    setSaved(true)
   }
 
-  return <div className="settings-backdrop" onMouseDown={onClose}><aside className="dictionary-settings" onMouseDown={(event) => event.stopPropagation()} aria-label="字典配置">
-    <header><div className="settings-title-icon"><SlidersHorizontal size={20} /></div><div><h2>字典配置</h2><p>维护 SKU 页面中的公共选择项</p></div><button className="icon-button" aria-label="关闭字典配置" onClick={onClose} type="button"><X size={19} /></button></header>
-    <nav aria-label="字典类型">{codes.map((code) => <button className={code === activeCode ? 'active' : ''} key={code} onClick={() => { setActiveCode(code); setError('') }} type="button"><span>{draft[code].label}</span><small>{draft[code].items.filter((item) => item.enabled).length} 项</small></button>)}</nav>
-    <section className="settings-editor"><div className="settings-editor-heading"><div><h3>{activeDictionary?.label}</h3><p>调整顺序、显示名称和启用状态</p></div><button className="secondary-button" onClick={addItem} type="button"><Plus size={15} />新增选项</button></div>
-      <div className="dictionary-edit-list">{activeItems.map((item, index) => <div className={item.enabled ? 'dictionary-edit-row' : 'dictionary-edit-row disabled'} key={index}>
-        <div className="row-order"><button aria-label="上移" disabled={index === 0 || item.value === ALL_DICTIONARY_VALUE} onClick={() => moveItem(index, -1)} type="button"><ArrowUp size={14} /></button><button aria-label="下移" disabled={index === activeItems.length - 1 || item.value === ALL_DICTIONARY_VALUE} onClick={() => moveItem(index, 1)} type="button"><ArrowDown size={14} /></button></div>
-        <label><span>显示名称</span><input value={item.label} onChange={(event) => updateItem(index, { label: event.target.value })} /></label>
-        <label><span>内部值</span><input value={item.value} disabled={item.value === ALL_DICTIONARY_VALUE} onChange={(event) => updateItem(index, { value: event.target.value })} /></label>
-        <label className="dictionary-switch"><input checked={item.enabled} disabled={item.value === ALL_DICTIONARY_VALUE} onChange={(event) => updateItem(index, { enabled: event.target.checked })} type="checkbox" /><span aria-hidden="true" /><em>{item.enabled ? '启用' : '停用'}</em></label>
-        <button className="delete-dictionary-item" aria-label={`删除 ${item.label}`} disabled={item.value === ALL_DICTIONARY_VALUE} onClick={() => removeItem(index)} type="button"><Trash size={16} /></button>
-      </div>)}</div>
-      {error ? <p className="settings-error">{error}</p> : null}
-    </section>
-    <footer><button className="text-button" onClick={onReset} type="button">恢复系统默认</button><div><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" onClick={submit} type="button">保存配置</button></div></footer>
-  </aside></div>
+  return <main className="dictionary-module">
+    <header className="dictionary-module-heading"><div><a href={assetPath('')}><ArrowLeft size={16} />返回 SKU 管理</a><h1>字典管理</h1><p>集中维护业务系统中的公共选项，确保 SKU 数据口径一致</p></div><div className="dictionary-module-actions">{saved ? <span><CheckCircle size={16} weight="fill" />配置已保存</span> : null}<button className="secondary-button" onClick={() => { onReset(); setSaved(false) }} type="button">恢复系统默认</button><button className="primary-button" onClick={submit} type="button">保存配置</button></div></header>
+    <div className="dictionary-module-layout">
+      <aside className="dictionary-catalog"><div className="catalog-title"><SlidersHorizontal size={18} /><span><b>业务字典</b><small>{codes.length} 个字典</small></span></div><nav aria-label="字典类型">{codes.map((code) => { const dictionary = draft[code] ?? dictionaries[code]; return <button className={code === currentCode ? 'active' : ''} key={code} onClick={() => { setActiveCode(code); setError(''); setSaved(false) }} type="button"><span>{dictionary.label}<small>{code}</small></span><em>{dictionary.items.filter((item) => item.enabled).length} 项</em></button> })}</nav><div className="catalog-note"><b>配置说明</b><p>停用选项不会影响已有数据，但将从新建与筛选入口中隐藏。</p></div></aside>
+      <section className="dictionary-page-editor"><div className="dictionary-page-toolbar"><div><span>当前字典</span><h2>{activeDictionary?.label}</h2><p>调整显示顺序、名称、内部值和启用状态</p></div><button className="secondary-button" onClick={addItem} type="button"><Plus size={16} />新增选项</button></div>
+        <div className="dictionary-table"><div className="dictionary-table-head"><span>排序</span><span>显示名称</span><span>内部值</span><span>状态</span><span>操作</span></div><div className="dictionary-table-body">{activeItems.map((item, index) => <div className={item.enabled ? 'dictionary-table-row' : 'dictionary-table-row disabled'} key={index}>
+          <div className="row-order"><button aria-label="上移" disabled={index === 0 || item.value === ALL_DICTIONARY_VALUE} onClick={() => moveItem(index, -1)} type="button"><ArrowUp size={15} /></button><button aria-label="下移" disabled={index === activeItems.length - 1 || item.value === ALL_DICTIONARY_VALUE} onClick={() => moveItem(index, 1)} type="button"><ArrowDown size={15} /></button></div>
+          <input aria-label={`${item.label} 显示名称`} value={item.label} onChange={(event) => updateItem(index, { label: event.target.value })} />
+          <input aria-label={`${item.label} 内部值`} value={item.value} disabled={item.value === ALL_DICTIONARY_VALUE} onChange={(event) => updateItem(index, { value: event.target.value })} />
+          <label className="dictionary-switch"><input checked={item.enabled} disabled={item.value === ALL_DICTIONARY_VALUE} onChange={(event) => updateItem(index, { enabled: event.target.checked })} type="checkbox" /><span aria-hidden="true" /><em>{item.enabled ? '启用' : '停用'}</em></label>
+          <button className="delete-dictionary-item" aria-label={`删除 ${item.label}`} disabled={item.value === ALL_DICTIONARY_VALUE} onClick={() => removeItem(index)} type="button"><Trash size={17} /></button>
+        </div>)}</div></div>
+        {error ? <p className="settings-error">{error}</p> : null}
+      </section>
+    </div>
+  </main>
 }
