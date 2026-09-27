@@ -108,6 +108,7 @@ No actionable P0, P1 or P2 findings remain.
 - 1920 × 1080: the complete application scales from the 1680 × 945 baseline at 1.143×; header width, module width and typography remain proportional with no horizontal overflow.
 - Evidence: `implementation-dictionary-module.png`, `implementation-dictionary-picker.png`, `implementation-default-1920.png` and `implementation-dictionary-module-1920.png`.
 - Interaction verification covers adding a brand, saving it, exposing it in the filter picker and retaining it after reload.
+- Deployment repair: the initial standalone-route check returned 404; the isolated `/sku-preview/` Nginx location now falls back to `index.html`, after which the direct route and all 11 online browser tests passed.
 
 ## Follow-up polish
 

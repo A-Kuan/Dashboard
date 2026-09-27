@@ -4,10 +4,11 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260927-1ff2633`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260927-2a4f52a`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
+- 前端路由配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-2a4f52a-routing`
 
 该预览使用独立版本目录和 `/sku-preview/` 路径，不替换 HTTPS 根路径上的既有 Dashboard 服务。
 
@@ -30,16 +31,18 @@ npm run test:sites
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260927-1ff2633
+├── current -> releases/20260927-2a4f52a
 └── releases/
-    ├── 20260927-171a013/  # 上一版，可回滚
-    └── 20260927-1ff2633/
+    ├── 20260927-1ff2633/  # 上一版，可回滚
+    └── 20260927-2a4f52a/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
 ```
 
 后续版本应解压到新的 `releases/<版本>` 目录，验证后原子切换 `current` 软链接，不直接覆盖已有 release。
+
+`/sku-preview/` 已配置前端路由回退，直接访问 `/sku-preview/dictionaries` 等模块路径时返回当前版本的 `index.html`；静态资源仍按实际文件路径提供。
 
 ## 验证
 
