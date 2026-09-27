@@ -1,5 +1,7 @@
 # Dashboard
 
+SKU 主数据编辑模块的字段、组件和后端接口准备见 [docs/SKU-MASTER-DATA.md](docs/SKU-MASTER-DATA.md)。
+
 汽配行业 ERP 管理系统，采用前后端分离架构。
 
 当前正在实现 SKU 管理界面，前端应用位于 [`apps/web`](./apps/web)。

@@ -17,3 +17,4 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - When production data or APIs are unavailable, use realistic auto-parts test data matching the visual reference.
 - Selection values such as brand, part category, and SKU status must come from shared configurable dictionaries; do not add page-local hardcoded option arrays.
 - Dictionary-backed filters should use the shared searchable picker, and SKU management must retain a visible page-level entry for dictionary configuration.
+- SKU create/edit screens should use the horizontal section-tab navigation selected in the 2026-09-27 visual direction. Keep the editor single-page and combine it with a persistent EPC evidence pane for source comparison and publish checks; do not replace it with a wizard or global sidebar.

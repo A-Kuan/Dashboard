@@ -7,9 +7,9 @@ export function StatusBadge({ status }) {
   return <span className={low ? 'status-badge low' : 'status-badge'}><span className="status-dot" />{status}</span>
 }
 
-export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, value, onChange, disabled = false }) {
+export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, value, onChange, disabled = false, allowAll = true, showLabel = true, className = '' }) {
   const dictionary = dictionaries[dictionaryCode]
-  const options = dictionary?.items?.filter((item) => item.enabled !== false) ?? []
+  const options = dictionary?.items?.filter((item) => item.enabled !== false && (allowAll || item.value !== ALL_DICTIONARY_VALUE)) ?? []
   const availableOptions = options.length ? options : [{ value, label: value === ALL_DICTIONARY_VALUE ? '全部' : value }]
   const label = dictionary?.label || fallbackLabel || dictionaryCode
   const selected = availableOptions.find((option) => option.value === value) ?? availableOptions[0]
@@ -33,8 +33,8 @@ export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, 
     else setQuery('')
   }, [open])
 
-  return <div className={open ? 'filter-select open' : 'filter-select'} data-dictionary={dictionaryCode} ref={rootRef} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}>
-    <button className="dictionary-trigger" role="combobox" aria-controls={listId} aria-expanded={open} aria-haspopup="listbox" aria-label={`${label}：${selected.label}`} disabled={disabled} onClick={() => setOpen((current) => !current)} type="button"><span className="dictionary-label">{label}</span><strong>{selected.label}</strong><CaretDown size={13} weight="bold" aria-hidden="true" /></button>
+  return <div className={`${open ? 'filter-select open' : 'filter-select'} ${className}`.trim()} data-dictionary={dictionaryCode} ref={rootRef} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}>
+    <button className="dictionary-trigger" role="combobox" aria-controls={listId} aria-expanded={open} aria-haspopup="listbox" aria-label={`${label}：${selected.label}`} disabled={disabled} onClick={() => setOpen((current) => !current)} type="button">{showLabel ? <span className="dictionary-label">{label}</span> : null}<strong>{selected.label}</strong><CaretDown size={13} weight="bold" aria-hidden="true" /></button>
     {open ? <div className="dictionary-popover"><label className="dictionary-search"><MagnifyingGlass size={15} /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${label}`} aria-label={`搜索${label}`} /></label><div className="dictionary-options" id={listId} role="listbox" aria-label={label}>{filteredOptions.map((option) => <button className={option.value === value ? 'selected' : ''} key={option.value} role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false) }} type="button"><span>{option.label}</span>{option.value === value ? <Check size={16} weight="bold" /> : null}</button>)}{filteredOptions.length === 0 ? <p>没有匹配项</p> : null}</div></div> : null}
   </div>
 }

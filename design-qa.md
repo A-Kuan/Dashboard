@@ -1,118 +1,58 @@
-# Design QA — SKU 管理与命令中枢 01–07 状态
+# SKU Editor Design QA
 
-- Source visual truth: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/public/references/01-default-collapsed.png` through `07-service-error-retry.png`
-- Implementation screenshots: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-default.png` and `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-02-focus-expanded.png` through `implementation-07-service-error-retry.png`
-- Deployed implementation: `https://121.41.24.42/sku-preview/`
-- Full comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-pass-3.png`
-- Focused top/table comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-top-pass-3.png`
-- Focused detail comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-detail-pass-3.png`
-- Viewport: 1680 × 945 CSS px
-- Source pixels: 1680 × 945
-- Implementation pixels: 1680 × 945
+- Source visual truth: `apps/web/public/references/08-sku-editor-epc-combined.png`
+- Implementation screenshot: `apps/web/qa-artifacts/implementation-sku-editor-1920.png`
+- Combined comparison evidence: `apps/web/qa-artifacts/sku-editor-design-comparison.png`
+- State: SKU `95B-867-288-OM8` edit page, `基本信息` tab active, unresolved EPC replacement-chain conflict
+- Browser viewport: 1920 × 1080 CSS px
 - Device scale factor: 1
-- Density normalization: not required; source and implementation use identical pixel dimensions
-- States: desktop, light theme, default search collapsed, focus expanded, OE/SKU results, VIN fitment results, no-result correction, loading, and service error/retry; fourth SKU selected
-
-## Command-center state evidence
-
-All six additional references were captured and compared at 1680 × 945 with the existing page held constant. The implementation uses one `CommandCenter` component and state-driven content rather than six duplicated screens.
-
-- 02 focus expanded: 620px panel, fixed left edge, dark command input, two-column recent/saved/quick-command layout.
-- 03 OE/SKU results: left edge remains fixed while the panel expands to 735px; exact, replacement/history and related results share a result-row component; the SKU preview occupies the added right rail.
-- 04 VIN fitment results: recognized vehicle summary, five high-match SKUs, one review-required condition and paired next actions.
-- 05 no-result correction: correction suggestion, four alternate search actions, two low-match candidates and keyboard hints.
-- 06 loading: progress bar, preserved command query, cancel action and state-aligned skeleton layout.
-- 07 service error/retry: non-destructive error copy, trace metadata, retry/close actions and fallback commands.
-
-Geometry, panel heights, borders, shadows, state colors, typographic hierarchy, row density and background continuity were checked against each corresponding source image. The first comparison exposed the OE result panel being centered after widening; it was corrected so every state shares the same left anchor and only the preview rail extends right.
-
-## Full-view comparison evidence
-
-The final full comparison confirms that the implementation matches the source composition: 54px application header, page heading and actions, summary tabs, filter row, 14-column SKU table with eight visible records, selected fourth row, and the four-column detail region. The table and detail boundary, selected-row position, card edges, and viewport crop align at the target viewport.
-
-## Focused comparison evidence
-
-The top/table comparison was used to verify navigation position, title hierarchy, action placement, filter sizing, table column boundaries, row heights, selected state, status colors, copy, and part thumbnail crops.
-
-The detail comparison was used to verify the reusable card grid, selected SKU summary, detail tabs, EPC diagram crop, fitment table, read-only OEM price, inventory table, internal padding, and card heights.
-
-## Required fidelity surfaces
-
-- Fonts and typography: PingFang SC/system UI stack reproduces the compact Chinese ERP typography. Sizes, weights, line heights, truncation and hierarchy align with the source. Minor glyph antialiasing differences are expected between the raster source and browser rendering.
-- Spacing and layout rhythm: header, controls, table and detail grid match the 1680 × 945 source geometry. Reusable spacing, border, radius and elevation values are centralized in CSS tokens and shared components.
-- Colors and visual tokens: primary blue, navy text, muted copy, grid borders, selected-row blue, in-stock green and low-stock orange match the source palette.
-- Image quality and asset fidelity: the part thumbnails, selected part image, EPC diagram and avatar are individual raster assets derived from the supplied visual source; no placeholders, emoji, CSS drawings or handcrafted SVG assets are used.
-- Copy and content: visible labels, SKU/OE data, fitment records, prices, statuses, warehouse records and dates match the source; missing production data is represented with realistic test data.
-
-## Primary interactions tested
-
-- Open and close the command search through the header control and Escape.
-- Search by brand and show matching SKU results.
-- Filter the table by brand and restore all brands.
-- Select a different SKU row and update the detail header.
-- Open and cancel the New SKU dialog.
-- Verify the default selected row and default collapsed search state.
-- Check browser console and page errors: none.
-- Repeat the complete interaction suite against the deployed HTTPS address: 11 tests passed.
-- Open all six command-center states deterministically and capture visual evidence.
-- Submit an OE/SKU query through loading to exact results.
-- Submit a VIN through loading to recognized-vehicle fitment results.
-- Accept a spelling/number correction suggestion and reach exact results.
-- Retry a simulated search-service failure through loading to recovered results.
-
-## Comparison history
-
-### Pass 1 — blocked
-
-- P1: Main table column proportions differed from the source, clipping SKU and data-source values.
-- P2: Header navigation and search were shifted approximately 14px to the right.
-- P2: The right detail stack was wider than the source and the EPC/fitment columns were too narrow.
-- P2: The detail edit button included an icon absent from the source.
-- P2: Fitment values were truncated because all columns used equal widths.
-
-Fixes: measured and applied source-aligned column widths, shifted the header grid, corrected detail-grid tracks, removed the extra icon, and assigned content-aware fitment widths.
-
-### Pass 2 — blocked
-
-- P2: New SKU text wrapped to two lines after matching the source button width.
-- P2: Table typography still clipped longer SKU values.
-- P2: Detail cards ended several pixels above the source viewport edge.
-- P2: Fitment year and vehicle values remained truncated.
-
-Fixes: prevented action-label wrapping, refined SKU type size and cell padding, extended the detail grid to the source height, and rebalanced fitment columns.
-
-### Pass 3 — passed
-
-Post-fix full and focused comparisons show no remaining actionable P0, P1 or P2 differences. The only residual variation is platform font antialiasing at small sizes, classified as acceptable rendering variance.
-
-### Pass 4 — 02–07 states, blocked
-
-- P1: The wider OE/SKU results panel was horizontally centered, shifting its left edge away from the shared command-input anchor.
-- P2: State-specific screenshots and transition coverage were not yet part of the regression suite.
-
-Fixes: anchored all command-center states to the same 528px reference edge at the target viewport, allowed the OE preview rail to extend only to the right, and added deterministic screenshots plus VIN/correction/retry transition tests.
-
-### Pass 5 — 01–07 states, passed
-
-All seven visual states render at the reference viewport with no remaining actionable P0, P1 or P2 differences. Nine browser tests cover the default page, six deterministic visual states and the primary transition paths, with zero console or page errors.
+- Source pixels: 1672 × 941 (16:9 ImageGen output), normalized with Lanczos to 1920 × 1080 for comparison
+- Implementation pixels: 1920 × 1080
 
 ## Findings
 
-No actionable P0, P1 or P2 findings remain.
+No actionable P0, P1, or P2 differences remain.
 
-## Dictionary configuration follow-up
+- Typography: passed. The implementation uses the existing Inter / PingFang SC / Microsoft YaHei stack and preserves the source hierarchy, readable 14–16 px equivalent body scale at 1920 × 1080, compact table text, weights, line height, and truncation behavior.
+- Spacing and layout rhythm: passed. The header, title actions, horizontal section tabs, 64/36 editor/evidence split, identity form, relation tables, and sticky evidence pane reproduce the source composition without horizontal overflow or clipped controls.
+- Colors and visual tokens: passed. Shared navy, blue `#075cf6`, cool-gray borders and surfaces, green validation, and amber conflict colors match the selected direction and the existing Dashboard system.
+- Image quality and asset fidelity: passed. The higher-resolution existing product asset and EPC diagram are used directly; both preserve aspect ratio and have functional zoom affordances. No raster content is approximated with CSS drawings.
+- Copy and content: passed. SKU identity, OE replacement chain, Porsche EPC source metadata, fitment, OEM reference price, comparison states, and publish-check content match the source visual and product requirements.
+- Interaction and accessibility: passed. Section tabs, editable inputs, dictionary pickers, add/remove rows, image upload, EPC zoom, conflict resolution, cancel, draft save, and final save are keyboard-reachable and expose names to assistive technology.
 
-- Entry: the page-level more-actions menu exposes “字典管理” next to the primary New SKU action and navigates to the standalone `/dictionaries` module.
-- Editor: the full-page module uses a dictionary catalog plus configuration table and supports add/delete, label/value editing, enable/disable, ordering, reset and save.
-- Picker: brand, part category and status use the same searchable custom picker with selected-state feedback and keyboard dismissal.
-- 1920 × 1080: the complete application scales from the 1680 × 945 baseline at 1.143×; header width, module width and typography remain proportional with no horizontal overflow.
-- Evidence: `implementation-dictionary-module.png`, `implementation-dictionary-picker.png`, `implementation-default-1920.png` and `implementation-dictionary-module-1920.png`.
-- Interaction verification covers adding a brand, saving it, exposing it in the filter picker and retaining it after reload.
-- Deployment repair: the initial standalone-route check returned 404; the isolated `/sku-preview/` Nginx location now falls back to `index.html`, after which the direct route and all 11 online browser tests passed.
+## Comparison History
 
-## Follow-up polish
+### Pass 1 — blocked
 
-- P3: Re-check small-text antialiasing if production specifies a bundled corporate font instead of the current system font stack.
-- P3: Additional responsive breakpoints should be reviewed when a separate narrow-desktop or mobile visual target is approved.
+- P2: The product image used the 48 × 42 list thumbnail and visibly blurred at editor scale.
+- P2: Success icons in the field-comparison list inherited the warning color because of an overly broad selector.
+
+Fixes made:
+
+- Replaced the list thumbnail with the existing 112 × 82 selected-product asset and changed the frame to contain the image without stretching.
+- Scoped amber icon color to `.warning-row`, restoring green success indicators.
+
+### Pass 2 — passed
+
+Post-fix evidence: `apps/web/qa-artifacts/sku-editor-design-comparison.png` places the normalized source on the left and the revised implementation on the right. The corrected image treatment and semantic colors are visible, and no further P0/P1/P2 mismatch remains.
+
+## Focused Region Comparison
+
+Focused review covered the product identity/form region and the complete EPC evidence pane. These were the fidelity-critical areas because they contain dense typography, real raster assets, dictionary controls, validation states, source metadata, and conflict actions. Both regions pass after the second comparison.
+
+## Primary Interactions Tested
+
+- Open existing SKU editor from the SKU table and open the new-SKU route.
+- Search and select shared brand/category dictionary values; the editor excludes the filter-only `全部` value.
+- Add and remove OE/replacement rows and fitment rows.
+- Resolve the EPC replacement conflict and update publish readiness from 5/6 to 6/6.
+- Open and close the EPC diagram viewer.
+- Save a draft and save the SKU with visible feedback.
+- Verify 1920 × 1080 layout has no horizontal overflow.
+- Check browser console and page errors: none.
+
+## Follow-up Polish
+
+- P3: The generated source uses slightly softer text antialiasing than the browser render. This is expected raster-versus-DOM rendering variance and does not require a code change.
 
 final result: passed

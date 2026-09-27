@@ -40,7 +40,7 @@ for (const [state, filename] of visualStates) {
   })
 }
 
-test('supports command search transitions, filtering, row selection and the new SKU flow', async ({ page }) => {
+test('supports command search transitions, filtering, row selection and the new SKU route', async ({ page }) => {
   await page.getByRole('button', { name: /搜索 VIN/ }).click()
   await expect(page.getByText('最近访问')).toBeVisible()
   const commandInput = page.getByRole('textbox', { name: '命令搜索' })
@@ -65,9 +65,40 @@ test('supports command search transitions, filtering, row selection and the new 
   await expect(page.locator('.part-title h2')).toHaveText('958-121-251')
 
   await page.getByRole('button', { name: '新建 SKU' }).click()
+  await expect(page).toHaveURL(/\/skus\/new$/)
   await expect(page.getByRole('heading', { name: '新建 SKU' })).toBeVisible()
-  await page.getByRole('button', { name: '取消' }).click()
-  await expect(page.getByRole('heading', { name: '新建 SKU' })).toHaveCount(0)
+  await page.getByRole('button', { name: /返回 SKU 管理/ }).click()
+  await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
+})
+
+test('edits SKU master data, relations, fitment and EPC evidence', async ({ page }) => {
+  await page.goto('./skus/95B-867-288-OM8/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'SKU 编辑区段' })).toBeVisible()
+  await expect(page.getByText('EPC 来源证据')).toBeVisible()
+
+  const brandDictionary = page.locator('.editor-field [data-dictionary="sku_brand"]')
+  await brandDictionary.getByRole('combobox').click()
+  await expect(brandDictionary.getByRole('option', { name: 'Porsche' })).toBeVisible()
+  await expect(brandDictionary.getByRole('option', { name: '全部' })).toHaveCount(0)
+  await brandDictionary.getByRole('option', { name: 'BMW' }).click()
+  await expect(brandDictionary.getByRole('combobox')).toContainText('BMW')
+
+  await page.getByRole('button', { name: '添加 OE 号' }).click()
+  await expect(page.locator('.oe-editor-table tbody tr')).toHaveCount(3)
+  await page.getByRole('button', { name: '添加适配车型' }).click()
+  await expect(page.locator('.fitment-editor-table tbody tr')).toHaveCount(3)
+
+  await page.getByRole('button', { name: '采用 EPC 数据' }).click()
+  await expect(page.getByText('替代链差异已完成确认')).toBeVisible()
+  await expect(page.getByText('发布前检查 6/6')).toBeVisible()
+
+  await page.getByRole('button', { name: '放大 EPC 图' }).click()
+  await expect(page.getByRole('button', { name: '关闭 EPC 大图' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭 EPC 大图' }).click()
+
+  await page.getByRole('button', { name: '保存 SKU' }).click()
+  await expect(page.getByText('SKU 已保存，发布检查已通过')).toBeVisible()
 })
 
 test('configures dictionaries from the page entry and persists the result', async ({ page }) => {
@@ -123,4 +154,10 @@ test('scales the dashboard and dictionary module for 1920 by 1080', async ({ pag
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await expect.poll(() => page.locator('.app-header').evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(1920)
   await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-module-1920.png', fullPage: false })
+
+  await page.goto('./skus/95B-867-288-OM8/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expect(page.getByText('Porsche EPC 原始记录')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-1920.png', fullPage: false })
 })
