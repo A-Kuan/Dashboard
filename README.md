@@ -11,3 +11,12 @@ cd apps/web
 npm install
 npm run dev
 ```
+
+## 服务器预览构建
+
+部署到服务器的 `/sku-preview/` 路径时执行：
+
+```bash
+cd apps/web
+npm run build:server
+```

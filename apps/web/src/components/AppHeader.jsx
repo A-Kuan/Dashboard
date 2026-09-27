@@ -1,4 +1,5 @@
 import { Bell, CaretDown, Command, MagnifyingGlass } from '@phosphor-icons/react'
+import { assetPath } from '../utils/assetPath'
 
 export function AppHeader({ onSearchFocus }) {
   return (
@@ -13,9 +14,8 @@ export function AppHeader({ onSearchFocus }) {
       <div className="header-actions">
         <button className="current-space" type="button">当前：零件库 <CaretDown size={13} weight="bold" /></button>
         <button className="notification-button" aria-label="通知" type="button"><Bell size={22} /><span className="notification-count">3</span></button>
-        <div className="user-profile"><img src="/assets/user-avatar.png" alt="张伟" /><span><strong>张伟</strong><small>采购中心 · 运营</small></span></div>
+        <div className="user-profile"><img src={assetPath('assets/user-avatar.png')} alt="张伟" /><span><strong>张伟</strong><small>采购中心 · 运营</small></span></div>
       </div>
     </header>
   )
 }
-

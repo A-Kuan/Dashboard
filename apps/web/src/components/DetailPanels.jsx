@@ -1,6 +1,7 @@
 import { CheckCircle, MagnifyingGlass } from '@phosphor-icons/react'
 import { CloseButton, MiniTable, PanelCard, StatusBadge } from './Common'
 import { fitmentRows, inventoryRows } from '../data/mockData'
+import { assetPath } from '../utils/assetPath'
 
 const detailTabs = ['基本信息', '适配信息', '库存分布', '采购与价格', 'OEM 参考', '变更记录']
 
@@ -9,7 +10,7 @@ export function DetailPanels({ item, activeTab, onTabChange }) {
     <div className="detail-grid">
       <section className="part-summary-card">
         <div className="part-summary-top">
-          <img className="part-preview" src={item.id === '95B-867-288-OM8' ? '/assets/parts/selected-part.png' : item.image} alt={item.name} />
+          <img className="part-preview" src={item.id === '95B-867-288-OM8' ? assetPath('assets/parts/selected-part.png') : item.image} alt={item.name} />
           <div className="part-title">
             <div className="part-title-line"><h2>{item.sku}</h2><StatusBadge status={item.status} /></div>
             <p>{item.name}</p>
@@ -30,7 +31,7 @@ export function DetailPanels({ item, activeTab, onTabChange }) {
       </section>
 
       <PanelCard className="epc-card" title="EPC零件位置" subtitle={<><CheckCircle size={14} weight="fill" /> 在下图中高亮显示该零件的位置</>}>
-        <div className="epc-image-wrap"><img src="/assets/parts/epc-diagram.png" alt="EPC零件位置图" /><button className="zoom-button" aria-label="放大EPC图" type="button"><MagnifyingGlass size={18} /></button></div>
+        <div className="epc-image-wrap"><img src={assetPath('assets/parts/epc-diagram.png')} alt="EPC零件位置图" /><button className="zoom-button" aria-label="放大EPC图" type="button"><MagnifyingGlass size={18} /></button></div>
       </PanelCard>
 
       <PanelCard className="fitment-card" title="适配条件" subtitle={<><CheckCircle size={14} weight="fill" /> 该零件适用于以下车型和条件</>}>
