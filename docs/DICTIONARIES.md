@@ -17,6 +17,20 @@ SKU 管理页面的品牌、零件大类和 SKU 状态统一使用共享字典�
 - `sort`：升序排列值。
 - `enabled`：设为 `false` 后不在下拉框中展示。
 
+## 页面配置入口
+
+在 SKU 管理页点击“新建 SKU”右侧的更多按钮，然后选择“字典配置”。配置面板支持：
+
+- 新增和删除选项。
+- 修改显示名称与内部值。
+- 启用或停用选项。
+- 调整显示顺序。
+- 恢复随版本发布的系统默认值。
+
+当前静态预览将页面修改保存在浏览器 `localStorage` 中，并在刷新后继续生效；这用于前端原型验收，不替代服务端持久化。接入正式字典管理接口后，应由后端负责权限、审计和持久化。
+
+页面筛选统一使用可搜索的 `DictionarySelect`，支持当前项高亮、无结果提示、点击外部关闭和 `Esc` 关闭。
+
 ## 对接字典服务
 
 生产环境可设置 `VITE_DICTIONARY_ENDPOINT`，让前端优先读取后端字典接口；接口不可用或响应格式错误时，会回退到随版本发布的本地 JSON：
@@ -41,4 +55,4 @@ VITE_DICTIONARY_ENDPOINT=https://api.example.com/api/v1/dictionaries npm run bui
 }
 ```
 
-字典加载、有效项过滤和排序由 `src/services/dictionaryService.js` 统一处理；界面使用 `DictionarySelect` 公共组件。新增选择项时应优先复用字典编码，不应在业务页面新增选项数组。
+字典加载、校验和排序由 `src/services/dictionaryService.js` 统一处理；界面使用 `DictionarySelect` 公共组件。新增选择项时应优先复用字典编码，不应在业务页面新增选项数组。

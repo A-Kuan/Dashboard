@@ -46,7 +46,7 @@ button { color: inherit; }
 .workspace-heading { min-height: 72px; display: flex; align-items: flex-start; justify-content: space-between; }
 .workspace-heading h1 { margin: 0; font-size: 27px; line-height: 1.25; color: #172645; letter-spacing: -.55px; }
 .workspace-heading p { margin: 6px 0 0; color: #657492; font-size: 14px; }
-.page-actions { display: flex; gap: 10px; }
+.page-actions { position: relative; display: flex; gap: 10px; }
 .primary-button, .secondary-button, .more-button, .icon-button { border-radius: 5px; cursor: pointer; }
 .primary-button { height: 36px; border: 1px solid var(--blue); color: white; background: var(--blue); box-shadow: 0 4px 9px rgba(7,92,246,.18); display: inline-flex; align-items: center; gap: 7px; padding: 0 15px; font-weight: 650; }
 .primary-button:hover { background: var(--blue-600); }
@@ -63,11 +63,34 @@ button { color: inherit; }
 .summary-tabs button.active::after { content: ""; position: absolute; height: 2px; left: 0; right: 0; bottom: -1px; background: var(--blue); }
 .filters-row { display: flex; justify-content: space-between; align-items: center; height: 44px; }
 .filters-left, .filters-right { display: flex; gap: 10px; }
-.filter-select { width: 135px; height: 35px; padding: 0 10px; display: flex; align-items: center; gap: 11px; border: 1px solid #dbe3ee; background: #fff; border-radius: 4px; font-size: 13px; color: #7a879c; }
+.filter-select { position: relative; width: 135px; height: 35px; border: 1px solid #dbe3ee; background: #fff; border-radius: 4px; font-size: 13px; color: #7a879c; }
 .filter-select:nth-child(2) { width: 165px; }
-.filter-select span { white-space: nowrap; }
-.filter-select select { flex: 1; width: 0; appearance: none; border: 0; outline: 0; background: transparent; color: #263754; font-weight: 600; cursor: pointer; }
+.filter-select.open { border-color: #94b9fb; box-shadow: 0 0 0 3px rgba(7,92,246,.08); z-index: 25; }
+.dictionary-trigger { width: 100%; height: 100%; padding: 0 10px; display: grid; grid-template-columns: auto minmax(0,1fr) 14px; align-items: center; gap: 11px; border: 0; background: transparent; color: #7a879c; cursor: pointer; text-align: left; }
+.dictionary-trigger:disabled { cursor: wait; opacity: .72; }
+.dictionary-trigger span, .dictionary-trigger strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dictionary-trigger strong { color: #263754; font-weight: 600; }
+.dictionary-trigger svg { transition: transform .16s ease; }
+.filter-select.open .dictionary-trigger svg { transform: rotate(180deg); }
+.dictionary-popover { position: absolute; top: 41px; left: -1px; min-width: 230px; padding: 8px; border: 1px solid #d9e2ef; border-radius: 7px; background: white; box-shadow: 0 12px 32px rgba(24,43,76,.16); }
+.dictionary-search { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 7px; border: 1px solid #dfe6ef; border-radius: 5px; color: #7f8da3; background: #f9fbfe; }
+.dictionary-search:focus-within { border-color: #9dbef8; background: white; box-shadow: 0 0 0 3px rgba(7,92,246,.07); }
+.dictionary-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: #263754; background: transparent; font-size: 12px; }
+.dictionary-options { max-height: 238px; margin-top: 6px; overflow-y: auto; }
+.dictionary-options button { width: 100%; height: 34px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; border: 0; border-radius: 4px; background: white; color: #344561; font-size: 12px; cursor: pointer; text-align: left; }
+.dictionary-options button:hover { background: #f3f7fd; }
+.dictionary-options button.selected { color: var(--blue); background: #edf4ff; font-weight: 650; }
+.dictionary-options p { margin: 13px 8px; color: #8794a8; font-size: 11px; text-align: center; }
 .sort-button { min-width: 116px; justify-content: space-between; }
+
+.page-action-scrim { position: fixed; inset: 0; z-index: 18; border: 0; background: transparent; }
+.page-action-menu { position: absolute; top: 43px; right: 0; z-index: 20; width: 226px; padding: 6px; border: 1px solid #dbe3ee; border-radius: 7px; background: white; box-shadow: 0 12px 32px rgba(25,43,75,.16); }
+.page-action-menu > button { width: 100%; min-height: 54px; padding: 8px 10px; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 5px; background: white; color: #3f506b; text-align: left; cursor: pointer; }
+.page-action-menu > button:hover { background: #f3f7fd; color: var(--blue); }
+.page-action-menu > button:disabled { opacity: .55; cursor: wait; }
+.page-action-menu span { display: grid; gap: 3px; }
+.page-action-menu b { color: #263651; font-size: 13px; }
+.page-action-menu small { color: #8995a8; font-size: 10.5px; }
 
 .sku-table-shell { overflow: hidden; background: white; border: 1px solid #e0e7f1; border-radius: 4px; }
 .sku-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; color: #536582; }
@@ -182,6 +205,50 @@ button { color: inherit; }
 .new-sku-modal input { height: 38px; padding: 0 11px; border: 1px solid #d7e0ec; border-radius: 4px; outline: none; }
 .new-sku-modal input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(7,92,246,.1); }
 .new-sku-modal footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
+
+.settings-backdrop { position: fixed; inset: 0; z-index: 80; display: flex; justify-content: flex-end; background: rgba(18,29,50,.25); backdrop-filter: blur(1px); }
+.dictionary-settings { width: 650px; height: 100vh; display: grid; grid-template-rows: 76px 54px minmax(0,1fr) 68px; background: #f7f9fc; box-shadow: -18px 0 48px rgba(21,37,66,.18); }
+.dictionary-settings > header { padding: 0 22px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #dfe6ef; background: white; }
+.settings-title-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--blue); border-radius: 8px; background: #edf4ff; }
+.dictionary-settings > header > div:nth-child(2) { flex: 1; }
+.dictionary-settings h2 { margin: 0; color: #1b2a46; font-size: 19px; }
+.dictionary-settings > header p { margin: 4px 0 0; color: #7d899e; font-size: 11px; }
+.dictionary-settings > nav { padding: 0 22px; display: flex; gap: 4px; align-items: flex-end; border-bottom: 1px solid #dfe6ef; background: white; }
+.dictionary-settings > nav button { min-width: 118px; height: 46px; padding: 0 13px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #65738b; cursor: pointer; }
+.dictionary-settings > nav button.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 650; }
+.dictionary-settings > nav small { min-width: 30px; padding: 2px 6px; color: #7f8da2; border-radius: 10px; background: #f0f3f8; font-size: 9px; font-weight: 500; }
+.settings-editor { min-height: 0; padding: 20px 22px; overflow: hidden; }
+.settings-editor-heading { height: 48px; display: flex; align-items: flex-start; justify-content: space-between; }
+.settings-editor-heading h3 { margin: 0; font-size: 15px; }
+.settings-editor-heading p { margin: 5px 0 0; color: #7b889d; font-size: 11px; }
+.settings-editor-heading .secondary-button { height: 32px; color: var(--blue); }
+.dictionary-edit-list { height: calc(100% - 48px); overflow-y: auto; border: 1px solid #dfe6ef; border-radius: 6px; background: white; }
+.dictionary-edit-row { min-height: 69px; padding: 9px 10px; display: grid; grid-template-columns: 27px 1fr 148px 74px 30px; align-items: end; gap: 8px; border-bottom: 1px solid #e5eaf1; }
+.dictionary-edit-row:last-child { border-bottom: 0; }
+.dictionary-edit-row.disabled { background: #fafbfd; }
+.dictionary-edit-row > label:not(.dictionary-switch) { display: grid; gap: 5px; color: #7a879c; font-size: 9px; }
+.dictionary-edit-row input[type="text"], .dictionary-edit-row > label:not(.dictionary-switch) input { width: 100%; height: 31px; padding: 0 8px; color: #2d3e59; border: 1px solid #dbe3ed; border-radius: 4px; outline: 0; font-size: 11px; }
+.dictionary-edit-row input:focus { border-color: #8eb4f9; box-shadow: 0 0 0 3px rgba(7,92,246,.07); }
+.dictionary-edit-row input:disabled { color: #8996aa; background: #f2f5f9; }
+.row-order { display: grid; gap: 2px; align-self: center; }
+.row-order button, .delete-dictionary-item { width: 25px; height: 22px; display: grid; place-items: center; color: #718097; border: 0; border-radius: 3px; background: transparent; cursor: pointer; }
+.row-order button:hover:not(:disabled) { color: var(--blue); background: #eef4ff; }
+.row-order button:disabled, .delete-dictionary-item:disabled { opacity: .28; cursor: default; }
+.delete-dictionary-item { height: 31px; color: #a16c70; }
+.delete-dictionary-item:hover:not(:disabled) { color: #d43d45; background: #fff0f1; }
+.dictionary-switch { height: 31px; display: grid; grid-template-columns: 30px 1fr; grid-template-rows: 17px 12px; align-items: center; align-self: end; cursor: pointer; }
+.dictionary-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.dictionary-switch > span { width: 29px; height: 17px; padding: 2px; display: block; border-radius: 10px; background: #c7cfdb; transition: background .15s ease; }
+.dictionary-switch > span::after { content: ''; width: 13px; height: 13px; display: block; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(20,35,60,.2); transition: transform .15s ease; }
+.dictionary-switch input:checked + span { background: var(--blue); }
+.dictionary-switch input:checked + span::after { transform: translateX(12px); }
+.dictionary-switch em { grid-column: 1 / -1; color: #7b899e; font-size: 9px; font-style: normal; text-align: center; }
+.settings-error { margin: 8px 0 0; color: #cc3e46; font-size: 11px; }
+.dictionary-settings > footer { padding: 0 22px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #dfe6ef; background: white; }
+.dictionary-settings > footer > div { display: flex; gap: 9px; }
+.dictionary-settings > footer .primary-button { justify-content: center; min-width: 96px; }
+.text-button { border: 0; background: transparent; color: #66758d; font-size: 12px; cursor: pointer; }
+.text-button:hover { color: var(--blue); }
 
 /* Shared command-center states: 02–07 */
 .search-backdrop { justify-content: flex-start; background: rgba(244,248,253,.22); padding-top: 52px; backdrop-filter: blur(.65px); }

@@ -8,7 +8,8 @@ function normalizeDictionary(dictionary, code) {
   }
 
   const items = dictionary.items
-    .filter((item) => item && item.enabled !== false && typeof item.value === 'string' && typeof item.label === 'string')
+    .filter((item) => item && typeof item.value === 'string' && typeof item.label === 'string')
+    .map((item) => ({ ...item, enabled: item.enabled !== false }))
     .sort((left, right) => (left.sort ?? 0) - (right.sort ?? 0))
 
   return { label: dictionary.label || code, items }

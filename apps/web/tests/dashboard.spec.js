@@ -51,12 +51,15 @@ test('supports command search transitions, filtering, row selection and the new 
   await page.keyboard.press('Escape')
 
   const brandDictionary = page.locator('[data-dictionary="sku_brand"]')
-  await expect(brandDictionary.getByRole('combobox').locator('option')).toHaveCount(4)
+  await brandDictionary.getByRole('combobox').click()
+  await expect(brandDictionary.getByRole('option')).toHaveCount(4)
+  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-picker.png', fullPage: false })
   await expect(page.locator('[data-dictionary="part_category"]')).toContainText('零件大类')
   await expect(page.locator('[data-dictionary="sku_status"]')).toContainText('状态')
-  await brandDictionary.getByRole('combobox').selectOption('Porsche')
+  await brandDictionary.getByRole('option', { name: 'Porsche' }).click()
   await expect(page.locator('.sku-table tbody tr')).toHaveCount(4)
-  await brandDictionary.getByRole('combobox').selectOption('__all__')
+  await brandDictionary.getByRole('combobox').click()
+  await brandDictionary.getByRole('option', { name: '全部' }).click()
 
   await page.getByRole('row', { name: /958-121-251/ }).click()
   await expect(page.locator('.part-title h2')).toHaveText('958-121-251')
@@ -65,6 +68,26 @@ test('supports command search transitions, filtering, row selection and the new 
   await expect(page.getByRole('heading', { name: '新建 SKU' })).toBeVisible()
   await page.getByRole('button', { name: '取消' }).click()
   await expect(page.getByRole('heading', { name: '新建 SKU' })).toHaveCount(0)
+})
+
+test('configures dictionaries from the page entry and persists the result', async ({ page }) => {
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: /字典配置/ }).click()
+  await expect(page.getByRole('heading', { name: '字典配置' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-settings.png', fullPage: false })
+
+  await page.getByRole('button', { name: '新增选项' }).click()
+  const newRow = page.locator('.dictionary-edit-row').last()
+  await newRow.locator('input').nth(0).fill('测试品牌')
+  await newRow.locator('input').nth(1).fill('TEST_BRAND')
+  await page.getByRole('button', { name: '保存配置' }).click()
+
+  const brandDictionary = page.locator('[data-dictionary="sku_brand"]')
+  await brandDictionary.getByRole('combobox').click()
+  await expect(brandDictionary.getByRole('option', { name: '测试品牌' })).toBeVisible()
+  await page.reload()
+  await brandDictionary.getByRole('combobox').click()
+  await expect(brandDictionary.getByRole('option', { name: '测试品牌' })).toBeVisible()
 })
 
 test('supports VIN recognition, correction suggestion and service retry', async ({ page }) => {

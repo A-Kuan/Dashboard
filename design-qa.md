@@ -100,6 +100,14 @@ All seven visual states render at the reference viewport with no remaining actio
 
 No actionable P0, P1 or P2 findings remain.
 
+## Dictionary configuration follow-up
+
+- Entry: the page-level more-actions menu exposes “字典配置” next to the primary New SKU action.
+- Editor: the right-side configuration panel supports dictionary tabs, add/delete, label/value editing, enable/disable, ordering, reset and save.
+- Picker: brand, part category and status use the same searchable custom picker with selected-state feedback and keyboard dismissal.
+- Evidence: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-dictionary-settings.png` and `implementation-dictionary-picker.png` at 1680 × 945.
+- Interaction verification covers adding a brand, saving it, exposing it in the filter picker and retaining it after reload.
+
 ## Follow-up polish
 
 - P3: Re-check small-text antialiasing if production specifies a bundled corporate font instead of the current system font stack.
