@@ -50,9 +50,13 @@ test('supports command search transitions, filtering, row selection and the new 
   await expect(page.getByText('精确匹配')).toBeVisible()
   await page.keyboard.press('Escape')
 
-  await page.locator('.filter-select').first().getByRole('combobox').selectOption('Porsche')
+  const brandDictionary = page.locator('[data-dictionary="sku_brand"]')
+  await expect(brandDictionary.getByRole('combobox').locator('option')).toHaveCount(4)
+  await expect(page.locator('[data-dictionary="part_category"]')).toContainText('零件大类')
+  await expect(page.locator('[data-dictionary="sku_status"]')).toContainText('状态')
+  await brandDictionary.getByRole('combobox').selectOption('Porsche')
   await expect(page.locator('.sku-table tbody tr')).toHaveCount(4)
-  await page.locator('.filter-select').first().getByRole('combobox').selectOption('全部')
+  await brandDictionary.getByRole('combobox').selectOption('__all__')
 
   await page.getByRole('row', { name: /958-121-251/ }).click()
   await expect(page.locator('.part-title h2')).toHaveText('958-121-251')

@@ -2,19 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { CaretDown, DotsThree, Funnel, Plus, X } from '@phosphor-icons/react'
 import { AppHeader } from './components/AppHeader'
 import { CommandCenter } from './components/CommandCenter'
-import { FilterSelect } from './components/Common'
+import { DictionarySelect } from './components/Common'
 import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
 import { skuRows } from './data/mockData'
+import { useDictionaries } from './hooks/useDictionaries'
+import { ALL_DICTIONARY_VALUE } from './services/dictionaryService'
 
 const summaryTabs = [['全部零件', '12,348'], ['待补全', '256'], ['低库存', '318'], ['适配冲突', '72']]
 
 export function App() {
+  const { dictionaries, loading: dictionariesLoading } = useDictionaries()
   const [selectedId, setSelectedId] = useState('95B-867-288-OM8')
   const [summaryTab, setSummaryTab] = useState('全部零件')
-  const [brand, setBrand] = useState('全部')
-  const [category, setCategory] = useState('全部')
-  const [status, setStatus] = useState('全部')
+  const [brand, setBrand] = useState(ALL_DICTIONARY_VALUE)
+  const [category, setCategory] = useState(ALL_DICTIONARY_VALUE)
+  const [status, setStatus] = useState(ALL_DICTIONARY_VALUE)
   const [detailTab, setDetailTab] = useState('基本信息')
   const initialCommand = useMemo(() => {
     const requested = new URLSearchParams(window.location.search).get('state')
@@ -46,9 +49,9 @@ export function App() {
       || (summaryTab === '低库存' && row.status === '低库存')
       || (summaryTab === '待补全' && ['958-807-421', 'A-205-320-01-13'].includes(row.id))
       || (summaryTab === '适配冲突' && row.id === 'A-247-880-12-04')
-    return matchesSummary && (brand === '全部' || row.brand === brand)
-      && (category === '全部' || row.category === category)
-      && (status === '全部' || row.status === status)
+    return matchesSummary && (brand === ALL_DICTIONARY_VALUE || row.brand === brand)
+      && (category === ALL_DICTIONARY_VALUE || row.category === category)
+      && (status === ALL_DICTIONARY_VALUE || row.status === status)
   }), [brand, category, status, summaryTab])
 
   const selectedItem = skuRows.find((row) => row.id === selectedId) ?? skuRows[3]
@@ -68,9 +71,9 @@ export function App() {
 
         <div className="filters-row">
           <div className="filters-left">
-            <FilterSelect label="品牌" value={brand} onChange={setBrand} options={['全部', 'Porsche', 'BMW', 'Mercedes']} />
-            <FilterSelect label="零件大类" value={category} onChange={setCategory} options={['全部', '车身及内饰', '制动系统', '底盘系统', '转向系统', '发动机系统']} />
-            <FilterSelect label="状态" value={status} onChange={setStatus} options={['全部', '在售', '低库存']} />
+            <DictionarySelect dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={brand} onChange={setBrand} disabled={dictionariesLoading} />
+            <DictionarySelect dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={category} onChange={setCategory} disabled={dictionariesLoading} />
+            <DictionarySelect dictionaryCode="sku_status" dictionaries={dictionaries} fallbackLabel="状态" value={status} onChange={setStatus} disabled={dictionariesLoading} />
           </div>
           <div className="filters-right"><button className="secondary-button" type="button"><Funnel size={17} /> 更多筛选</button><button className="secondary-button sort-button" type="button">默认排序 <CaretDown size={13} weight="bold" /></button></div>
         </div>

@@ -15,3 +15,4 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Extract repeated structures such as the application header, section header, tabs, filters, data table, badges, cards, and detail tabs into reusable components.
 - Keep spacing, typography, colors, borders, radii, and interaction states consistent through shared design tokens.
 - When production data or APIs are unavailable, use realistic auto-parts test data matching the visual reference.
+- Selection values such as brand, part category, and SKU status must come from shared configurable dictionaries; do not add page-local hardcoded option arrays.

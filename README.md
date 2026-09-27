@@ -22,3 +22,5 @@ npm run build:server
 ```
 
 部署结构和回滚说明见 [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
+
+品牌、零件大类、SKU 状态等选择项使用共享可配置字典，配置与接口约定见 [docs/DICTIONARIES.md](./docs/DICTIONARIES.md)。
