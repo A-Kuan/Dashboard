@@ -1,7 +1,7 @@
-# Design QA — SKU 管理默认收起状态
+# Design QA — SKU 管理与命令中枢 01–07 状态
 
-- Source visual truth: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/public/references/01-default-collapsed.png`
-- Implementation screenshot: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-default.png`
+- Source visual truth: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/public/references/01-default-collapsed.png` through `07-service-error-retry.png`
+- Implementation screenshots: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-default.png` and `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-02-focus-expanded.png` through `implementation-07-service-error-retry.png`
 - Deployed implementation: `https://121.41.24.42/sku-preview/`
 - Full comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-pass-3.png`
 - Focused top/table comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-top-pass-3.png`
@@ -11,7 +11,20 @@
 - Implementation pixels: 1680 × 945
 - Device scale factor: 1
 - Density normalization: not required; source and implementation use identical pixel dimensions
-- State: desktop, light theme, default search collapsed, fourth SKU selected
+- States: desktop, light theme, default search collapsed, focus expanded, OE/SKU results, VIN fitment results, no-result correction, loading, and service error/retry; fourth SKU selected
+
+## Command-center state evidence
+
+All six additional references were captured and compared at 1680 × 945 with the existing page held constant. The implementation uses one `CommandCenter` component and state-driven content rather than six duplicated screens.
+
+- 02 focus expanded: 620px panel, fixed left edge, dark command input, two-column recent/saved/quick-command layout.
+- 03 OE/SKU results: left edge remains fixed while the panel expands to 735px; exact, replacement/history and related results share a result-row component; the SKU preview occupies the added right rail.
+- 04 VIN fitment results: recognized vehicle summary, five high-match SKUs, one review-required condition and paired next actions.
+- 05 no-result correction: correction suggestion, four alternate search actions, two low-match candidates and keyboard hints.
+- 06 loading: progress bar, preserved command query, cancel action and state-aligned skeleton layout.
+- 07 service error/retry: non-destructive error copy, trace metadata, retry/close actions and fallback commands.
+
+Geometry, panel heights, borders, shadows, state colors, typographic hierarchy, row density and background continuity were checked against each corresponding source image. The first comparison exposed the OE result panel being centered after widening; it was corrected so every state shares the same left anchor and only the preview rail extends right.
 
 ## Full-view comparison evidence
 
@@ -41,6 +54,11 @@ The detail comparison was used to verify the reusable card grid, selected SKU su
 - Verify the default selected row and default collapsed search state.
 - Check browser console and page errors: none.
 - Repeat the complete interaction suite against the deployed HTTPS address: 2 tests passed.
+- Open all six command-center states deterministically and capture visual evidence.
+- Submit an OE/SKU query through loading to exact results.
+- Submit a VIN through loading to recognized-vehicle fitment results.
+- Accept a spelling/number correction suggestion and reach exact results.
+- Retry a simulated search-service failure through loading to recovered results.
 
 ## Comparison history
 
@@ -66,6 +84,17 @@ Fixes: prevented action-label wrapping, refined SKU type size and cell padding, 
 ### Pass 3 — passed
 
 Post-fix full and focused comparisons show no remaining actionable P0, P1 or P2 differences. The only residual variation is platform font antialiasing at small sizes, classified as acceptable rendering variance.
+
+### Pass 4 — 02–07 states, blocked
+
+- P1: The wider OE/SKU results panel was horizontally centered, shifting its left edge away from the shared command-input anchor.
+- P2: State-specific screenshots and transition coverage were not yet part of the regression suite.
+
+Fixes: anchored all command-center states to the same 528px reference edge at the target viewport, allowed the OE preview rail to extend only to the right, and added deterministic screenshots plus VIN/correction/retry transition tests.
+
+### Pass 5 — 01–07 states, passed
+
+All seven visual states render at the reference viewport with no remaining actionable P0, P1 or P2 differences. Nine browser tests cover the default page, six deterministic visual states and the primary transition paths, with zero console or page errors.
 
 ## Findings
 

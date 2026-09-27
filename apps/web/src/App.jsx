@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CaretDown, DotsThree, Funnel, MagnifyingGlass, Plus, X } from '@phosphor-icons/react'
+import { CaretDown, DotsThree, Funnel, Plus, X } from '@phosphor-icons/react'
 import { AppHeader } from './components/AppHeader'
+import { CommandCenter } from './components/CommandCenter'
 import { FilterSelect } from './components/Common'
 import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
@@ -15,18 +16,23 @@ export function App() {
   const [category, setCategory] = useState('全部')
   const [status, setStatus] = useState('全部')
   const [detailTab, setDetailTab] = useState('基本信息')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchValue, setSearchValue] = useState('')
+  const initialCommand = useMemo(() => {
+    const requested = new URLSearchParams(window.location.search).get('state')
+    const presets = { expanded: '', oe: '95B 867 288', vin: 'WP1AA2A25PLB12345', empty: '95B 867 228 OM8', loading: '95B 867 288', error: '95B 867 288' }
+    return requested in presets ? { state: requested, value: presets[requested] } : { state: 'closed', value: '' }
+  }, [])
+  const [commandState, setCommandState] = useState(initialCommand.state)
+  const [searchValue, setSearchValue] = useState(initialCommand.value)
   const [newSkuOpen, setNewSkuOpen] = useState(false)
 
   useEffect(() => {
     const openCommandPanel = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        setSearchOpen(true)
+        setCommandState('expanded')
       }
       if (event.key === 'Escape') {
-        setSearchOpen(false)
+        setCommandState('closed')
         setSearchValue('')
         setNewSkuOpen(false)
       }
@@ -36,7 +42,6 @@ export function App() {
   }, [])
 
   const filteredRows = useMemo(() => skuRows.filter((row) => {
-    const query = searchValue.trim().toLowerCase()
     const matchesSummary = summaryTab === '全部零件'
       || (summaryTab === '低库存' && row.status === '低库存')
       || (summaryTab === '待补全' && ['958-807-421', 'A-205-320-01-13'].includes(row.id))
@@ -44,14 +49,13 @@ export function App() {
     return matchesSummary && (brand === '全部' || row.brand === brand)
       && (category === '全部' || row.category === category)
       && (status === '全部' || row.status === status)
-      && (!query || [row.sku, row.oe, row.name, row.brand, row.category, row.vehicle, row.source].join(' ').toLowerCase().includes(query))
-  }), [brand, category, status, searchValue, summaryTab])
+  }), [brand, category, status, summaryTab])
 
   const selectedItem = skuRows.find((row) => row.id === selectedId) ?? skuRows[3]
 
   return (
     <div className="app-shell">
-      <AppHeader onSearchFocus={() => setSearchOpen(true)} />
+      <AppHeader onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} />
       <main className="workspace">
         <section className="workspace-heading">
           <div><h1>SKU 管理</h1><p>管理汽车零部件SKU，打通 OE、EPC 与库存销售数据</p></div>
@@ -75,10 +79,7 @@ export function App() {
         <DetailPanels item={selectedItem} activeTab={detailTab} onTabChange={setDetailTab} />
       </main>
 
-      {searchOpen ? <div className="search-backdrop" onMouseDown={() => { setSearchOpen(false); setSearchValue('') }}><section className="command-panel" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="command-input"><MagnifyingGlass size={20} /><input autoFocus value={searchValue} onChange={(event) => setSearchValue(event.target.value)} placeholder="搜索 VIN、OE号、SKU、车型，或输入命令…" /><button onClick={() => { setSearchOpen(false); setSearchValue('') }} type="button"><X size={17} /></button></div>
-        <div className="command-results"><strong>快速搜索</strong>{filteredRows.slice(0, 4).map((row) => <button key={row.id} onClick={() => { setSelectedId(row.id); setSearchOpen(false); setSearchValue('') }} type="button"><img src={row.image} alt="" /><span><b>{row.sku}</b><small>{row.name}</small></span></button>)}</div>
-      </section></div> : null}
+      {commandState !== 'closed' ? <CommandCenter state={commandState} value={searchValue} onChange={setSearchValue} onClose={() => { setCommandState('closed'); setSearchValue('') }} onSubmit={(event) => { event.preventDefault(); const query = searchValue.trim(); setCommandState('loading'); window.setTimeout(() => { if (/^WP1/i.test(query)) setCommandState('vin'); else if (/228/.test(query)) setCommandState('empty'); else if (/error/i.test(query)) setCommandState('error'); else setCommandState('oe') }, 650) }} onStateChange={(nextState, nextValue = searchValue) => { setSearchValue(nextValue); setCommandState(nextState); if (nextState === 'loading') window.setTimeout(() => setCommandState('oe'), 650) }} onSelect={(id) => { setSelectedId(id); setCommandState('closed'); setSearchValue('') }} /> : null}
 
       {newSkuOpen ? <div className="modal-backdrop" onMouseDown={() => setNewSkuOpen(false)}><section className="new-sku-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header><h2>新建 SKU</h2><button onClick={() => setNewSkuOpen(false)} type="button"><X size={18} /></button></header><label>SKU 编码<input defaultValue="95B-" /></label><label>中文名称<input placeholder="输入零件名称" /></label><footer><button className="secondary-button" onClick={() => setNewSkuOpen(false)} type="button">取消</button><button className="primary-button" onClick={() => setNewSkuOpen(false)} type="button">创建 SKU</button></footer>
