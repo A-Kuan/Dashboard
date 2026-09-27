@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260927-2a4f52a`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260927-82024b7`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -31,10 +31,10 @@ npm run test:sites
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260927-2a4f52a
+├── current -> releases/20260927-82024b7
 └── releases/
-    ├── 20260927-1ff2633/  # 上一版，可回滚
-    └── 20260927-2a4f52a/
+    ├── 20260927-2a4f52a/  # 上一版，可回滚
+    └── 20260927-82024b7/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -57,6 +57,8 @@ curl -I https://121.41.24.42/sku-preview/assets/<构建文件>
 ```bash
 PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 ```
+
+`20260927-82024b7` 发布后已完成 12 项线上浏览器测试，覆盖 SKU 列表、命令搜索状态、字典模块、新建/编辑路由、OE 与车型维护、EPC 差异确认和 1920 × 1080 布局。
 
 ## 回滚
 
