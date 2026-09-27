@@ -293,6 +293,8 @@ button { color: inherit; }
 .dictionary-table-row > input { width: calc(100% - 12px); height: 34px; padding: 0 10px; color: #30415d; border: 1px solid #dbe3ed; border-radius: 4px; outline: 0; font-size: 12px; }
 .dictionary-table-row > input:focus { border-color: #8db3f9; box-shadow: 0 0 0 3px rgba(7,92,246,.07); }
 .dictionary-table-row > input:disabled { color: #8794a8; background: #f1f4f8; }
+.dictionary-table-row > input.dictionary-system-code { color: #64748b; border-color: #e2e8f0; background: #f5f7fa; cursor: text; }
+.dictionary-table-row > input.dictionary-system-code:focus { border-color: #cbd5e1; box-shadow: 0 0 0 3px rgba(100,116,139,.07); }
 .dictionary-table-row .row-order { grid-template-columns: 26px 26px; gap: 2px; }
 .dictionary-table-row .dictionary-switch { justify-self: start; width: 70px; grid-template-columns: 32px 1fr; grid-template-rows: 22px; gap: 7px; }
 .dictionary-table-row .dictionary-switch em { grid-column: auto; font-size: 10px; text-align: left; }

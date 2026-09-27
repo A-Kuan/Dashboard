@@ -2,6 +2,21 @@ import { assetPath } from '../utils/assetPath'
 
 export const ALL_DICTIONARY_VALUE = '__all__'
 
+export function generateDictionaryValue(dictionaryCode, existingValues = []) {
+  const prefix = dictionaryCode.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'DICTIONARY'
+  const existing = new Set(existingValues)
+  let value
+
+  do {
+    const identifier = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID().replaceAll('-', '').toUpperCase()
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`.toUpperCase()
+    value = `${prefix}_${identifier}`
+  } while (existing.has(value))
+
+  return value
+}
+
 function normalizeDictionary(dictionary, code) {
   if (!dictionary || !Array.isArray(dictionary.items)) {
     throw new Error(`字典 ${code} 缺少 items 数组`)
