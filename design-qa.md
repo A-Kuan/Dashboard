@@ -2,6 +2,7 @@
 
 - Source visual truth: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/public/references/01-default-collapsed.png`
 - Implementation screenshot: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/implementation-default.png`
+- Deployed implementation: `https://121.41.24.42/sku-preview/`
 - Full comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-pass-3.png`
 - Focused top/table comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-top-pass-3.png`
 - Focused detail comparison: `/Users/wenshihuang/Codex-Project/Dashboard/apps/web/qa-artifacts/comparison-detail-pass-3.png`
@@ -39,6 +40,7 @@ The detail comparison was used to verify the reusable card grid, selected SKU su
 - Open and cancel the New SKU dialog.
 - Verify the default selected row and default collapsed search state.
 - Check browser console and page errors: none.
+- Repeat the complete interaction suite against the deployed HTTPS address: 2 tests passed.
 
 ## Comparison history
 

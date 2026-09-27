@@ -6,8 +6,9 @@ test.beforeEach(async ({ page }) => {
     if (message.type() === 'error') errors.push(message.text())
   })
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.goto('/')
+  await page.goto('./')
   await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
+  await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0))
   page.__consoleErrors = errors
 })
 

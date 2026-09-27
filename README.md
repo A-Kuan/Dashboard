@@ -20,3 +20,5 @@ npm run dev
 cd apps/web
 npm run build:server
 ```
+
+部署结构和回滚说明见 [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
