@@ -96,6 +96,17 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
 })
 
+test('restricts identifier fields to Latin codes', async ({ page }) => {
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  for (const label of ['SKU 编码 *', '制造商零件号 *', '主 OE 号 *']) {
+    const input = page.getByLabel(label)
+    await input.fill('AB中文-123/01')
+    await expect(input).toHaveValue('AB-123/01')
+    await expect(input).toHaveAttribute('aria-invalid', 'true')
+  }
+  await expect(page.getByText('仅支持英文字母、数字、空格及 - . _ / # ( ) +')).toHaveCount(3)
+})
+
 test('edits relations, fitment, dictionaries and saves to the API', async ({ page }) => {
   await page.goto('./skus/sku-fixture-1/edit')
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()

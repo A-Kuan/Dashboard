@@ -1,4 +1,5 @@
 const allowedStatuses = new Set(['草稿', '在售', '停产', '待复核'])
+const latinCodePattern = /^[A-Za-z0-9][A-Za-z0-9 ._/#()+-]*$/
 
 function clean(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback
@@ -49,6 +50,16 @@ export function normalizeSkuInput(input = {}) {
   const missing = required.filter(([key]) => !sku[key]).map(([, label]) => label)
   if (missing.length) {
     const error = new Error(`缺少必填字段：${missing.join('、')}`)
+    error.statusCode = 400
+    throw error
+  }
+  const invalidCodes = [
+    ['skuCode', 'SKU 编码'],
+    ['manufacturerPartNumber', '制造商零件号'],
+    ['primaryOe', '主 OE 号'],
+  ].filter(([key]) => !latinCodePattern.test(sku[key])).map(([, label]) => label)
+  if (invalidCodes.length) {
+    const error = new Error(`${invalidCodes.join('、')}仅支持英文字母、数字、空格及常用零件号符号`)
     error.statusCode = 400
     throw error
   }

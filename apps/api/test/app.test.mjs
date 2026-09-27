@@ -38,3 +38,13 @@ test('rejects missing fields and duplicate SKU codes', async () => {
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })).statusCode, 409)
   await app.close()
 })
+
+test('rejects Chinese characters in identifier fields', async () => {
+  const app = buildApp({ repository: createRepository(), logger: false })
+  for (const key of ['skuCode', 'manufacturerPartNumber', 'primaryOe']) {
+    const response = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: { ...input, [key]: '零件-001' } })
+    assert.equal(response.statusCode, 400)
+    assert.match(response.json().message, /仅支持英文字母/)
+  }
+  await app.close()
+})

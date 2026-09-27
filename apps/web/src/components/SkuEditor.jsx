@@ -15,6 +15,13 @@ const blankForm = {
   createdAt: '', updatedAt: '', updatedBy: '张伟',
 }
 
+const codeFieldHint = '仅支持英文字母、数字、空格及 - . _ / # ( ) +'
+const allowedCodeCharacter = /[A-Za-z0-9 ._/#()+-]/g
+
+function sanitizeCodeValue(value) {
+  return value.match(allowedCodeCharacter)?.join('') || ''
+}
+
 function formatDate(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
@@ -24,8 +31,9 @@ function EditorField({ label, required = false, children }) {
   return <label className="editor-field"><span>{label}{required ? <b aria-hidden="true"> *</b> : null}</span>{children}</label>
 }
 
-function TextField({ label, value, onChange, required, readOnly = false, valid = false, onBlur }) {
-  return <EditorField label={label} required={required}><div className={valid ? 'editor-input valid' : 'editor-input'}><input value={value} onBlur={onBlur} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} />{valid ? <CheckCircle size={16} weight="fill" /> : null}</div></EditorField>
+function TextField({ label, value, onChange, required, readOnly = false, valid = false, onBlur, error = '', codeInput = false }) {
+  const className = ['editor-input', valid ? 'valid' : '', error ? 'invalid' : ''].filter(Boolean).join(' ')
+  return <EditorField label={label} required={required}><div className={className}><input aria-invalid={Boolean(error)} aria-describedby={error ? `${label}-input-error` : undefined} autoCapitalize={codeInput ? 'off' : undefined} lang={codeInput ? 'en' : undefined} spellCheck={codeInput ? false : undefined} value={value} onBlur={onBlur} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} />{valid ? <CheckCircle size={16} weight="fill" /> : null}</div>{error ? <small className="editor-field-error" id={`${label}-input-error`} role="alert">{error}</small> : null}</EditorField>
 }
 
 function SelectField({ label, value, onChange, options, required, status = false }) {
@@ -85,9 +93,15 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(mode === 'edit')
   const [codeAvailable, setCodeAvailable] = useState(null)
+  const [codeFieldErrors, setCodeFieldErrors] = useState({})
   const [zoomOpen, setZoomOpen] = useState(false)
   const imageInputRef = useRef(null)
   const setValue = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const setCodeValue = (key, value) => {
+    const sanitized = sanitizeCodeValue(value)
+    setValue(key, sanitized)
+    setCodeFieldErrors((current) => ({ ...current, [key]: sanitized === value ? '' : codeFieldHint }))
+  }
 
   useEffect(() => {
     if (mode !== 'edit' || !skuId) return
@@ -139,13 +153,13 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
     <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{form.brand || '—'}</b><i />零件大类　<b>{form.category || '—'}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '人工录入'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
-      <TextField label="SKU 编码" value={form.skuCode} onChange={(value) => { setValue('skuCode', value); setCodeAvailable(null) }} onBlur={checkCode} required valid={codeAvailable === true} />
+      <TextField codeInput error={codeFieldErrors.skuCode} label="SKU 编码" value={form.skuCode} onChange={(value) => { setCodeValue('skuCode', value); setCodeAvailable(null) }} onBlur={checkCode} required valid={codeAvailable === true} />
       <TextField label="中文名称" value={form.chineseName} onChange={(value) => setValue('chineseName', value)} required />
       <EditorField label="品牌" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={form.brand} onChange={(value) => setValue('brand', value)} disabled={dictionariesLoading} /></EditorField>
       <EditorField label="零件大类" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={form.category} onChange={(value) => setValue('category', value)} disabled={dictionariesLoading} /></EditorField>
       <TextField label="零件小类" value={form.subcategory} onChange={(value) => setValue('subcategory', value)} required />
-      <TextField label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setValue('manufacturerPartNumber', value)} required />
-      <TextField label="主 OE 号" value={form.primaryOe} onChange={(value) => setValue('primaryOe', value)} required />
+      <TextField codeInput error={codeFieldErrors.manufacturerPartNumber} label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setCodeValue('manufacturerPartNumber', value)} required />
+      <TextField codeInput error={codeFieldErrors.primaryOe} label="主 OE 号" value={form.primaryOe} onChange={(value) => setCodeValue('primaryOe', value)} required />
       <SelectField label="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} options={['件', '套', '盒', '支']} required />
       <SelectField label="生命周期状态" value={form.lifecycleStatus} onChange={(value) => setValue('lifecycleStatus', value)} options={['草稿', '待复核', '在售', '停产']} required status />
       <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />

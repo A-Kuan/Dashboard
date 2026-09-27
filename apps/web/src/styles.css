@@ -513,6 +513,8 @@ button { color: inherit; }
 .editor-fields { padding-top: 11px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px 12px; }
 .editor-field { min-width: 0; display: grid; gap: 5px; color: #52637e; font-size: 10.5px; font-weight: 600; }
 .editor-field > span b { color: #e34044; }
+.editor-field-error { color: #d92d20; font-size: 9.5px; font-weight: 500; line-height: 1.35; }
+.editor-input.invalid input { border-color: #f04438; box-shadow: 0 0 0 2px rgb(240 68 56 / 10%); }
 .editor-input, .editor-static-select, .form-dictionary { width: 100%; height: 35px; }
 .editor-input { position: relative; display: flex; align-items: center; }
 .editor-input input { width: 100%; height: 100%; padding: 0 10px; color: #293c59; border: 1px solid #d8e1ed; border-radius: 4px; background: #fff; outline: 0; font-size: 11.5px; }
