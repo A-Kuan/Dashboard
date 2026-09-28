@@ -35,6 +35,28 @@ function createDictionaryRepository() {
   }
 }
 
+function createVehicleRepository() {
+  const items = []
+  return {
+    list: async () => items,
+    get: async (id) => items.find((item) => item.id === id || item.vehicleCode === id) || null,
+    codeExists: async (code, exceptId) => items.some((item) => item.vehicleCode === code && item.id !== exceptId),
+    create: async (input, actor) => { const item = { id: 'vehicle-1', ...input, updatedBy: actor, version: 1, lifecycleStatus: '草稿', changeHistory: [] }; items.push(item); return item },
+    update: async (id, input, actor, action = '保存车型资料') => {
+      const index = items.findIndex((item) => item.id === id)
+      if (items[index].version !== input.version) {
+        const error = new Error('该车型已被其他操作更新，请刷新后再编辑')
+        error.statusCode = 409
+        error.errorCode = 'VEHICLE_VERSION_CONFLICT'
+        throw error
+      }
+      items[index] = { ...items[index], ...input, updatedBy: actor, version: items[index].version + 1, changeHistory: [{ action }, ...(items[index].changeHistory || [])] }
+      return items[index]
+    },
+    autoMatch: async (id) => items.find((item) => item.id === id),
+  }
+}
+
 const input = {
   skuCode: 'TEST-001', chineseName: '测试零件', brand: 'Porsche', category: '车身及内饰',
   subcategory: '内饰件', manufacturerPartNumber: 'TEST 001', primaryOe: 'TEST 001', unit: '件',
@@ -143,4 +165,42 @@ test('provides maintainable unit dictionary defaults', () => {
     ['data_source', 'oe_type', 'oe_relation', 'confidence_level', 'body_type', 'verification_status'].filter((code) => defaultDictionaries.dictionaries[code]),
     ['data_source', 'oe_type', 'oe_relation', 'confidence_level', 'body_type', 'verification_status'],
   )
+})
+
+test('creates, updates, publishes and auto-matches a vehicle aggregate', async () => {
+  const app = buildApp({ repository: createRepository(), vehicleRepository: createVehicleRepository(), logger: false })
+  const vehicle = {
+    vehicleCode: 'POR-MACAN-95B-20T-2014-2018', brand: '保时捷', series: 'Macan', platform: '95B',
+    displayName: '保时捷 Macan 95B', displacement: '2.0L', engineCode: 'CYP', transmissionCode: 'A5B03',
+    yearStart: 2014, yearEnd: 2018, sampleVin: 'WP1AA2951HLB19468', dataSource: 'Porsche EPC',
+    requirements: [{ itemName: '机油格', partNumber: '95811556201', quantity: 1 }],
+    packages: [{ packageCode: 'MINOR', name: '小保养套餐', items: [] }],
+  }
+  const created = await app.inject({ method: 'POST', url: '/api/v1/vehicles', payload: vehicle })
+  assert.equal(created.statusCode, 201)
+  assert.equal(created.json().vehicleCode, vehicle.vehicleCode)
+  assert.equal((await app.inject('/api/v1/vehicles')).json().items.length, 1)
+  assert.equal((await app.inject('/api/v1/vehicles/vehicle-1')).json().sampleVin, vehicle.sampleVin)
+  const updated = await app.inject({ method: 'PUT', url: '/api/v1/vehicles/vehicle-1', payload: { ...created.json(), market: '中国' } })
+  assert.equal(updated.statusCode, 200)
+  assert.equal(updated.json().market, '中国')
+  const matched = await app.inject({ method: 'POST', url: '/api/v1/vehicles/vehicle-1/auto-match' })
+  assert.equal(matched.statusCode, 200)
+  const published = await app.inject({ method: 'POST', url: '/api/v1/vehicles/vehicle-1/publish', payload: updated.json() })
+  assert.equal(published.statusCode, 200)
+  assert.equal(published.json().lifecycleStatus, '已发布')
+  await app.close()
+})
+
+test('validates VIN, publish requirements and stale vehicle versions', async () => {
+  const app = buildApp({ repository: createRepository(), vehicleRepository: createVehicleRepository(), logger: false })
+  const base = { vehicleCode: 'TEST-VEHICLE', brand: '测试品牌', series: '测试车系', platform: 'T1', displayName: '测试车型' }
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/vehicles', payload: { ...base, sampleVin: 'INVALID' } })).statusCode, 400)
+  const created = await app.inject({ method: 'POST', url: '/api/v1/vehicles', payload: base })
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/vehicles/vehicle-1/publish', payload: created.json() })).statusCode, 422)
+  await app.inject({ method: 'PUT', url: '/api/v1/vehicles/vehicle-1', payload: { ...created.json(), displayName: '新名称' } })
+  const stale = await app.inject({ method: 'PUT', url: '/api/v1/vehicles/vehicle-1', payload: { ...created.json(), displayName: '过期覆盖' } })
+  assert.equal(stale.statusCode, 409)
+  assert.equal(stale.json().error, 'VEHICLE_VERSION_CONFLICT')
+  await app.close()
 })
