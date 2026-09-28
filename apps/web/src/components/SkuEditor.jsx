@@ -55,21 +55,20 @@ function DictionaryCell({ dictionaryCode, dictionaries, value, onChange, label, 
   </select>
 }
 
-function OeRelations({ rows, setRows, dictionaries, dictionariesLoading, primaryOe, skuBrand, dataSource }) {
+function OeRelations({ rows, setRows, dictionaries, dictionariesLoading, primaryOe, dataSource }) {
   const update = (index, key, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row))
   const updateType = (index, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, type: value, relation: value === '主 OE' ? '' : row.relation } : row))
   const hasIncompleteRow = rows.some((row) => !row.oeNumber?.trim())
   const addOe = () => setRows((current) => [...current, {
     type: current.length ? '替代号' : '主 OE',
     oeNumber: current.length ? '' : primaryOe,
-    brand: skuBrand,
     relation: '',
     source: dataSource,
     confidence: '待核验',
   }])
   return <section className="editor-section" id="oe-relations">
     <SectionHeading title="OE 与替代关系" description="维护该零件的 OE 号及替代关系，保存后同步写入数据库" action={<div className="section-actions"><button disabled={hasIncompleteRow} onClick={addOe} title={hasIncompleteRow ? '请先填写当前空白行的 OE 编号' : undefined} type="button"><Plus size={16} />添加 OE 号</button></div>} />
-    {rows.length ? <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>品牌</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-oe'}-${index}`}><td><DictionaryCell dictionaryCode="oe_type" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 类型 ${index + 1}`} value={row.type} onChange={(value) => updateType(index, value)} /></td><td><EditableCell label={`OE 编号 ${index + 1}`} value={row.oeNumber} onChange={(value) => update(index, 'oeNumber', value)} /></td><td><DictionaryCell dictionaryCode="sku_brand" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 品牌 ${index + 1}`} value={row.brand} onChange={(value) => update(index, 'brand', value)} /></td><td><DictionaryCell dictionaryCode="oe_relation" dictionaries={dictionaries} disabled={dictionariesLoading || row.type === '主 OE'} label={`OE 关系 ${index + 1}`} value={row.relation} onChange={(value) => update(index, 'relation', value)} /></td><td><DictionaryCell dictionaryCode="data_source" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><DictionaryCell dictionaryCode="confidence_level" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 可信度 ${index + 1}`} value={row.confidence} onChange={(value) => update(index, 'confidence', value)} /></td><td><button aria-label={`删除第 ${index + 1} 条 OE 记录`} className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加 OE 或替代关系</div>}
+    {rows.length ? <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-oe'}-${index}`}><td><DictionaryCell dictionaryCode="oe_type" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 类型 ${index + 1}`} value={row.type} onChange={(value) => updateType(index, value)} /></td><td><EditableCell label={`OE 编号 ${index + 1}`} value={row.oeNumber} onChange={(value) => update(index, 'oeNumber', value)} /></td><td><DictionaryCell dictionaryCode="oe_relation" dictionaries={dictionaries} disabled={dictionariesLoading || row.type === '主 OE'} label={`OE 关系 ${index + 1}`} value={row.relation} onChange={(value) => update(index, 'relation', value)} /></td><td><DictionaryCell dictionaryCode="data_source" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><DictionaryCell dictionaryCode="confidence_level" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 可信度 ${index + 1}`} value={row.confidence} onChange={(value) => update(index, 'confidence', value)} /></td><td><button aria-label={`删除第 ${index + 1} 条 OE 记录`} className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加 OE 或替代关系</div>}
   </section>
 }
 
