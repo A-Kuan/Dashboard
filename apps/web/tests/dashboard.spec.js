@@ -64,6 +64,7 @@ async function installMockDictionaryApi(page) {
     dictionaries: {
       sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'SKU_BRAND_PORSCHE_FACTORY', label: '保时捷原厂', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
       part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
+      unit: { label: '计量单位', items: [{ value: '件', label: '件', sort: 0, enabled: true }, { value: '套', label: '套', sort: 10, enabled: true }, { value: '盒', label: '盒', sort: 20, enabled: true }, { value: '支', label: '支', sort: 30, enabled: true }] },
       sku_status: { label: '状态', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '草稿', label: '草稿', sort: 10, enabled: true }, { value: '在售', label: '在售', sort: 20, enabled: true }] },
     },
   }
@@ -118,7 +119,7 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await expect(page).toHaveURL(/\/skus\/new$/)
   await expect(page.getByRole('combobox', { name: '品牌：请选择品牌' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: '零件大类：请选择零件大类' })).toBeVisible()
-  await expect(page.getByLabel('计量单位 *')).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: '计量单位：请选择计量单位' })).toBeVisible()
   await expect(page.getByLabel('数据来源 *')).toHaveValue('')
   await page.getByLabel('SKU 编码 *').fill('REAL-TEST-001')
   await page.getByLabel('中文名称 *').fill('流程测试零件')
@@ -131,7 +132,8 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await expect(page.getByLabel('零件小类 *')).toHaveCount(0)
   await expect(page.getByLabel('制造商零件号 *')).toHaveCount(0)
   await page.getByLabel('主 OE 号 *').fill('REAL TEST 001')
-  await page.getByLabel('计量单位 *').selectOption('件')
+  await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
+  await page.getByRole('option', { name: '件', exact: true }).click()
   await page.getByLabel('数据来源 *').selectOption('人工录入')
   await page.getByRole('button', { name: '添加 OE 号' }).click()
   await page.getByLabel('OE 编号 1').fill('REAL TEST 001')
@@ -220,7 +222,8 @@ test('publish stays disabled until required relationships are complete', async (
   await page.getByRole('combobox', { name: '零件大类：请选择零件大类' }).click()
   await page.getByRole('option', { name: '车身及内饰' }).click()
   await page.getByLabel('主 OE 号 *').fill('PUBLISH OE 001')
-  await page.getByLabel('计量单位 *').selectOption('件')
+  await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
+  await page.getByRole('option', { name: '件', exact: true }).click()
   await page.getByLabel('数据来源 *').selectOption('人工录入')
   await page.getByRole('button', { name: '创建草稿' }).click()
   await page.getByRole('heading', { name: '编辑 SKU' }).waitFor()
@@ -245,6 +248,20 @@ test('configures dictionaries and persists the result', async ({ page }) => {
   await page.reload()
   await expect(page.getByLabel('测试品牌（已修改） 系统编码')).toHaveValue(generatedCode)
   await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-module-1920.png', fullPage: false })
+
+  await page.getByRole('button', { name: /^计量单位/ }).click()
+  await expect(page.getByRole('heading', { name: '计量单位' })).toBeVisible()
+  await page.getByRole('button', { name: '新增选项' }).click()
+  const unitRow = page.locator('.dictionary-table-row').last()
+  await unitRow.locator('input').nth(0).fill('箱')
+  await expect(unitRow.getByLabel('箱 系统编码')).toHaveValue(/^UNIT_[0-9A-Z]+$/)
+  await page.getByRole('button', { name: '保存配置' }).click()
+  await expect(page.getByText('配置已保存')).toBeVisible()
+
+  await page.goto('./skus/new')
+  const unitDictionary = page.locator('.editor-field [data-dictionary="unit"]')
+  await unitDictionary.getByRole('combobox').click()
+  await expect(unitDictionary.getByRole('option', { name: '箱', exact: true })).toBeVisible()
 })
 
 test('renders the persisted editor at 1920 by 1080', async ({ page }) => {

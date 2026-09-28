@@ -14,7 +14,7 @@ export function normalizeSkuInput(input = {}) {
     subcategory: clean(input.subcategory),
     manufacturerPartNumber: clean(input.manufacturerPartNumber),
     primaryOe: clean(input.primaryOe),
-    unit: clean(input.unit, '件'),
+    unit: clean(input.unit),
     lifecycleStatus: allowedStatuses.has(input.lifecycleStatus) ? input.lifecycleStatus : '草稿',
     barcode: clean(input.barcode),
     imageUrl: clean(input.imageUrl),
@@ -45,7 +45,7 @@ export function normalizeSkuInput(input = {}) {
 
   const required = [
     ['skuCode', 'SKU 编码'], ['chineseName', '中文名称'], ['brand', '品牌'],
-    ['category', '零件大类'], ['primaryOe', '主 OE 号'],
+    ['category', '零件大类'], ['primaryOe', '主 OE 号'], ['unit', '计量单位'],
   ]
   const missing = required.filter(([key]) => !sku[key]).map(([, label]) => label)
   if (missing.length) {

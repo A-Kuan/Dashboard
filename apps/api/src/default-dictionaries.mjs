@@ -21,6 +21,15 @@ export const defaultDictionaries = {
         { value: '发动机系统', label: '发动机系统', sort: 50, enabled: true },
       ],
     },
+    unit: {
+      label: '计量单位',
+      items: [
+        { value: '件', label: '件', sort: 0, enabled: true },
+        { value: '套', label: '套', sort: 10, enabled: true },
+        { value: '盒', label: '盒', sort: 20, enabled: true },
+        { value: '支', label: '支', sort: 30, enabled: true },
+      ],
+    },
     sku_status: {
       label: '状态',
       items: [

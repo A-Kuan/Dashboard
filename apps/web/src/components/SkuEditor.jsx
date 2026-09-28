@@ -183,7 +183,7 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       <TextField label="零件小类" value={form.subcategory} onChange={(value) => setValue('subcategory', value)} />
       <TextField codeInput error={codeFieldErrors.manufacturerPartNumber} label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setCodeValue('manufacturerPartNumber', value)} />
       <TextField codeInput error={codeFieldErrors.primaryOe} label="主 OE 号" value={form.primaryOe} onChange={(value) => setCodeValue('primaryOe', value)} required />
-      <SelectField label="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} options={['件', '套', '盒', '支']} required />
+      <EditorField label="计量单位" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="unit" dictionaries={dictionaries} fallbackLabel="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} disabled={dictionariesLoading} /></EditorField>
       <TextField label="生命周期状态" value={form.lifecycleStatus} readOnly required />
       <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />
       <SelectField label="数据来源" value={form.dataSource} onChange={(value) => setValue('dataSource', value)} options={['人工录入', 'EPC 导入', '供应商资料', '历史系统']} required />

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildApp } from '../src/app.mjs'
+import { defaultDictionaries } from '../src/default-dictionaries.mjs'
 
 function createRepository() {
   const items = []
@@ -56,6 +57,9 @@ test('creates, lists, reads and updates a SKU', async () => {
 test('rejects missing fields and duplicate SKU codes', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/skus', payload: {} })).statusCode, 400)
+  const missingUnit = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: { ...input, unit: '' } })
+  assert.equal(missingUnit.statusCode, 400)
+  assert.match(missingUnit.json().message, /计量单位/)
   await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })).statusCode, 409)
   await app.close()
@@ -129,4 +133,8 @@ test('reads, saves and resets shared dictionaries', async () => {
   const reset = await app.inject({ method: 'POST', url: '/api/v1/dictionaries/reset' })
   assert.equal(reset.json().dictionaries.sku_brand.items.length, 1)
   await app.close()
+})
+
+test('provides maintainable unit dictionary defaults', () => {
+  assert.deepEqual(defaultDictionaries.dictionaries.unit.items.map((item) => item.label), ['件', '套', '盒', '支'])
 })
