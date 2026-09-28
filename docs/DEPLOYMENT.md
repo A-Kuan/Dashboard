@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-85a9e5e`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-83ec03f`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -60,10 +60,10 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260928-85a9e5e
+├── current -> releases/20260928-83ec03f
 └── releases/
-    ├── 20260928-be0cb0b/  # 上一业务版，可回滚
-    └── 20260928-85a9e5e/
+    ├── 20260928-85a9e5e/  # 上一业务版，可回滚
+    └── 20260928-83ec03f/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -100,6 +100,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260928-be0cb0b` 发布后已在线验证生命周期停产：在售 SKU 编辑页显示“停产 SKU”，确认后状态变为停产、版本递增到 v3、变更记录写入“停产 SKU”，主操作变为“重新发布 SKU”。验收 SKU 已精确删除，SKU 与变更记录表均恢复为 0 条。
 
 `20260928-85a9e5e` 前端发布后已在线验证“更多筛选”弹层、数据来源与适配状态筛选，以及最近更新、SKU 编码、中文名称、状态四种排序入口。筛选结果会同步更新当前详情选择；线上空库状态保持不变。
+
+`20260928-83ec03f` 前端发布后已在线验证字典显示映射：SKU 数据继续保存稳定品牌编码，列表、命令搜索、详情和编辑页摘要统一显示字典名称；新建页从服务端字典选择首个有效品牌与零件大类，不再保存旧的硬编码默认值。使用线上“保时捷原厂”选项检查时，页面文本未出现 `SKU_BRAND_` 编码。
 
 ## 回滚
 
