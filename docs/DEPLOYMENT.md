@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-19486b5`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-a2668db`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -64,10 +64,10 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260928-19486b5
+├── current -> releases/20260928-a2668db
 └── releases/
-    ├── 20260928-7b947fd/  # 上一业务版，可回滚
-    └── 20260928-19486b5/
+    ├── 20260928-19486b5/  # 上一业务版，可回滚
+    └── 20260928-a2668db/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -116,6 +116,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260928-7b947fd` 发布后已在线验证：缺少商品图片时，列表、详情和命令搜索统一显示空状态，不再回退到演示零件图；缺少 EPC 图组、数据来源、验证状态和更新时间时不再虚构内容；页头移除固定用户头像与通知数量，新审计记录在身份系统接入前使用“系统操作员”。发布前数据库已备份，线上原有 1 条用户 SKU 的 ID、数据来源及记录数量均保持不变。
 
 `20260928-19486b5` 前端发布后已在线验证：SKU 编辑页在已有商品图时显示“更换图片”和“删除图片”，删除需确认并在保存 SKU 后持久化；无图时仅显示“上传图片”。本次仅切换前端静态版本，线上 1 条用户 SKU 及其图片均未被修改。
+
+`20260928-a2668db` 前端发布后已在线验证：字典选项超出编辑区高度后，表头保持可见、选项表体独立滚动；连续新增 12 项时会自动滚动并聚焦最后一行，保存配置按钮保持可见。本次未保存验收用临时选项，线上已有 2 条用户 SKU 均未修改。
 
 ## 回滚
 
