@@ -6,6 +6,14 @@ function clean(value, fallback = '') {
 }
 
 export function normalizeSkuInput(input = {}) {
+  const legacyImageUrl = clean(input.imageUrl)
+  const submittedImages = Array.isArray(input.imageUrls) ? input.imageUrls.map((value) => clean(value)).filter(Boolean) : []
+  const imageUrls = [...new Set(submittedImages.length ? submittedImages : legacyImageUrl ? [legacyImageUrl] : [])]
+  if (imageUrls.length > 8) {
+    const error = new Error('SKU 图片最多上传 8 张')
+    error.statusCode = 400
+    throw error
+  }
   const sku = {
     skuCode: clean(input.skuCode),
     chineseName: clean(input.chineseName),
@@ -17,7 +25,8 @@ export function normalizeSkuInput(input = {}) {
     unit: clean(input.unit),
     lifecycleStatus: allowedStatuses.has(input.lifecycleStatus) ? input.lifecycleStatus : '草稿',
     barcode: clean(input.barcode),
-    imageUrl: clean(input.imageUrl),
+    imageUrl: imageUrls[0] || '',
+    imageUrls,
     dataSource: clean(input.dataSource),
     sourceEvidence: input.sourceEvidence && typeof input.sourceEvidence === 'object' ? input.sourceEvidence : null,
     conflictResolution: input.conflictResolution && typeof input.conflictResolution === 'object' ? input.conflictResolution : null,
