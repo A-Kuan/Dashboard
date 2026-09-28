@@ -92,7 +92,7 @@ const fixtureVehicle = {
   imageUrl: '/assets/parts/macan-95b.png', sourceEvidence: { title: 'Porsche EPC 原始记录', diagramUrl: '/assets/parts/epc-diagram.png', fitment: 'Macan (95B), 2014–2018' },
   version: 2, updatedAt: '2026-09-28T06:20:00.000Z', updatedBy: '张伟', requirementCount: 6, linkedRequirementCount: 5,
   requirements: [
-    { id: 'req-oil', category: '保养滤芯', itemName: '机油格', position: '发动机', quantity: 1, partNumber: '95811556201', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-oil', skuId: 'sku-oil', role: '首选', sku: { id: 'sku-oil', skuCode: '958-115-562-01', chineseName: '机油滤清器', lifecycleStatus: '在售' } }] },
+    { id: 'req-oil', category: '保养滤芯', itemName: '机油格', position: '发动机', quantity: 1, partNumber: '95811556201', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-oil', skuId: 'sku-oil', role: '首选', sku: { id: 'sku-oil', skuCode: '958-115-562-01', chineseName: '机油滤清器', lifecycleStatus: '在售' } }, { id: 'candidate-oil-backup', skuId: 'sku-oil-backup', role: '备选', sku: { id: 'sku-oil-backup', skuCode: 'ALT-958-115-562', chineseName: '机油滤清器备选', lifecycleStatus: '在售' } }] },
     { id: 'req-seal', category: '保养滤芯', itemName: '机油格密封圈', position: '发动机', quantity: 1, partNumber: '', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '待验证', candidates: [] },
     { id: 'req-air', category: '保养滤芯', itemName: '空气格', position: '进气系统', quantity: 1, partNumber: '95B129620A', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-air', skuId: 'sku-air', role: '首选', sku: { id: 'sku-air', skuCode: '95B-129-620-A', chineseName: '空气滤清器', lifecycleStatus: '在售' } }] },
     { id: 'req-cabin-in', category: '空调系统', itemName: '空调格内', position: '内', quantity: 1, partNumber: '8K0819439B', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-cabin-in', skuId: 'sku-cabin-in', role: '首选', sku: { id: 'sku-cabin-in', skuCode: '8K0-819-439-B', chineseName: '空调滤清器（内）', lifecycleStatus: '在售' } }] },
@@ -150,6 +150,9 @@ test('vehicle library supports parts, packages and quote-ready selection without
   await expect(page.getByRole('heading', { name: '小保养套餐' })).toBeVisible()
   await page.getByRole('button', { name: '快速选品' }).last().click()
   await expect(page.getByLabel('待报价选品')).toBeVisible()
+  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil')
+  await page.getByLabel('机油格 候选 SKU').selectOption('candidate-oil-backup')
+  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil-backup')
   await expect(page.getByLabel('待报价选品')).toContainText('本步只整理待报价商品，不生成报价单')
   await expect(page.getByRole('button', { name: '生成报价单' })).toHaveCount(0)
   await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-selection.png', fullPage: false })

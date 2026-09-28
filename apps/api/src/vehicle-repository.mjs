@@ -162,13 +162,24 @@ export function createVehicleRepository(pool) {
     },
     async autoMatch(id, actor = '系统操作员') {
       const inserted = await withTransaction(pool, async (client) => {
-        const matches = await client.query(`INSERT INTO vehicle_part_candidate (id,requirement_id,sku_id,part_number,role,source,verification_status,sort_order)
-          SELECT concat('candidate-',md5(r.id || ':' || s.id)),r.id,s.id,s.primary_oe,'首选','SKU 主数据','待验证',0
+        const matches = await client.query(`WITH ranked_matches AS (
+          SELECT r.id AS requirement_id,s.id AS sku_id,s.primary_oe,
+            row_number() OVER (PARTITION BY r.id ORDER BY (regexp_replace(upper(s.primary_oe),'[^A-Z0-9]','','g')=regexp_replace(upper(r.part_number),'[^A-Z0-9]','','g')) DESC,s.updated_at DESC,s.id) AS candidate_rank
           FROM vehicle_part_requirement r JOIN sku s ON
             regexp_replace(upper(s.primary_oe),'[^A-Z0-9]','','g')=regexp_replace(upper(r.part_number),'[^A-Z0-9]','','g')
             OR EXISTS (SELECT 1 FROM sku_oe_relation oe WHERE oe.sku_id=s.id AND regexp_replace(upper(oe.oe_number),'[^A-Z0-9]','','g')=regexp_replace(upper(r.part_number),'[^A-Z0-9]','','g'))
-          WHERE r.vehicle_id=$1 AND r.part_number<>'' ON CONFLICT (requirement_id,sku_id) DO NOTHING RETURNING id`, [id])
+          WHERE r.vehicle_id=$1 AND r.part_number<>''
+        ) INSERT INTO vehicle_part_candidate (id,requirement_id,sku_id,part_number,role,source,verification_status,sort_order)
+          SELECT concat('candidate-',md5(requirement_id || ':' || sku_id)),requirement_id,sku_id,primary_oe,
+            CASE WHEN candidate_rank=1 THEN '首选' ELSE '备选' END,'SKU 主数据','待验证',candidate_rank-1
+          FROM ranked_matches ON CONFLICT (requirement_id,sku_id) DO NOTHING RETURNING id`, [id])
         if (!matches.rowCount) return 0
+        await client.query(`WITH ranked_candidates AS (
+          SELECT c.id,row_number() OVER (PARTITION BY c.requirement_id ORDER BY (c.role='首选') DESC,c.sort_order,s.updated_at DESC,c.id) AS candidate_rank
+          FROM vehicle_part_candidate c LEFT JOIN sku s ON s.id=c.sku_id
+          WHERE c.requirement_id IN (SELECT id FROM vehicle_part_requirement WHERE vehicle_id=$1)
+        ) UPDATE vehicle_part_candidate c SET role=CASE WHEN ranked_candidates.candidate_rank=1 THEN '首选' ELSE '备选' END,
+          sort_order=ranked_candidates.candidate_rank-1 FROM ranked_candidates WHERE c.id=ranked_candidates.id`, [id])
         const updated = await client.query('UPDATE vehicle_variant SET version=version+1,updated_by=$2,updated_at=now() WHERE id=$1 RETURNING version', [id, actor])
         await client.query(`INSERT INTO vehicle_change_log (id,vehicle_id,version,action,details,changed_by)
           VALUES ($1,$2,$3,'自动匹配 SKU',$4::jsonb,$5)`, [randomUUID(), id, updated.rows[0].version, JSON.stringify({ matchedCandidateCount: matches.rowCount }), actor])
