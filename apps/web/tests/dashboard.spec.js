@@ -84,6 +84,44 @@ async function installMockDictionaryApi(page) {
   })
 }
 
+const fixtureVehicle = {
+  id: 'vehicle-95b-20t', vehicleCode: 'POR-MACAN-95B-20T-2014-2018', brand: '保时捷', series: 'Macan', platform: '95B',
+  displayName: '保时捷 Macan 95B', displacement: '2.0L', engineCode: 'CYP', transmissionCode: 'A5B03',
+  yearStart: 2014, yearEnd: 2018, market: '中国市场', bodyType: 'SUV', sampleVin: 'WP1AA2951HLB19468',
+  productionDate: '2016-09-08', dataSource: 'Porsche EPC', verificationStatus: '已验证', lifecycleStatus: '已发布',
+  imageUrl: '/assets/parts/macan-95b.png', sourceEvidence: { title: 'Porsche EPC 原始记录', diagramUrl: '/assets/parts/epc-diagram.png', fitment: 'Macan (95B), 2014–2018' },
+  version: 2, updatedAt: '2026-09-28T06:20:00.000Z', updatedBy: '张伟', requirementCount: 6, linkedRequirementCount: 5,
+  requirements: [
+    { id: 'req-oil', category: '保养滤芯', itemName: '机油格', position: '发动机', quantity: 1, partNumber: '95811556201', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-oil', skuId: 'sku-oil', role: '首选', sku: { id: 'sku-oil', skuCode: '958-115-562-01', chineseName: '机油滤清器', lifecycleStatus: '在售' } }, { id: 'candidate-oil-backup', skuId: 'sku-oil-backup', role: '备选', sku: { id: 'sku-oil-backup', skuCode: 'ALT-958-115-562', chineseName: '机油滤清器备选', lifecycleStatus: '在售' } }] },
+    { id: 'req-seal', category: '保养滤芯', itemName: '机油格密封圈', position: '发动机', quantity: 1, partNumber: '', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '待验证', candidates: [] },
+    { id: 'req-air', category: '保养滤芯', itemName: '空气格', position: '进气系统', quantity: 1, partNumber: '95B129620A', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-air', skuId: 'sku-air', role: '首选', sku: { id: 'sku-air', skuCode: '95B-129-620-A', chineseName: '空气滤清器', lifecycleStatus: '在售' } }] },
+    { id: 'req-cabin-in', category: '空调系统', itemName: '空调格内', position: '内', quantity: 1, partNumber: '8K0819439B', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-cabin-in', skuId: 'sku-cabin-in', role: '首选', sku: { id: 'sku-cabin-in', skuCode: '8K0-819-439-B', chineseName: '空调滤清器（内）', lifecycleStatus: '在售' } }] },
+    { id: 'req-cabin-out', category: '空调系统', itemName: '空调格外', position: '外', quantity: 1, partNumber: 'PAC819441', partNumberType: '品牌号', source: '供应商资料', verificationStatus: '已验证', candidates: [{ id: 'candidate-cabin-out', skuId: 'sku-cabin-out', role: '首选', sku: { id: 'sku-cabin-out', skuCode: 'PAC-819-441', chineseName: '空调滤清器（外）', lifecycleStatus: '在售' } }] },
+    { id: 'req-brake', category: '制动系统', itemName: '前刹车片', position: '前', quantity: 1, partNumber: 'PAC698151', partNumberType: '品牌号', source: '供应商资料', verificationStatus: '已验证', candidates: [{ id: 'candidate-brake', skuId: 'sku-brake', role: '首选', sku: { id: 'sku-brake', skuCode: 'PAC-698-151', chineseName: '前刹车片', lifecycleStatus: '在售' } }] },
+  ],
+  packages: [{ id: 'package-minor', packageCode: 'MINOR-10K', name: '小保养套餐', intervalText: '10,000 km / 12个月', description: '机油保养和常用滤芯检查', lifecycleStatus: '启用', items: [{ requirementId: 'req-oil', quantity: 1 }, { requirementId: 'req-seal', quantity: 1 }, { requirementId: 'req-air', quantity: 1 }] }],
+  changeHistory: [{ id: 'vehicle-change-1', version: 2, action: '发布车型资料', changedBy: '张伟', changedAt: '2026-09-28T06:20:00.000Z' }],
+}
+
+async function installMockVehicleApi(page) {
+  let record = structuredClone(fixtureVehicle)
+  await page.route('**/api/v1/vehicles**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+    const json = (status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    const marker = '/api/v1/vehicles/'
+    const suffix = url.pathname.includes(marker) ? decodeURIComponent(url.pathname.split(marker)[1]) : ''
+    if (!suffix && method === 'GET') return json(200, { items: [record] })
+    if (suffix.endsWith('/auto-match')) return json(200, record)
+    if (suffix.endsWith('/publish')) return json(200, { ...record, lifecycleStatus: '已发布', version: record.version + 1 })
+    if (suffix && method === 'GET') return json(200, record)
+    if (suffix && method === 'PUT') { record = { ...record, ...request.postDataJSON(), version: record.version + 1 }; return json(200, record) }
+    if (!suffix && method === 'POST') { record = { id: 'new-vehicle', ...request.postDataJSON(), version: 1 }; return json(201, record) }
+    return json(405, { message: '不支持的操作' })
+  })
+}
+
 test.beforeEach(async ({ page }) => {
   const errors = []
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
@@ -98,6 +136,34 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }) => {
   expect(page.__consoleErrors).toEqual([])
+})
+
+test('vehicle library supports parts, packages and quote-ready selection without creating a quote', async ({ page }) => {
+  await installMockVehicleApi(page)
+  await page.goto('./vehicles/vehicle-95b-20t')
+  await expect(page.getByRole('button', { name: '返回车型库' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /保时捷 Macan 95B/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /机油格.*95811556201/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /机油格密封圈/ })).toContainText('待补充')
+  await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-library.png', fullPage: false })
+  await page.getByRole('button', { name: '保养套餐' }).click()
+  await expect(page.getByRole('heading', { name: '小保养套餐' })).toBeVisible()
+  await page.getByRole('button', { name: '快速选品' }).last().click()
+  await expect(page.getByLabel('待报价选品')).toBeVisible()
+  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil')
+  await page.getByLabel('机油格 候选 SKU').selectOption('candidate-oil-backup')
+  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil-backup')
+  await expect(page.getByLabel('待报价选品')).toContainText('本步只整理待报价商品，不生成报价单')
+  await expect(page.getByRole('button', { name: '生成报价单' })).toHaveCount(0)
+  await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-selection.png', fullPage: false })
+  await page.getByRole('button', { name: '关闭快速选品' }).click()
+  await page.getByRole('button', { name: '编辑车型' }).click()
+  await page.getByRole('button', { name: '常用配件' }).click()
+  await page.getByRole('button', { name: '批量粘贴' }).click()
+  await page.getByLabel('批量配件数据').fill('后雨刮片\t97062818900\t后\t雨刮系统\n助力油\t\t转向系统\t油液与传动')
+  await page.getByRole('button', { name: '导入到配件表' }).click()
+  await expect(page.getByLabel('配件项目 7')).toHaveValue('后雨刮片')
+  await expect(page.getByLabel('零件号 8')).toHaveValue('')
 })
 
 test('loads persisted SKU data and captures the default state', async ({ page }) => {

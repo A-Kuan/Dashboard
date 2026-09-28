@@ -1,7 +1,8 @@
 import Fastify from 'fastify'
 import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './validation.mjs'
+import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validation.mjs'
 
-export function buildApp({ repository, dictionaryRepository, logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 5 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
@@ -42,6 +43,47 @@ export function buildApp({ repository, dictionaryRepository, logger = true }) {
     if (existing.lifecycleStatus !== '在售') return reply.code(409).send({ error: 'INVALID_STATUS_TRANSITION', message: '只有在售 SKU 可以停产' })
     const input = normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '停产' })
     return repository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '停产 SKU')
+  })
+
+  app.get('/api/v1/vehicles', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    return { items: await vehicleRepository.list(request.query?.q || '') }
+  })
+  app.get('/api/v1/vehicles/:id', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const item = await vehicleRepository.get(request.params.id)
+    if (!item) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
+    return item
+  })
+  app.post('/api/v1/vehicles', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const input = { ...normalizeVehicleInput(request.body), lifecycleStatus: '草稿' }
+    if (await vehicleRepository.codeExists(input.vehicleCode)) return reply.code(409).send({ error: 'VEHICLE_CODE_EXISTS', message: '车型版本编码已存在' })
+    return reply.code(201).send(await vehicleRepository.create(input, request.headers['x-operator-name'] || '系统操作员'))
+  })
+  app.put('/api/v1/vehicles/:id', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    requireVehicleVersion(request.body)
+    const existing = await vehicleRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
+    const input = normalizeVehicleInput({ ...existing, ...request.body, lifecycleStatus: existing.lifecycleStatus })
+    if (await vehicleRepository.codeExists(input.vehicleCode, existing.id)) return reply.code(409).send({ error: 'VEHICLE_CODE_EXISTS', message: '车型版本编码已存在' })
+    return vehicleRepository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员')
+  })
+  app.post('/api/v1/vehicles/:id/publish', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    requireVehicleVersion(request.body)
+    const existing = await vehicleRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
+    const input = normalizeVehicleInput({ ...existing, ...request.body, lifecycleStatus: '已发布' })
+    if (!input.requirements.length) return reply.code(422).send({ error: 'VEHICLE_NOT_PUBLISHABLE', message: '至少需要一条常用配件记录' })
+    return vehicleRepository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '发布车型资料')
+  })
+  app.post('/api/v1/vehicles/:id/auto-match', async (request, reply) => {
+    if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const existing = await vehicleRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
+    return vehicleRepository.autoMatch(existing.id, request.headers['x-operator-name'] || '系统操作员')
   })
 
   app.get('/api/v1/dictionaries', async (_request, reply) => {

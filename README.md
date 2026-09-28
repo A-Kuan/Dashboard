@@ -1,5 +1,10 @@
 # Dashboard
 
+业务模块文档：
+
+- [SKU 主数据](docs/SKU-MASTER-DATA.md)
+- [车型库与快速选品](docs/VEHICLE-LIBRARY.md)
+
 SKU 主数据编辑模块的字段、组件和后端接口准备见 [docs/SKU-MASTER-DATA.md](docs/SKU-MASTER-DATA.md)。
 
 汽配行业 ERP 管理系统，采用前后端分离架构。

@@ -7,6 +7,7 @@ import { DictionaryManagement } from './components/DictionarySettings'
 import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
 import { SkuEditor } from './components/SkuEditor'
+import { VehicleLibrary } from './components/VehicleLibrary'
 import { useDictionaries } from './hooks/useDictionaries'
 import { ALL_DICTIONARY_VALUE, dictionaryItemLabel } from './services/dictionaryService'
 import { getSku, listSkus } from './services/skuService'
@@ -60,11 +61,12 @@ export function App() {
   const [commandRows, setCommandRows] = useState([])
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const isDictionaryModule = window.location.pathname.replace(/\/+$/, '').endsWith('/dictionaries')
+  const isVehicleLibrary = /\/vehicles(?:\/|$)/.test(window.location.pathname)
   const editorMatch = window.location.pathname.match(/\/skus\/(new|[^/]+\/edit)\/?$/)
   const isSkuEditor = Boolean(editorMatch)
 
   useEffect(() => {
-    if (isDictionaryModule || isSkuEditor) return
+    if (isDictionaryModule || isSkuEditor || isVehicleLibrary) return
     const controller = new AbortController()
     setRecordsLoading(true)
     listSkus({ signal: controller.signal }).then((items) => {
@@ -73,10 +75,10 @@ export function App() {
       setRecordsError('')
     }).catch((error) => { if (error.name !== 'AbortError') setRecordsError(error.message) }).finally(() => setRecordsLoading(false))
     return () => controller.abort()
-  }, [isDictionaryModule, isSkuEditor])
+  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary])
 
   useEffect(() => {
-    if (!selectedId || isDictionaryModule || isSkuEditor) {
+    if (!selectedId || isDictionaryModule || isSkuEditor || isVehicleLibrary) {
       setSelectedRecord(null)
       return
     }
@@ -85,7 +87,7 @@ export function App() {
       if (error.name !== 'AbortError') setRecordsError(error.message)
     })
     return () => controller.abort()
-  }, [isDictionaryModule, isSkuEditor, selectedId])
+  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary, selectedId])
 
   useEffect(() => {
     const openCommandPanel = (event) => {
@@ -161,6 +163,10 @@ export function App() {
     const mode = editorMatch[1] === 'new' ? 'new' : 'edit'
     const skuId = mode === 'edit' ? decodeURIComponent(editorMatch[1].replace(/\/edit$/, '')) : null
     return <div className="app-shell"><AppHeader onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><SkuEditor dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} mode={mode} skuId={skuId} onBack={() => window.location.assign(assetPath(''))} onSaved={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{commandCenter}</div>
+  }
+
+  if (isVehicleLibrary) {
+    return <><VehicleLibrary onSearchFocus={() => setCommandState('expanded')} />{commandCenter}</>
   }
 
   return (

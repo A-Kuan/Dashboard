@@ -1,58 +1,62 @@
-# SKU Editor Design QA
+# Vehicle Library Design QA
 
-- Source visual truth: `apps/web/public/references/08-sku-editor-epc-combined.png`
-- Implementation screenshot: `apps/web/qa-artifacts/implementation-sku-editor-1920.png`
-- Combined comparison evidence: `apps/web/qa-artifacts/sku-editor-design-comparison.png`
-- State: SKU `95B-867-288-OM8` edit page, `基本信息` tab active, unresolved EPC replacement-chain conflict
-- Browser viewport: 1920 × 1080 CSS px
+- Source visual truth: `/Users/wenshihuang/.codex/generated_images/01a0e65d-512b-7c30-a470-80d5ff03b390/exec-19f6d572-a873-41f4-99d9-38fa673ffb6e.png`
+- Implementation screenshot: `apps/web/qa-artifacts/implementation-vehicle-library.png`
+- Combined comparison evidence: `apps/web/qa-artifacts/vehicle-library-design-comparison.png`
+- State: Porsche Macan 95B 2.0L vehicle detail, common-parts tab active, one missing part number
+- Browser viewport: 1680 x 945 CSS px (16:9)
 - Device scale factor: 1
-- Source pixels: 1672 × 941 (16:9 ImageGen output), normalized with Lanczos to 1920 × 1080 for comparison
-- Implementation pixels: 1920 × 1080
+- Source pixels: 1672 x 941
+- Implementation pixels: 1680 x 945
+- Density normalization: both full views were normalized to 836 x 470 for the side-by-side comparison; the lower content regions were cropped at equal normalized coordinates and enlarged equally for focused review.
 
 ## Findings
 
 No actionable P0, P1, or P2 differences remain.
 
-- Typography: passed. The implementation uses the existing Inter / PingFang SC / Microsoft YaHei stack and preserves the source hierarchy, readable 14–16 px equivalent body scale at 1920 × 1080, compact table text, weights, line height, and truncation behavior.
-- Spacing and layout rhythm: passed. The header, title actions, horizontal section tabs, 64/36 editor/evidence split, identity form, relation tables, and sticky evidence pane reproduce the source composition without horizontal overflow or clipped controls.
-- Colors and visual tokens: passed. Shared navy, blue `#075cf6`, cool-gray borders and surfaces, green validation, and amber conflict colors match the selected direction and the existing Dashboard system.
-- Image quality and asset fidelity: passed. The higher-resolution existing product asset and EPC diagram are used directly; both preserve aspect ratio and have functional zoom affordances. No raster content is approximated with CSS drawings.
-- Copy and content: passed. SKU identity, OE replacement chain, Porsche EPC source metadata, fitment, OEM reference price, comparison states, and publish-check content match the source visual and product requirements.
-- Interaction and accessibility: passed. Section tabs, editable inputs, dictionary pickers, add/remove rows, image upload, EPC zoom, conflict resolution, cancel, draft save, and final save are keyboard-reachable and expose names to assistive technology.
+- Fonts and typography: passed. The implementation uses the existing Inter / PingFang SC / Microsoft YaHei stack, preserves compact enterprise-data sizing, clear navy hierarchy, readable table text, and controlled truncation.
+- Spacing and layout rhythm: passed. The final detail route follows the reference hierarchy: slim return row, vehicle identity strip, section tabs, wide parts matrix, and narrower sticky evidence panel. There is no horizontal overflow or clipped primary action at the tested viewport.
+- Colors and visual tokens: passed. Existing Dashboard white and pale blue-gray surfaces, cobalt primary actions, cool-gray dividers, green verified states, and amber incomplete states match the selected direction.
+- Image quality and asset fidelity: passed. The dedicated Macan catalog asset and existing EPC diagram are real raster assets with correct containment and no stretching. No product imagery is approximated with CSS or handcrafted vector shapes.
+- Copy and content: passed. The screen uses the supplied Macan/VIN/OE business data, clearly marks the missing oil-filter seal number, preserves source and verification status, and uses "快速选品" instead of a quote-generation action.
+- Interaction and accessibility: passed. Navigation, tabs, edit, auto-match, package selection, custom selection, publish, close, and save actions are keyboard-reachable and expose accessible names. Browser console and page errors were checked by the Playwright suite.
 
 ## Comparison History
 
-### Pass 1 — blocked
+### Pass 1 - blocked
 
-- P2: The product image used the 48 × 42 list thumbnail and visibly blurred at editor scale.
-- P2: Success icons in the field-comparison list inherited the warning color because of an overly broad selector.
+- P1: The implementation initially placed the vehicle-library title, global vehicle search, and horizontal vehicle picker above the selected record. This pushed the identity and parts matrix too far down and materially changed the selected visual's primary hierarchy.
 
-Fixes made:
+Fix made:
 
-- Replaced the list thumbnail with the existing 112 × 82 selected-product asset and changed the frame to contain the image without stretching.
-- Scoped amber icon color to `.warning-row`, restoring green success indicators.
+- Split the experience into a directory route (`/vehicles`) and focused detail routes (`/vehicles/:id`). The detail route now begins with the compact return row and keeps the selected vehicle record above the fold, while the directory route retains search, creation, and browsing.
 
-### Pass 2 — passed
+### Pass 2 - passed
 
-Post-fix evidence: `apps/web/qa-artifacts/sku-editor-design-comparison.png` places the normalized source on the left and the revised implementation on the right. The corrected image treatment and semantic colors are visible, and no further P0/P1/P2 mismatch remains.
+Post-fix evidence: `apps/web/qa-artifacts/vehicle-library-design-comparison.png` places the normalized selected visual on the left and the revised browser implementation on the right. The vehicle identity, active common-parts tab, parts/evidence split, primary quick-selection action, status colors, and content density align without remaining P0/P1/P2 drift.
 
 ## Focused Region Comparison
 
-Focused review covered the product identity/form region and the complete EPC evidence pane. These were the fidelity-critical areas because they contain dense typography, real raster assets, dictionary controls, validation states, source metadata, and conflict actions. Both regions pass after the second comparison.
+The focused lower-region comparison covers the tab strip, common-parts heading, table columns, missing-row treatment, linked-SKU presentation, and the EPC evidence/completeness panel. These are the fidelity-critical regions because they contain the densest typography, row-state colors, source metadata, and product-specific content. They pass after the route-level hierarchy fix.
 
 ## Primary Interactions Tested
 
-- Open existing SKU editor from the SKU table and open the new-SKU route.
-- Search and select shared brand/category dictionary values; the editor excludes the filter-only `全部` value.
-- Add and remove OE/replacement rows and fitment rows.
-- Resolve the EPC replacement conflict and update publish readiness from 5/6 to 6/6.
-- Open and close the EPC diagram viewer.
-- Save a draft and save the SKU with visible feedback.
-- Verify 1920 × 1080 layout has no horizontal overflow.
-- Check browser console and page errors: none.
+- Open the focused vehicle detail route and return to the vehicle directory.
+- Read the supplied VIN, engine, transmission, production date, market, part numbers, linked SKUs, source, and verification status.
+- Detect and display a retained part requirement with no part number.
+- Paste tab-separated Excel rows into the vehicle editor and retain rows with an empty part number.
+- Open the service-package tab and start fast selection from the minor-service package.
+- Confirm the selection drawer exposes unresolved items and explicitly does not create a quote document.
+- Confirm there is no `生成报价单` action.
+- Run the full 19-test browser suite with no console or page errors.
+
+## Intentional Product Differences
+
+- The selected visual displayed stock and price values. The current SKU service has no authoritative inventory or pricing integration, so the implementation does not invent those values. Candidate SKUs are linked now; live inventory and prices can be added when their source modules are available.
+- The implementation adds a separate searchable directory route because a production vehicle library needs discovery and creation in addition to the focused detail screen. This does not alter the selected detail view.
 
 ## Follow-up Polish
 
-- P3: The generated source uses slightly softer text antialiasing than the browser render. This is expected raster-versus-DOM rendering variance and does not require a code change.
+- P3: The generated reference uses slightly softer antialiasing and more photographic part thumbnails. Browser-rendered text is intentionally sharper, and SKU thumbnails remain absent when the persisted SKU has no image.
 
 final result: passed
