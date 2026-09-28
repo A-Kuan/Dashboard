@@ -6,13 +6,13 @@ import {
 import { DictionarySelect } from './Common'
 import { createSku, discontinueSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
 import { assetPath } from '../utils/assetPath'
-import { ALL_DICTIONARY_VALUE, dictionaryItemLabel } from '../services/dictionaryService'
+import { dictionaryItemLabel } from '../services/dictionaryService'
 
 const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
 const blankForm = {
   skuCode: '', chineseName: '', brand: '', category: '', subcategory: '',
-  manufacturerPartNumber: '', primaryOe: '', unit: '件', lifecycleStatus: '草稿', barcode: '',
-  imageUrl: '', dataSource: '人工录入', sourceEvidence: null, conflictResolution: null,
+  manufacturerPartNumber: '', primaryOe: '', unit: '', lifecycleStatus: '草稿', barcode: '',
+  imageUrl: '', dataSource: '', sourceEvidence: null, conflictResolution: null,
   createdAt: '', updatedAt: '', updatedBy: '张伟', version: null,
 }
 
@@ -38,7 +38,7 @@ function TextField({ label, value, onChange, required, readOnly = false, valid =
 }
 
 function SelectField({ label, value, onChange, options, required, status = false }) {
-  return <EditorField label={label} required={required}><div className={status ? 'editor-native-select has-status' : 'editor-native-select'}>{status ? <i /> : null}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></EditorField>
+  return <EditorField label={label} required={required}><div className={status ? 'editor-native-select has-status' : 'editor-native-select'}>{status ? <i /> : null}<select value={value} onChange={(event) => onChange(event.target.value)}>{required ? <option disabled value="">请选择{label}</option> : null}{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></EditorField>
 }
 
 function SectionHeading({ title, description, action }) {
@@ -69,7 +69,7 @@ function FitmentTable({ rows, setRows }) {
 
 function getRequiredPublishChecks(form, oeRows, fitmentRows) {
   return [
-    ['基本信息', Boolean(form.skuCode && form.chineseName && form.brand && form.category && form.subcategory && form.manufacturerPartNumber && form.primaryOe)],
+    ['基本信息', Boolean(form.skuCode && form.chineseName && form.brand && form.category && form.primaryOe && form.unit)],
     ['主 OE 关系', oeRows.some((row) => row.oeNumber?.trim().toLowerCase() === form.primaryOe?.trim().toLowerCase())],
     ['适配车型', fitmentRows.some((row) => row.vehicle?.trim())],
     ['数据来源', Boolean(form.dataSource)],
@@ -123,19 +123,8 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     return () => controller.abort()
   }, [mode, skuId])
 
-  useEffect(() => {
-    if (mode !== 'new') return
-    setForm((current) => {
-      const defaultValue = (code) => dictionaries[code]?.items?.find((item) => item.enabled !== false && item.value !== ALL_DICTIONARY_VALUE)?.value || ''
-      const validValue = (code, value) => dictionaries[code]?.items?.some((item) => item.enabled !== false && item.value === value)
-      const brand = validValue('sku_brand', current.brand) ? current.brand : defaultValue('sku_brand')
-      const category = validValue('part_category', current.category) ? current.category : defaultValue('part_category')
-      return brand === current.brand && category === current.category ? current : { ...current, brand, category }
-    })
-  }, [dictionaries, mode])
-
   const completion = useMemo(() => {
-    const values = [form.skuCode, form.chineseName, form.brand, form.category, form.subcategory, form.manufacturerPartNumber, form.primaryOe, form.barcode]
+    const values = [form.skuCode, form.chineseName, form.brand, form.category, form.primaryOe, form.unit, form.dataSource]
     return Math.round(values.filter(Boolean).length / values.length * 100)
   }, [form])
   const canPublish = useMemo(() => getRequiredPublishChecks(form, oeRows, fitmentRows).every(([, complete]) => complete), [fitmentRows, form, oeRows])
@@ -186,13 +175,13 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') || saveState.includes('已标记') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') || saveState.includes('已标记') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button>{mode === 'edit' && form.lifecycleStatus === '在售' ? <button className="secondary-button danger-button" onClick={discontinue} type="button">停产 SKU</button> : null}{mode === 'edit' ? <button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button> : null}<button className="primary-button" disabled={mode === 'edit' && !canPublish} onClick={() => save(mode === 'edit')} title={mode === 'edit' && !canPublish ? '请先完成发布必填项' : undefined} type="button">{mode === 'new' ? '创建草稿' : form.lifecycleStatus === '停产' ? '重新发布 SKU' : '发布 SKU'}</button></div></header>
     {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
-    <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{brandLabel}</b><i />零件大类　<b>{categoryLabel}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '人工录入'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
+    <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{brandLabel}</b><i />零件大类　<b>{categoryLabel}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '—'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
       <TextField codeInput error={codeFieldErrors.skuCode} label="SKU 编码" value={form.skuCode} onChange={(value) => { setCodeValue('skuCode', value); setCodeAvailable(null) }} onBlur={checkCode} required valid={codeAvailable === true} />
       <TextField label="中文名称" value={form.chineseName} onChange={(value) => setValue('chineseName', value)} required />
       <EditorField label="品牌" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={form.brand} onChange={(value) => setValue('brand', value)} disabled={dictionariesLoading} /></EditorField>
       <EditorField label="零件大类" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={form.category} onChange={(value) => setValue('category', value)} disabled={dictionariesLoading} /></EditorField>
-      <TextField label="零件小类" value={form.subcategory} onChange={(value) => setValue('subcategory', value)} required />
-      <TextField codeInput error={codeFieldErrors.manufacturerPartNumber} label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setCodeValue('manufacturerPartNumber', value)} required />
+      <TextField label="零件小类" value={form.subcategory} onChange={(value) => setValue('subcategory', value)} />
+      <TextField codeInput error={codeFieldErrors.manufacturerPartNumber} label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setCodeValue('manufacturerPartNumber', value)} />
       <TextField codeInput error={codeFieldErrors.primaryOe} label="主 OE 号" value={form.primaryOe} onChange={(value) => setCodeValue('primaryOe', value)} required />
       <SelectField label="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} options={['件', '套', '盒', '支']} required />
       <TextField label="生命周期状态" value={form.lifecycleStatus} readOnly required />

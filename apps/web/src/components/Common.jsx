@@ -13,7 +13,7 @@ export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, 
   const options = dictionary?.items?.filter((item) => item.enabled !== false && (allowAll || item.value !== ALL_DICTIONARY_VALUE)) ?? []
   const availableOptions = options.length ? options : [{ value, label: value === ALL_DICTIONARY_VALUE ? '全部' : value }]
   const label = dictionary?.label || fallbackLabel || dictionaryCode
-  const selected = availableOptions.find((option) => option.value === value) ?? availableOptions[0]
+  const selected = availableOptions.find((option) => option.value === value) ?? (value ? { value, label: value } : { value: '', label: `请选择${label}` })
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef(null)

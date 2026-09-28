@@ -61,6 +61,19 @@ test('rejects missing fields and duplicate SKU codes', async () => {
   await app.close()
 })
 
+test('allows drafts without a subcategory or manufacturer part number', async () => {
+  const app = buildApp({ repository: createRepository(), logger: false })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/v1/skus',
+    payload: { ...input, skuCode: 'OPTIONAL-001', subcategory: '', manufacturerPartNumber: '' },
+  })
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().subcategory, '')
+  assert.equal(response.json().manufacturerPartNumber, '')
+  await app.close()
+})
+
 test('rejects Chinese characters in identifier fields', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   for (const key of ['skuCode', 'manufacturerPartNumber', 'primaryOe']) {
