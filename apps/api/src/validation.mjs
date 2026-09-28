@@ -21,6 +21,7 @@ export function normalizeSkuInput(input = {}) {
     dataSource: clean(input.dataSource),
     sourceEvidence: input.sourceEvidence && typeof input.sourceEvidence === 'object' ? input.sourceEvidence : null,
     conflictResolution: input.conflictResolution && typeof input.conflictResolution === 'object' ? input.conflictResolution : null,
+    version: Number.isInteger(input.version) ? input.version : null,
     oeRelations: Array.isArray(input.oeRelations) ? input.oeRelations.map((row, index) => ({
       type: clean(row.type, '替代号'),
       oeNumber: clean(row.oeNumber || row.oe),
@@ -64,6 +65,15 @@ export function normalizeSkuInput(input = {}) {
     throw error
   }
   return sku
+}
+
+export function requireSkuVersion(input = {}) {
+  if (!Number.isInteger(input.version) || input.version < 1) {
+    const error = new Error('保存前缺少有效的数据版本，请刷新页面后重试')
+    error.statusCode = 400
+    throw error
+  }
+  return input.version
 }
 
 export function validatePublishableSku(sku) {

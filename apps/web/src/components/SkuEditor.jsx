@@ -12,7 +12,7 @@ const blankForm = {
   skuCode: '', chineseName: '', brand: 'Porsche', category: '车身及内饰', subcategory: '',
   manufacturerPartNumber: '', primaryOe: '', unit: '件', lifecycleStatus: '草稿', barcode: '',
   imageUrl: '', dataSource: '人工录入', sourceEvidence: null, conflictResolution: null,
-  createdAt: '', updatedAt: '', updatedBy: '张伟',
+  createdAt: '', updatedAt: '', updatedBy: '张伟', version: null,
 }
 
 const codeFieldHint = '仅支持英文字母、数字、空格及 - . _ / # ( ) +'

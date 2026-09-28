@@ -20,7 +20,10 @@ function TabContent({ activeTab, item }) {
     const evidence = item.sourceEvidence
     return <section className="detail-tab-panel" role="tabpanel"><h3>OEM 参考</h3>{evidence ? <dl className="detail-facts"><div><dt>来源</dt><dd>{evidence.title || item.dataSource}</dd></div><div><dt>参考价</dt><dd>{evidence.referencePrice || '—'}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>最后同步</dt><dd>{evidence.syncedAt || '—'}</dd></div></dl> : <div className="detail-data-empty"><Database size={27} /><span>尚未关联 OEM/EPC 来源证据。</span></div>}</section>
   }
-  if (activeTab === '变更记录') return <section className="detail-tab-panel" role="tabpanel"><h3>当前记录</h3><dl className="detail-facts"><div><dt>创建时间</dt><dd>{formatDate(item.createdAt)}</dd></div><div><dt>创建人</dt><dd>{item.createdBy || '—'}</dd></div><div><dt>最后更新</dt><dd>{formatDate(item.updatedAt)}</dd></div><div><dt>更新人</dt><dd>{item.updatedBy || '—'}</dd></div><div><dt>数据版本</dt><dd>v{item.version || 1}</dd></div></dl><p className="detail-panel-note">完整字段级变更日志将在后续版本接入。</p></section>
+  if (activeTab === '变更记录') {
+    const rows = (item.changeHistory || []).map((entry) => [`v${entry.version}`, entry.action, entry.changedBy || '—', formatDate(entry.changedAt), `${entry.details?.oeRelationCount ?? 0} OE / ${entry.details?.fitmentCount ?? 0} 适配`])
+    return <section className="detail-tab-panel" role="tabpanel"><h3>变更记录</h3><MiniTable columns={['版本', '操作', '操作人', '时间', '关系数据']} rows={rows} />{rows.length ? null : <div className="detail-data-empty compact"><span>暂无变更记录。</span></div>}</section>
+  }
   return null
 }
 

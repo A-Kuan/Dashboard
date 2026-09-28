@@ -6,7 +6,8 @@ const fixtureSku = {
   manufacturerPartNumber: '95B 867 288 OM8', primaryOe: '95B 867 288 OM8', unit: '件',
   lifecycleStatus: '草稿', barcode: '6921734567890', imageUrl: '/assets/parts/selected-part.png',
   dataSource: 'Porsche EPC', createdBy: '张伟', updatedBy: '张伟',
-  createdAt: '2026-09-27T06:00:00.000Z', updatedAt: '2026-09-27T06:32:00.000Z', fitmentCount: 2,
+  createdAt: '2026-09-27T06:00:00.000Z', updatedAt: '2026-09-27T06:32:00.000Z', fitmentCount: 2, version: 1,
+  changeHistory: [{ id: 'change-1', version: 1, action: '创建草稿', changedBy: '张伟', changedAt: '2026-09-27T06:00:00.000Z', details: { oeRelationCount: 1, fitmentCount: 1 } }],
   oeRelations: [{ id: 'oe-1', type: '主 OE', oeNumber: '95B 867 288 OM8', brand: 'Porsche', relation: '', source: 'Porsche EPC', confidence: '高' }],
   fitments: [{ id: 'fit-1', vehicle: 'Porsche Cayenne (9YA)', years: '2018–2023', engine: '全部', body: 'SUV', condition: '', source: 'Porsche EPC', verificationStatus: '已验证' }],
   sourceEvidence: { title: 'Porsche EPC 原始记录', syncedAt: '2026-09-27', oe: '95B 867 288 OM8', originalName: 'Trim panel, luggage compartment, black', group: '867-05', position: '9', fitment: 'Cayenne (9YA), 2018–2023', referencePrice: '¥ 1,120.50', diagramUrl: '/assets/parts/epc-diagram.png', comparisons: [{ label: 'OE 号', result: '一致', note: '与 EPC 记录一致', passed: true }] },
@@ -34,7 +35,7 @@ async function installMockSkuApi(page) {
     }
     if (!suffix && method === 'POST') {
       const body = request.postDataJSON()
-      const item = { id: 'created-sku-1', ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: '张伟', fitmentCount: body.fitments?.length || 0 }
+      const item = { id: 'created-sku-1', ...body, version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: '张伟', fitmentCount: body.fitments?.length || 0, changeHistory: [{ version: 1, action: '创建草稿', changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || 0, fitmentCount: body.fitments?.length || 0 } }] }
       records.unshift(item)
       return json(201, item)
     }
@@ -43,7 +44,11 @@ async function installMockSkuApi(page) {
     if (index < 0) return json(404, { message: 'SKU 不存在' })
     if (method === 'GET') return json(200, records[index])
     if (method === 'PUT' || method === 'POST') {
-      records[index] = { ...records[index], ...request.postDataJSON(), updatedAt: new Date().toISOString(), updatedBy: '张伟' }
+      const body = request.postDataJSON()
+      if (body.version !== records[index].version) return json(409, { error: 'SKU_VERSION_CONFLICT', message: '该 SKU 已被其他操作更新，请刷新后再编辑' })
+      const version = records[index].version + 1
+      const change = { version, action: method === 'POST' ? '发布 SKU' : '保存草稿', changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || 0, fitmentCount: body.fitments?.length || 0 } }
+      records[index] = { ...records[index], ...body, version, updatedAt: new Date().toISOString(), updatedBy: '张伟', changeHistory: [change, ...(records[index].changeHistory || [])] }
       return json(200, records[index])
     }
     return json(405, { message: '不支持的操作' })
@@ -164,6 +169,8 @@ test('detail tabs render persisted fitment and edit opens the editor', async ({ 
   await page.getByRole('tab', { name: '适配信息' }).click()
   await expect(page.getByRole('tabpanel')).toContainText('Porsche Cayenne (9YA)')
   await expect(page.getByRole('tab', { name: '适配信息' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('tab', { name: '变更记录' }).click()
+  await expect(page.getByRole('tabpanel')).toContainText('创建草稿')
   await page.getByRole('button', { name: '编辑', exact: true }).click()
   await expect(page).toHaveURL(/\/skus\/sku-fixture-1\/edit$/)
 })

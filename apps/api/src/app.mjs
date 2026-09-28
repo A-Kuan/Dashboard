@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { normalizeSkuInput, validatePublishableSku } from './validation.mjs'
+import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './validation.mjs'
 
 export function buildApp({ repository, dictionaryRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 5 * 1024 * 1024 })
@@ -21,17 +21,19 @@ export function buildApp({ repository, dictionaryRepository, logger = true }) {
     return reply.code(201).send(await repository.create(input, request.headers['x-operator-name'] || '张伟'))
   })
   app.put('/api/v1/skus/:id', async (request, reply) => {
+    requireSkuVersion(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     const input = { ...normalizeSkuInput(request.body), lifecycleStatus: existing.lifecycleStatus }
     if (await repository.codeExists(input.skuCode, existing.id)) return reply.code(409).send({ error: 'SKU_CODE_EXISTS', message: 'SKU 编码已存在' })
-    return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟')
+    return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟', '保存草稿')
   })
   app.post('/api/v1/skus/:id/publish', async (request, reply) => {
+    requireSkuVersion(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     const input = validatePublishableSku(normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '在售' }))
-    return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟')
+    return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟', '发布 SKU')
   })
 
   app.get('/api/v1/dictionaries', async (_request, reply) => {
@@ -50,7 +52,7 @@ export function buildApp({ repository, dictionaryRepository, logger = true }) {
   app.setErrorHandler((error, _request, reply) => {
     if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在' })
     const status = error.statusCode && error.statusCode < 500 ? error.statusCode : 500
-    return reply.code(status).send({ error: status === 500 ? 'INTERNAL_ERROR' : 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message })
+    return reply.code(status).send({ error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message })
   })
   return app
 }

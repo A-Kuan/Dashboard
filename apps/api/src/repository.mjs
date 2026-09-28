@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
-function mapSku(row, oeRelations = [], fitments = []) {
+function mapSku(row, oeRelations = [], fitments = [], changeHistory = []) {
   return {
     id: row.id,
     skuCode: row.sku_code,
@@ -32,16 +32,40 @@ function mapSku(row, oeRelations = [], fitments = []) {
       body: item.body, condition: item.fitment_condition, source: item.source,
       verificationStatus: item.verification_status,
     })),
+    changeHistory: changeHistory.map((item) => ({
+      id: item.id, version: item.version, action: item.action, details: item.details,
+      changedBy: item.changed_by, changedAt: item.changed_at,
+    })),
+  }
+}
+
+function auditDetails(input) {
+  return {
+    skuCode: input.skuCode,
+    chineseName: input.chineseName,
+    lifecycleStatus: input.lifecycleStatus,
+    dataSource: input.dataSource,
+    oeRelationCount: input.oeRelations.length,
+    fitmentCount: input.fitments.length,
+    hasImage: Boolean(input.imageUrl),
   }
 }
 
 export function createSkuRepository(pool) {
   async function childRows(client, skuId) {
-    const [oe, fitments] = await Promise.all([
+    const [oe, fitments, history] = await Promise.all([
       client.query('SELECT * FROM sku_oe_relation WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId]),
       client.query('SELECT * FROM sku_fitment WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId]),
+      client.query('SELECT * FROM sku_change_log WHERE sku_id = $1 ORDER BY version DESC, changed_at DESC', [skuId]),
     ])
-    return { oeRelations: oe.rows, fitments: fitments.rows }
+    return { oeRelations: oe.rows, fitments: fitments.rows, changeHistory: history.rows }
+  }
+
+  async function addChangeLog(client, skuId, version, action, input, actor) {
+    await client.query(`INSERT INTO sku_change_log
+      (id, sku_id, version, action, details, changed_by)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6)`,
+    [randomUUID(), skuId, version, action, JSON.stringify(auditDetails(input)), actor])
   }
 
   async function replaceChildren(client, skuId, input) {
@@ -78,7 +102,7 @@ export function createSkuRepository(pool) {
       const { rows } = await pool.query('SELECT * FROM sku WHERE id = $1 OR sku_code = $1 LIMIT 1', [id])
       if (!rows[0]) return null
       const children = await childRows(pool, rows[0].id)
-      return mapSku(rows[0], children.oeRelations, children.fitments)
+      return mapSku(rows[0], children.oeRelations, children.fitments, children.changeHistory)
     },
     async codeExists(code, exceptId = null) {
       const { rows } = await pool.query('SELECT EXISTS(SELECT 1 FROM sku WHERE sku_code = $1 AND ($2::text IS NULL OR id <> $2)) AS exists', [code, exceptId])
@@ -97,26 +121,37 @@ export function createSkuRepository(pool) {
           input.barcode || null, input.imageUrl || null, input.dataSource || null,
           input.sourceEvidence, input.conflictResolution, actor])
         await replaceChildren(client, id, input)
+        await addChangeLog(client, id, rows[0].version, '创建草稿', input, actor)
         const children = await childRows(client, id)
-        return mapSku(rows[0], children.oeRelations, children.fitments)
+        return mapSku(rows[0], children.oeRelations, children.fitments, children.changeHistory)
       })
     },
-    async update(id, input, actor = '张伟') {
+    async update(id, input, actor = '张伟', action = '保存草稿') {
       return withTransaction(pool, async (client) => {
+        const currentResult = await client.query('SELECT id, version FROM sku WHERE id = $1 OR sku_code = $1 LIMIT 1 FOR UPDATE', [id])
+        const current = currentResult.rows[0]
+        if (!current) return null
+        if (current.version !== input.version) {
+          const error = new Error(`该 SKU 已被其他操作更新（当前版本 v${current.version}），请刷新后再编辑`)
+          error.statusCode = 409
+          error.errorCode = 'SKU_VERSION_CONFLICT'
+          throw error
+        }
         const { rows } = await client.query(`UPDATE sku SET
           sku_code=$2, chinese_name=$3, brand=$4, category=$5, subcategory=$6,
           manufacturer_part_number=$7, primary_oe=$8, unit=$9, lifecycle_status=$10,
           barcode=$11, image_url=$12, data_source=$13, source_evidence=$14,
           conflict_resolution=$15, updated_by=$16, updated_at=now(), version=version+1
-          WHERE id=$1 OR sku_code=$1 RETURNING *`,
-        [id, input.skuCode, input.chineseName, input.brand, input.category, input.subcategory,
+          WHERE id=$1 RETURNING *`,
+        [current.id, input.skuCode, input.chineseName, input.brand, input.category, input.subcategory,
           input.manufacturerPartNumber, input.primaryOe, input.unit, input.lifecycleStatus,
           input.barcode || null, input.imageUrl || null, input.dataSource || null,
           input.sourceEvidence, input.conflictResolution, actor])
         if (!rows[0]) return null
         await replaceChildren(client, rows[0].id, input)
+        await addChangeLog(client, rows[0].id, rows[0].version, action, input, actor)
         const children = await childRows(client, rows[0].id)
-        return mapSku(rows[0], children.oeRelations, children.fitments)
+        return mapSku(rows[0], children.oeRelations, children.fitments, children.changeHistory)
       })
     },
     async removeAll() {

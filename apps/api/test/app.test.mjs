@@ -8,8 +8,19 @@ function createRepository() {
     list: async () => items,
     get: async (id) => items.find((item) => item.id === id || item.skuCode === id) || null,
     codeExists: async (code, exceptId) => items.some((item) => item.skuCode === code && item.id !== exceptId),
-    create: async (input) => { const item = { id: 'sku-1', ...input }; items.push(item); return item },
-    update: async (id, input) => { const index = items.findIndex((item) => item.id === id); items[index] = { ...items[index], ...input }; return items[index] },
+    create: async (input) => { const item = { id: 'sku-1', ...input, version: 1, changeHistory: [{ version: 1, action: '创建草稿' }] }; items.push(item); return item },
+    update: async (id, input, _actor, action = '保存草稿') => {
+      const index = items.findIndex((item) => item.id === id)
+      if (items[index].version !== input.version) {
+        const error = new Error(`该 SKU 已被其他操作更新（当前版本 v${items[index].version}），请刷新后再编辑`)
+        error.statusCode = 409
+        error.errorCode = 'SKU_VERSION_CONFLICT'
+        throw error
+      }
+      const version = items[index].version + 1
+      items[index] = { ...items[index], ...input, version, changeHistory: [{ version, action }, ...items[index].changeHistory] }
+      return items[index]
+    },
   }
 }
 
@@ -36,8 +47,9 @@ test('creates, lists, reads and updates a SKU', async () => {
   assert.equal(created.json().skuCode, 'TEST-001')
   assert.equal((await app.inject('/api/v1/skus')).json().items.length, 1)
   assert.equal((await app.inject('/api/v1/skus/sku-1')).json().chineseName, '测试零件')
-  const updated = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, chineseName: '测试零件二' } })
+  const updated = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 1, chineseName: '测试零件二' } })
   assert.equal(updated.json().chineseName, '测试零件二')
+  assert.equal(updated.json().version, 2)
   await app.close()
 })
 
@@ -63,16 +75,30 @@ test('keeps drafts out of the published state until publish requirements pass', 
   const app = buildApp({ repository: createRepository(), logger: false })
   const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: { ...input, lifecycleStatus: '在售' } })
   assert.equal(created.json().lifecycleStatus, '草稿')
-  const invalidPublish = await app.inject({ method: 'POST', url: '/api/v1/skus/sku-1/publish', payload: input })
+  const invalidPublish = await app.inject({ method: 'POST', url: '/api/v1/skus/sku-1/publish', payload: { ...input, version: 1 } })
   assert.equal(invalidPublish.statusCode, 422)
   const validPublish = await app.inject({ method: 'POST', url: '/api/v1/skus/sku-1/publish', payload: {
     ...input,
+    version: 1,
     dataSource: '人工录入',
     oeRelations: [{ type: '主 OE', oeNumber: input.primaryOe }],
     fitments: [{ vehicle: 'Porsche Cayenne' }],
   } })
   assert.equal(validPublish.statusCode, 200)
   assert.equal(validPublish.json().lifecycleStatus, '在售')
+  assert.equal(validPublish.json().changeHistory[0].action, '发布 SKU')
+  await app.close()
+})
+
+test('rejects stale SKU updates instead of overwriting newer data', async () => {
+  const app = buildApp({ repository: createRepository(), logger: false })
+  await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })
+  const first = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 1, chineseName: '第一次保存' } })
+  assert.equal(first.statusCode, 200)
+  const stale = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 1, chineseName: '过期覆盖' } })
+  assert.equal(stale.statusCode, 409)
+  assert.equal(stale.json().error, 'SKU_VERSION_CONFLICT')
+  assert.match(stale.json().message, /刷新后再编辑/)
   await app.close()
 })
 
