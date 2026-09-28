@@ -41,6 +41,11 @@ export function App() {
   const [brand, setBrand] = useState(ALL_DICTIONARY_VALUE)
   const [category, setCategory] = useState(ALL_DICTIONARY_VALUE)
   const [status, setStatus] = useState(ALL_DICTIONARY_VALUE)
+  const [dataSource, setDataSource] = useState(ALL_DICTIONARY_VALUE)
+  const [fitmentFilter, setFitmentFilter] = useState('全部')
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const [sortMode, setSortMode] = useState('最近更新')
   const [detailTab, setDetailTab] = useState('基本信息')
   const initialCommand = useMemo(() => {
     const requested = new URLSearchParams(window.location.search).get('state')
@@ -102,15 +107,30 @@ export function App() {
     { label: '低库存', count: '0', disabled: true },
     { label: '适配冲突', count: '0', disabled: true },
   ], [skuRows])
+  const dataSources = useMemo(() => [...new Set(skuRows.map((row) => row.source).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'zh-CN')), [skuRows])
   const filteredRows = useMemo(() => skuRows.filter((row) => {
     const matchesSummary = summaryTab === '全部零件'
       || (summaryTab === '低库存' && row.status === '低库存')
       || (summaryTab === '待补全' && row.vehicle === '未配置')
       || summaryTab === '适配冲突' && false
-    return matchesSummary && (brand === ALL_DICTIONARY_VALUE || row.brand === brand)
+    const matchesFitment = fitmentFilter === '全部'
+      || (fitmentFilter === '已配置' && row.vehicle !== '未配置')
+      || (fitmentFilter === '未配置' && row.vehicle === '未配置')
+    return matchesSummary && matchesFitment && (brand === ALL_DICTIONARY_VALUE || row.brand === brand)
       && (category === ALL_DICTIONARY_VALUE || row.category === category)
       && (status === ALL_DICTIONARY_VALUE || row.status === status)
-  }), [brand, category, skuRows, status, summaryTab])
+      && (dataSource === ALL_DICTIONARY_VALUE || row.source === dataSource)
+  }).sort((left, right) => {
+    if (sortMode === 'SKU 编码') return left.sku.localeCompare(right.sku, 'en')
+    if (sortMode === '中文名称') return left.name.localeCompare(right.name, 'zh-CN')
+    if (sortMode === '状态') return left.status.localeCompare(right.status, 'zh-CN')
+    return 0
+  }), [brand, category, dataSource, fitmentFilter, skuRows, sortMode, status, summaryTab])
+
+  useEffect(() => {
+    if (isDictionaryModule || isSkuEditor || recordsLoading) return
+    setSelectedId((current) => current && filteredRows.some((row) => row.id === current) ? current : filteredRows[0]?.id || null)
+  }, [filteredRows, isDictionaryModule, isSkuEditor, recordsLoading])
 
   const closeCommandCenter = () => { setCommandState('closed'); setSearchValue(''); setCommandRows([]) }
   const runCommandSearch = async (query = searchValue) => {
@@ -159,7 +179,13 @@ export function App() {
             <DictionarySelect dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={category} onChange={setCategory} disabled={dictionariesLoading} />
             <DictionarySelect dictionaryCode="sku_status" dictionaries={dictionaries} fallbackLabel="状态" value={status} onChange={setStatus} disabled={dictionariesLoading} />
           </div>
-          <div className="filters-right"><button className="secondary-button" disabled title="更多筛选尚未开放" type="button"><Funnel size={17} /> 更多筛选</button><button className="secondary-button sort-button" disabled title="自定义排序尚未开放" type="button">默认排序 <CaretDown size={13} weight="bold" /></button></div>
+          <div className="filters-right">
+            <button aria-expanded={moreFiltersOpen} className={dataSource !== ALL_DICTIONARY_VALUE || fitmentFilter !== '全部' ? 'secondary-button filter-active' : 'secondary-button'} onClick={() => { setMoreFiltersOpen((current) => !current); setSortMenuOpen(false) }} type="button"><Funnel size={17} /> 更多筛选</button>
+            <button aria-expanded={sortMenuOpen} className="secondary-button sort-button" onClick={() => { setSortMenuOpen((current) => !current); setMoreFiltersOpen(false) }} type="button">{sortMode} <CaretDown size={13} weight="bold" /></button>
+            {moreFiltersOpen || sortMenuOpen ? <button aria-label="关闭筛选菜单" className="filter-menu-scrim" onClick={() => { setMoreFiltersOpen(false); setSortMenuOpen(false) }} type="button" /> : null}
+            {moreFiltersOpen ? <div className="filter-popover" role="dialog" aria-label="更多筛选"><label><span>数据来源</span><select aria-label="数据来源筛选" value={dataSource} onChange={(event) => setDataSource(event.target.value)}><option value={ALL_DICTIONARY_VALUE}>全部来源</option>{dataSources.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>适配车型</span><select aria-label="适配车型筛选" value={fitmentFilter} onChange={(event) => setFitmentFilter(event.target.value)}>{['全部', '已配置', '未配置'].map((item) => <option key={item}>{item}</option>)}</select></label><footer><button onClick={() => { setDataSource(ALL_DICTIONARY_VALUE); setFitmentFilter('全部') }} type="button">清除附加筛选</button><button onClick={() => setMoreFiltersOpen(false)} type="button">完成</button></footer></div> : null}
+            {sortMenuOpen ? <div className="sort-popover" role="menu" aria-label="排序方式">{['最近更新', 'SKU 编码', '中文名称', '状态'].map((item) => <button aria-checked={sortMode === item} className={sortMode === item ? 'active' : ''} key={item} onClick={() => { setSortMode(item); setSortMenuOpen(false) }} role="menuitemradio" type="button">{item}</button>)}</div> : null}
+          </div>
         </div>
 
         {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}

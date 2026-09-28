@@ -56,6 +56,19 @@ button { color: inherit; }
 .secondary-button.danger-button { color: #c33d36; border-color: #e8b9b5; background: #fff8f7; }
 .secondary-button.danger-button:hover { border-color: #d98c86; background: #fff1ef; }
 .secondary-button.compact { width: 68px; height: 34px; padding: 0 13px; }
+.filters-right { position: relative; }
+.filters-right .filter-active { color: var(--blue); border-color: #9bbcf9; background: #f3f7ff; }
+.filter-menu-scrim { position: fixed; inset: 0; z-index: 24; border: 0; background: transparent; }
+.filter-popover, .sort-popover { position: absolute; top: calc(100% + 7px); z-index: 25; padding: 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; box-shadow: 0 14px 34px rgba(26, 44, 75, .14); }
+.filter-popover { right: 112px; width: 260px; display: grid; gap: 11px; }
+.filter-popover label { display: grid; gap: 5px; color: #617089; font-size: 11px; font-weight: 650; }
+.filter-popover select { width: 100%; height: 34px; padding: 0 9px; color: #24334c; border: 1px solid #d8e1ed; border-radius: 5px; background: #fff; font: inherit; }
+.filter-popover footer { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; }
+.filter-popover footer button { border: 0; color: var(--blue); background: transparent; font-size: 11px; font-weight: 650; cursor: pointer; }
+.filter-popover footer button:last-child { height: 29px; padding: 0 13px; border-radius: 4px; color: #fff; background: var(--blue); }
+.sort-popover { right: 0; width: 150px; display: grid; gap: 2px; padding: 6px; }
+.sort-popover button { height: 32px; padding: 0 10px; text-align: left; color: #53617a; border: 0; border-radius: 4px; background: transparent; font-size: 11px; cursor: pointer; }
+.sort-popover button:hover, .sort-popover button.active { color: var(--blue); background: #eef4ff; font-weight: 650; }
 .icon-button { width: 30px; height: 30px; display: grid; place-items: center; border: 0; background: transparent; color: #52627d; }
 
 .summary-tabs { height: 38px; display: flex; gap: 8px; margin-bottom: 5px; }

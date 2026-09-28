@@ -173,6 +173,19 @@ test('search returns only actual database matches', async ({ page }) => {
   await expect(page.getByText('95B-867-288-OM8', { exact: true }).first()).toBeVisible()
 })
 
+test('applies additional filters and sorting without stale details', async ({ page }) => {
+  await page.getByRole('button', { name: '更多筛选' }).click()
+  await page.getByLabel('适配车型筛选').selectOption('未配置')
+  await expect(page.getByRole('heading', { name: '当前筛选没有结果' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '基本信息' })).toHaveCount(0)
+  await page.getByRole('button', { name: '清除附加筛选' }).click()
+  await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toBeVisible()
+  await page.getByRole('button', { name: '完成' }).click()
+  await page.getByRole('button', { name: '最近更新' }).click()
+  await page.getByRole('menuitemradio', { name: 'SKU 编码' }).click()
+  await expect(page.getByRole('button', { name: /SKU 编码/ })).toHaveAttribute('aria-expanded', 'false')
+})
+
 test('detail tabs render persisted fitment and edit opens the editor', async ({ page }) => {
   await page.getByRole('tab', { name: '适配信息' }).click()
   await expect(page.getByRole('tabpanel')).toContainText('Porsche Cayenne (9YA)')
