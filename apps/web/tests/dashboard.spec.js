@@ -39,7 +39,8 @@ async function installMockSkuApi(page) {
       records.unshift(item)
       return json(201, item)
     }
-    const id = suffix.replace('/publish', '')
+    const transition = suffix.endsWith('/publish') ? 'publish' : suffix.endsWith('/discontinue') ? 'discontinue' : ''
+    const id = suffix.replace(/\/(publish|discontinue)$/, '')
     const index = records.findIndex((item) => item.id === id || item.skuCode === id)
     if (index < 0) return json(404, { message: 'SKU 不存在' })
     if (method === 'GET') return json(200, records[index])
@@ -47,8 +48,10 @@ async function installMockSkuApi(page) {
       const body = request.postDataJSON()
       if (body.version !== records[index].version) return json(409, { error: 'SKU_VERSION_CONFLICT', message: '该 SKU 已被其他操作更新，请刷新后再编辑' })
       const version = records[index].version + 1
-      const change = { version, action: method === 'POST' ? '发布 SKU' : '保存草稿', changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || 0, fitmentCount: body.fitments?.length || 0 } }
-      records[index] = { ...records[index], ...body, version, updatedAt: new Date().toISOString(), updatedBy: '张伟', changeHistory: [change, ...(records[index].changeHistory || [])] }
+      const action = transition === 'publish' ? '发布 SKU' : transition === 'discontinue' ? '停产 SKU' : '保存草稿'
+      const lifecycleStatus = transition === 'publish' ? '在售' : transition === 'discontinue' ? '停产' : records[index].lifecycleStatus
+      const change = { version, action, changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || records[index].oeRelations?.length || 0, fitmentCount: body.fitments?.length || records[index].fitments?.length || 0 } }
+      records[index] = { ...records[index], ...body, lifecycleStatus, version, updatedAt: new Date().toISOString(), updatedBy: '张伟', changeHistory: [change, ...(records[index].changeHistory || [])] }
       return json(200, records[index])
     }
     return json(405, { message: '不支持的操作' })
@@ -149,6 +152,11 @@ test('edits relations, fitment, dictionaries and saves to the API', async ({ pag
   await page.getByLabel('适配车型 2').fill('BMW X5 (G05)')
   await page.getByRole('button', { name: '发布 SKU' }).click()
   await expect(page.getByText('SKU 已保存并发布')).toBeVisible()
+  await expect(page.getByRole('button', { name: '停产 SKU' })).toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: '停产 SKU' }).click()
+  await expect(page.getByText('SKU 已标记为停产')).toBeVisible()
+  await expect(page.getByRole('button', { name: '重新发布 SKU' })).toBeVisible()
   await page.getByRole('button', { name: '放大 EPC 图' }).click()
   await expect(page.getByRole('button', { name: '关闭 EPC 大图' })).toBeVisible()
 })

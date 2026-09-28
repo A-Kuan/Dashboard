@@ -53,6 +53,8 @@ button { color: inherit; }
 .page-actions .primary-button { width: 113px; padding: 0 12px; white-space: nowrap; }
 .more-button { width: 36px; height: 36px; border: 1px solid #d7dfeb; background: white; display: grid; place-items: center; }
 .secondary-button { height: 35px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid #d7e0ed; background: #fff; padding: 0 14px; font-size: 13px; font-weight: 600; box-shadow: 0 1px 2px rgba(26,44,75,.02); }
+.secondary-button.danger-button { color: #c33d36; border-color: #e8b9b5; background: #fff8f7; }
+.secondary-button.danger-button:hover { border-color: #d98c86; background: #fff1ef; }
 .secondary-button.compact { width: 68px; height: 34px; padding: 0 13px; }
 .icon-button { width: 30px; height: 30px; display: grid; place-items: center; border: 0; background: transparent; color: #52627d; }
 

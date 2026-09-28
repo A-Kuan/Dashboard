@@ -87,6 +87,10 @@ test('keeps drafts out of the published state until publish requirements pass', 
   assert.equal(validPublish.statusCode, 200)
   assert.equal(validPublish.json().lifecycleStatus, '在售')
   assert.equal(validPublish.json().changeHistory[0].action, '发布 SKU')
+  const discontinued = await app.inject({ method: 'POST', url: '/api/v1/skus/sku-1/discontinue', payload: { version: 2 } })
+  assert.equal(discontinued.statusCode, 200)
+  assert.equal(discontinued.json().lifecycleStatus, '停产')
+  assert.equal(discontinued.json().changeHistory[0].action, '停产 SKU')
   await app.close()
 })
 

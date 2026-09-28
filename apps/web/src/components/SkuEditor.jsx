@@ -4,7 +4,7 @@ import {
   MagnifyingGlassPlus, Plus, SealCheck, Warning, X,
 } from '@phosphor-icons/react'
 import { DictionarySelect } from './Common'
-import { createSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
+import { createSku, discontinueSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
 import { assetPath } from '../utils/assetPath'
 
 const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
@@ -148,6 +148,19 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       setSaveState('保存失败')
     }
   }
+  const discontinue = async () => {
+    if (!window.confirm('确认将这个 SKU 标记为停产吗？停产后仍保留历史数据，可重新发布。')) return
+    setError('')
+    setSaveState('正在停产…')
+    try {
+      const item = await discontinueSku(form.id || skuId, { version: form.version })
+      setForm((current) => ({ ...current, ...item }))
+      setSaveState('SKU 已标记为停产')
+    } catch (reason) {
+      setError(reason.message)
+      setSaveState('停产失败')
+    }
+  }
   const selectTab = (tab) => {
     setActiveTab(tab)
     const targets = { '基本信息': 'basic-information', 'OE 与替代': 'oe-relations', '适配车型': 'fitments' }
@@ -156,7 +169,7 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
 
   if (loading) return <main className="sku-editor-page editor-loading"><span />正在读取 SKU 数据…</main>
   return <main className="sku-editor-page">
-    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button>{mode === 'edit' ? <button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button> : null}<button className="primary-button" disabled={mode === 'edit' && !canPublish} onClick={() => save(mode === 'edit')} title={mode === 'edit' && !canPublish ? '请先完成发布必填项' : undefined} type="button">{mode === 'new' ? '创建草稿' : '发布 SKU'}</button></div></header>
+    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') || saveState.includes('已标记') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') || saveState.includes('已标记') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button>{mode === 'edit' && form.lifecycleStatus === '在售' ? <button className="secondary-button danger-button" onClick={discontinue} type="button">停产 SKU</button> : null}{mode === 'edit' ? <button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button> : null}<button className="primary-button" disabled={mode === 'edit' && !canPublish} onClick={() => save(mode === 'edit')} title={mode === 'edit' && !canPublish ? '请先完成发布必填项' : undefined} type="button">{mode === 'new' ? '创建草稿' : form.lifecycleStatus === '停产' ? '重新发布 SKU' : '发布 SKU'}</button></div></header>
     {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
     <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{form.brand || '—'}</b><i />零件大类　<b>{form.category || '—'}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '人工录入'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">

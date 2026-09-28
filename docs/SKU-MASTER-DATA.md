@@ -67,6 +67,7 @@ SKU API 位于 `apps/api`，提供：
 - `POST /api/v1/skus`：创建 SKU。
 - `PUT /api/v1/skus/:id`：更新主数据草稿。
 - `POST /api/v1/skus/:id/publish`：完成校验并发布。
+- `POST /api/v1/skus/:id/discontinue`：将带当前版本的在售 SKU 标记为停产，并写入变更记录。
 - `POST /api/v1/skus/validate-code`：校验 SKU 编码唯一性。
 - `GET /api/v1/dictionaries`：读取共享业务字典。
 - `PUT /api/v1/dictionaries`：保存共享业务字典。

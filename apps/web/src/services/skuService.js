@@ -34,6 +34,10 @@ export function publishSku(id, input) {
   return request(`/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function discontinueSku(id, input) {
+  return request(`/${encodeURIComponent(id)}/discontinue`, { method: 'POST', body: JSON.stringify(input) })
+}
+
 export function validateSkuCode(skuCode, exceptId = null) {
   return request('/validate-code', { method: 'POST', body: JSON.stringify({ skuCode, exceptId }) })
 }
