@@ -252,6 +252,20 @@ test('detail tabs render persisted fitment and edit opens the editor', async ({ 
   await expect(page).toHaveURL(/\/skus\/sku-fixture-1\/edit$/)
 })
 
+test('removes an uploaded SKU image after confirmation and save', async ({ page }) => {
+  await page.goto('./skus/sku-fixture-1/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await expect(page.getByRole('img', { name: '行李厢内饰板（黑色）' })).toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: '删除图片' }).click()
+  await expect(page.getByText('尚未上传图片')).toBeVisible()
+  await expect(page.getByText('图片已移除，保存后生效')).toBeVisible()
+  await expect(page.getByRole('button', { name: '删除图片' })).toHaveCount(0)
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText('草稿已保存到数据库')).toBeVisible()
+  expect(page.__apiRecords[0].imageUrl).toBe('')
+})
+
 test('publish stays disabled until required relationships are complete', async ({ page }) => {
   await page.getByRole('button', { name: '新建 SKU' }).click()
   await page.getByLabel('SKU 编码 *').fill('PUBLISH-GATE-001')
