@@ -1,62 +1,60 @@
-# Vehicle Library Design QA
+# New Vehicle Flow Design QA
 
-- Source visual truth: `/Users/wenshihuang/.codex/generated_images/01a0e65d-512b-7c30-a470-80d5ff03b390/exec-19f6d572-a873-41f4-99d9-38fa673ffb6e.png`
-- Implementation screenshot: `apps/web/qa-artifacts/implementation-vehicle-library.png`
-- Combined comparison evidence: `apps/web/qa-artifacts/vehicle-library-design-comparison.png`
-- State: Porsche Macan 95B 2.0L vehicle detail, common-parts tab active, one missing part number
+- Source visual truth: `/Users/wenshihuang/.codex/generated_images/01a0e65d-512b-7c30-a470-80d5ff03b390/exec-bb3326c9-59e4-41ef-b93f-e5f5fc8978f9.png`
+- Implementation screenshot: `apps/web/qa-artifacts/implementation-new-vehicle-template.png`
+- Full-view comparison: `apps/web/qa-artifacts/new-vehicle-template-comparison.png`
+- Focused comparison: `apps/web/qa-artifacts/new-vehicle-template-focus-comparison.png`
+- State: new vehicle, VIN source recognized, Macan template loaded, one part deselected
 - Browser viewport: 1680 x 945 CSS px (16:9)
 - Device scale factor: 1
 - Source pixels: 1672 x 941
 - Implementation pixels: 1680 x 945
-- Density normalization: both full views were normalized to 836 x 470 for the side-by-side comparison; the lower content regions were cropped at equal normalized coordinates and enlarged equally for focused review.
+- Density normalization: full views were normalized to 836 x 470 before the side-by-side comparison. The suggested-record region was cropped at matching coordinates for focused review.
 
 ## Findings
 
 No actionable P0, P1, or P2 differences remain.
 
-- Fonts and typography: passed. The implementation uses the existing Inter / PingFang SC / Microsoft YaHei stack, preserves compact enterprise-data sizing, clear navy hierarchy, readable table text, and controlled truncation.
-- Spacing and layout rhythm: passed. The final detail route follows the reference hierarchy: slim return row, vehicle identity strip, section tabs, wide parts matrix, and narrower sticky evidence panel. There is no horizontal overflow or clipped primary action at the tested viewport.
-- Colors and visual tokens: passed. Existing Dashboard white and pale blue-gray surfaces, cobalt primary actions, cool-gray dividers, green verified states, and amber incomplete states match the selected direction.
-- Image quality and asset fidelity: passed. The dedicated Macan catalog asset and existing EPC diagram are real raster assets with correct containment and no stretching. No product imagery is approximated with CSS or handcrafted vector shapes.
-- Copy and content: passed. The screen uses the supplied Macan/VIN/OE business data, clearly marks the missing oil-filter seal number, preserves source and verification status, and uses "快速选品" instead of a quote-generation action.
-- Interaction and accessibility: passed. Navigation, tabs, edit, auto-match, package selection, custom selection, publish, close, and save actions are keyboard-reachable and expose accessible names. Browser console and page errors were checked by the Playwright suite.
+- Layout hierarchy: passed. Both views use the same source-first structure: compact heading, three source modes, recognition result on the left, suggested record on the right, and persistent confirmation actions at the bottom.
+- Typography and spacing: passed. The implementation keeps the existing Dashboard type stack and compact enterprise-data density while preserving the reference's navy hierarchy, pale surfaces, and restrained borders.
+- Information architecture: passed. Vehicle identity, template differences, and part-import preview remain separate review stages. Required production fields are grouped in a quieter second row rather than interrupting the main identity scan.
+- Product state fidelity: passed. The browser screenshot uses the existing vehicle fixture returned through the real vehicle service boundary. It does not add fabricated stock, pricing, packages, or part records to make the page resemble the reference.
+- Image fidelity: passed. Persisted vehicle imagery is shown without stretching. A missing persisted image produces an explicit empty state rather than a demo-image fallback.
+- Interaction and accessibility: passed. Source tabs, VIN recognition, EPC parsing, template copying, editable fields, row selection, save-only, and create-and-import actions have accessible names and keyboard-reachable controls.
 
 ## Comparison History
 
-### Pass 1 - blocked
+### Pass 1 - P2
 
-- P1: The implementation initially placed the vehicle-library title, global vehicle search, and horizontal vehicle picker above the selected record. This pushed the identity and parts matrix too far down and materially changed the selected visual's primary hierarchy.
+The initial identity section allowed required database metadata to wrap irregularly among the user-facing vehicle fields. This made the right panel denser and reduced the visual rhythm established by the selected reference.
 
 Fix made:
 
-- Split the experience into a directory route (`/vehicles`) and focused detail routes (`/vehicles/:id`). The detail route now begins with the compact return row and keeps the selected vehicle record above the fold, while the directory route retains search, creation, and browsing.
+- Kept the eight reference-facing identity fields in one primary row.
+- Moved vehicle version code, brand, series, and VIN sample into a consistent secondary metadata row.
+- Preserved all backend-required values without hiding or inventing data.
 
 ### Pass 2 - passed
 
-Post-fix evidence: `apps/web/qa-artifacts/vehicle-library-design-comparison.png` places the normalized selected visual on the left and the revised browser implementation on the right. The vehicle identity, active common-parts tab, parts/evidence split, primary quick-selection action, status colors, and content density align without remaining P0/P1/P2 drift.
+The post-fix full-view and focused comparisons align on the selected 16:9 composition, source/review split, card heights, table hierarchy, and footer action placement. The secondary metadata row is an intentional production requirement and does not create a remaining P2 mismatch.
 
-## Focused Region Comparison
+## Focused Region Review
 
-The focused lower-region comparison covers the tab strip, common-parts heading, table columns, missing-row treatment, linked-SKU presentation, and the EPC evidence/completeness panel. These are the fidelity-critical regions because they contain the densest typography, row-state colors, source metadata, and product-specific content. They pass after the route-level hierarchy fix.
+The focused comparison covers the suggested-record header, editable vehicle identity, and the beginning of the difference panel. These are the densest and most fidelity-sensitive parts of the screen. The implementation is intentionally sharper and slightly more compact than the generated reference, while preserving its scan order and emphasis.
 
 ## Primary Interactions Tested
 
-- Open the focused vehicle detail route and return to the vehicle directory.
-- Read the supplied VIN, engine, transmission, production date, market, part numbers, linked SKUs, source, and verification status.
-- Detect and display a retained part requirement with no part number.
-- Paste tab-separated Excel rows into the vehicle editor and retain rows with an empty part number.
-- Open the service-package tab and start fast selection from the minor-service package.
-- Confirm the selection drawer exposes unresolved items and explicitly does not create a quote document.
-- Confirm there is no `生成报价单` action.
-- Run the full 19-test browser suite with no console or page errors.
+- Enter a valid VIN and load a matching existing vehicle through the vehicle service.
+- Review recognized vehicle identity, source, part requirements, and service packages.
+- Deselect one part requirement and confirm the import count updates.
+- Create a new vehicle with the selected requirements and mapped package references.
+- Keep existing vehicle editing on the previous editor so this change only affects new creation.
+- Build the server bundle and run browser coverage for the full Dashboard and the new creation flow.
 
 ## Intentional Product Differences
 
-- The selected visual displayed stock and price values. The current SKU service has no authoritative inventory or pricing integration, so the implementation does not invent those values. Candidate SKUs are linked now; live inventory and prices can be added when their source modules are available.
-- The implementation adds a separate searchable directory route because a production vehicle library needs discovery and creation in addition to the focused detail screen. This does not alter the selected detail view.
-
-## Follow-up Polish
-
-- P3: The generated reference uses slightly softer antialiasing and more photographic part thumbnails. Browser-rendered text is intentionally sharper, and SKU thumbnails remain absent when the persisted SKU has no image.
+- The selected reference contains 24 parts and 3 packages. The tested fixture contains 6 parts and 1 package, so the implementation displays the real returned counts.
+- Four extra metadata fields are visible because the current API requires them to create a valid vehicle record.
+- VIN recognition currently resolves against the existing vehicle service. A future external VIN/EPC provider can replace that lookup without changing the review and save flow.
 
 final result: passed
