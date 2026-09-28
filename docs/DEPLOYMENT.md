@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-3d4091b`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-3de9223`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -36,9 +36,10 @@ npm run test:sites
 - PostgreSQL 数据库：`dashboard_sku`
 - PostgreSQL / 系统用户：`dashboard-sku`
 - 外部接口前缀：`/sku-preview/api/`
-- 当前 API 版本：`/opt/dashboard-sku-api/releases/20260928-3d4091b`
+- 当前 API 版本：`/opt/dashboard-sku-api/releases/20260928-3de9223`
 - 空库备份：`/opt/dashboard-sku-api/backups/20260927-pre-smoke-empty.dump`
 - 本次迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-b885538.dump`
+- 版本锁迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-3de9223.dump`
 
 API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
 
@@ -58,10 +59,10 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260928-3d4091b
+├── current -> releases/20260928-3de9223
 └── releases/
-    ├── 20260928-d4e6c74/  # 上一业务版，可回滚
-    └── 20260928-3d4091b/
+    ├── 20260928-3d4091b/  # 上一业务版，可回滚
+    └── 20260928-3de9223/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -92,6 +93,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260928-d4e6c74` 发布后已在线验证 SKU 编码、制造商零件号和主 OE 号的英文输入限制：前端会过滤中文并提示，API 直接提交中文编码返回 400。验收后三张 SKU 业务表仍为 0 条。
 
 `20260928-3d4091b` 发布后已在线验证：共享字典写入 PostgreSQL 并可跨请求读取；新建 SKU 强制进入草稿；缺少主 OE 关系、适配车型或数据来源时发布返回 422；补齐后可发布为在售；SKU 编码和车型关键字都能从数据库搜索；详情页和编辑页读取真实适配数据。验收品牌和 SKU 已精确删除，`sku`、`sku_oe_relation`、`sku_fitment` 均恢复为 0 条。字典内容已恢复，配置版本保留递增记录。
+
+`20260928-3de9223` 发布后已在线验证 SKU 乐观锁与变更记录：同一 v1 数据第一次保存生成 v2，第二次使用过期 v1 保存返回 409 `SKU_VERSION_CONFLICT`，随后使用 v2 发布生成 v3；页面“变更记录”依次显示 v3 发布、v2 保存、v1 创建。验收 SKU 已精确删除，四张 SKU 业务表均恢复为 0 条。
 
 ## 回滚
 
