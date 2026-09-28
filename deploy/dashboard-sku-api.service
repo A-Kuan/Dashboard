@@ -1,0 +1,27 @@
+[Unit]
+Description=Dashboard SKU API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=dashboard-sku
+Group=dashboard-sku
+WorkingDirectory=/opt/dashboard-sku-api/current
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=4183
+Environment=PGHOST=/var/run/postgresql
+Environment=PGPORT=5432
+Environment=PGDATABASE=dashboard_sku
+Environment=PGUSER=dashboard-sku
+ExecStart=/usr/bin/node src/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dashboard-sku-api
+
+[Install]
+WantedBy=multi-user.target
