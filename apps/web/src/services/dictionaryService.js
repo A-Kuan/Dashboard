@@ -2,6 +2,14 @@ import { assetPath } from '../utils/assetPath'
 
 export const ALL_DICTIONARY_VALUE = '__all__'
 
+export function dictionaryItemLabel(dictionaries, dictionaryCode, value, fallback = '—') {
+  if (!value) return fallback
+  const label = dictionaries?.[dictionaryCode]?.items?.find((item) => item.value === value)?.label
+  if (label) return label
+  const generatedPrefix = `${dictionaryCode.replace(/[^a-zA-Z0-9]+/g, '_').toUpperCase()}_`
+  return value.startsWith(generatedPrefix) ? fallback : value
+}
+
 export function generateDictionaryValue(dictionaryCode, existingValues = []) {
   const prefix = dictionaryCode.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'DICTIONARY'
   const existing = new Set(existingValues)

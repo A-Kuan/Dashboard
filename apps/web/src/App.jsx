@@ -8,25 +8,28 @@ import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
 import { SkuEditor } from './components/SkuEditor'
 import { useDictionaries } from './hooks/useDictionaries'
-import { ALL_DICTIONARY_VALUE } from './services/dictionaryService'
+import { ALL_DICTIONARY_VALUE, dictionaryItemLabel } from './services/dictionaryService'
 import { getSku, listSkus } from './services/skuService'
 import { assetPath } from './utils/assetPath'
 
-function toSkuRow(item) {
+function toSkuRow(item, dictionaries) {
   return {
     id: item.id,
     image: item.imageUrl || assetPath('assets/parts/selected-part.png'),
     sku: item.skuCode,
     oe: item.primaryOe,
     name: item.chineseName,
-    category: item.category,
-    brand: item.brand,
+    category: dictionaryItemLabel(dictionaries, 'part_category', item.category),
+    categoryValue: item.category,
+    brand: dictionaryItemLabel(dictionaries, 'sku_brand', item.brand),
+    brandValue: item.brand,
     vehicle: item.fitmentCount ? `${item.fitmentCount} 个适配车型` : '未配置',
     stock: '—',
     purchasePrice: '—',
     salePrice: '—',
     source: item.dataSource || '人工录入',
-    status: item.lifecycleStatus,
+    status: dictionaryItemLabel(dictionaries, 'sku_status', item.lifecycleStatus),
+    statusValue: item.lifecycleStatus,
   }
 }
 
@@ -100,7 +103,7 @@ export function App() {
     return () => window.removeEventListener('keydown', openCommandPanel)
   }, [])
 
-  const skuRows = useMemo(() => records.map(toSkuRow), [records])
+  const skuRows = useMemo(() => records.map((item) => toSkuRow(item, dictionaries)), [dictionaries, records])
   const summaryTabs = useMemo(() => [
     { label: '全部零件', count: String(skuRows.length) },
     { label: '待补全', count: String(skuRows.filter((row) => !row.vehicle || row.vehicle === '未配置').length) },
@@ -110,15 +113,15 @@ export function App() {
   const dataSources = useMemo(() => [...new Set(skuRows.map((row) => row.source).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'zh-CN')), [skuRows])
   const filteredRows = useMemo(() => skuRows.filter((row) => {
     const matchesSummary = summaryTab === '全部零件'
-      || (summaryTab === '低库存' && row.status === '低库存')
+      || (summaryTab === '低库存' && row.statusValue === '低库存')
       || (summaryTab === '待补全' && row.vehicle === '未配置')
       || summaryTab === '适配冲突' && false
     const matchesFitment = fitmentFilter === '全部'
       || (fitmentFilter === '已配置' && row.vehicle !== '未配置')
       || (fitmentFilter === '未配置' && row.vehicle === '未配置')
-    return matchesSummary && matchesFitment && (brand === ALL_DICTIONARY_VALUE || row.brand === brand)
-      && (category === ALL_DICTIONARY_VALUE || row.category === category)
-      && (status === ALL_DICTIONARY_VALUE || row.status === status)
+    return matchesSummary && matchesFitment && (brand === ALL_DICTIONARY_VALUE || row.brandValue === brand)
+      && (category === ALL_DICTIONARY_VALUE || row.categoryValue === category)
+      && (status === ALL_DICTIONARY_VALUE || row.statusValue === status)
       && (dataSource === ALL_DICTIONARY_VALUE || row.source === dataSource)
   }).sort((left, right) => {
     if (sortMode === 'SKU 编码') return left.sku.localeCompare(right.sku, 'en')
@@ -141,7 +144,7 @@ export function App() {
     setCommandState('loading')
     try {
       const results = await listSkus({ query: normalized })
-      setCommandRows(results.map(toSkuRow))
+      setCommandRows(results.map((item) => toSkuRow(item, dictionaries)))
       setCommandState(results.length ? 'oe' : 'empty')
     } catch {
       setCommandRows([])
@@ -190,7 +193,7 @@ export function App() {
 
         {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}
         {!recordsLoading && recordsError ? <div className="sku-data-state error"><Warning size={23} weight="fill" /><b>无法读取 SKU 数据</b><span>{recordsError}</span><button className="secondary-button" onClick={() => window.location.reload()} type="button">重新加载</button></div> : null}
-        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedRecord ? <DetailPanels item={selectedRecord} activeTab={detailTab} onTabChange={setDetailTab} onClose={() => setSelectedId(null)} onEdit={() => window.location.assign(assetPath(`skus/${selectedRecord.id}/edit`))} /> : null}</> : null}
+        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedRecord ? <DetailPanels dictionaries={dictionaries} item={selectedRecord} activeTab={detailTab} onTabChange={setDetailTab} onClose={() => setSelectedId(null)} onEdit={() => window.location.assign(assetPath(`skus/${selectedRecord.id}/edit`))} /> : null}</> : null}
         {!recordsLoading && !recordsError && !filteredRows.length ? <div className="sku-data-state empty"><Package size={38} /><h2>{records.length ? '当前筛选没有结果' : '还没有 SKU'}</h2><p>{records.length ? '调整筛选条件后再试。' : '数据库已准备好，从第一条真实 SKU 开始建立零件主数据。'}</p>{records.length ? null : <button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={17} />新建第一个 SKU</button>}</div> : null}
       </main>
 

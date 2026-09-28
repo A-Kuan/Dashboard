@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 const fixtureSku = {
   id: 'sku-fixture-1', skuCode: '95B-867-288-OM8', chineseName: '行李厢内饰板（黑色）',
-  brand: 'Porsche', category: '车身及内饰', subcategory: '内饰件',
+  brand: 'SKU_BRAND_PORSCHE_FACTORY', category: '车身及内饰', subcategory: '内饰件',
   manufacturerPartNumber: '95B 867 288 OM8', primaryOe: '95B 867 288 OM8', unit: '件',
   lifecycleStatus: '草稿', barcode: '6921734567890', imageUrl: '/assets/parts/selected-part.png',
   dataSource: 'Porsche EPC', createdBy: '张伟', updatedBy: '张伟',
@@ -62,7 +62,7 @@ async function installMockDictionaryApi(page) {
   let payload = {
     version: 1,
     dictionaries: {
-      sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'Porsche', label: 'Porsche', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
+      sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'SKU_BRAND_PORSCHE_FACTORY', label: '保时捷原厂', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
       part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
       sku_status: { label: '状态', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '草稿', label: '草稿', sort: 10, enabled: true }, { value: '在售', label: '在售', sort: 20, enabled: true }] },
     },
@@ -95,6 +95,8 @@ test.afterEach(async ({ page }) => {
 
 test('loads persisted SKU data and captures the default state', async ({ page }) => {
   await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toHaveClass(/selected/)
+  await expect(page.getByText('保时捷原厂').first()).toBeVisible()
+  await expect(page.locator('body')).not.toContainText('SKU_BRAND_PORSCHE_FACTORY')
   await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
 })
 
@@ -232,6 +234,8 @@ test('renders the persisted editor at 1920 by 1080', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 })
   await page.goto('./skus/sku-fixture-1/edit')
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await expect(page.getByText('保时捷原厂').first()).toBeVisible()
+  await expect(page.locator('body')).not.toContainText('SKU_BRAND_PORSCHE_FACTORY')
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-1920.png', fullPage: false })
 })
