@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-adb6d54`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260928-94db398`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -67,10 +67,10 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260928-adb6d54
+├── current -> releases/20260928-94db398
 └── releases/
-    ├── 20260928-069643d/  # 上一车型库版，可回滚
-    └── 20260928-adb6d54/
+    ├── 20260928-adb6d54/  # 上一联合业务版，可回滚
+    └── 20260928-94db398/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -125,6 +125,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260928-069643d` 发布后已在线验证：新增 6 张车型库相关数据表，车型列表 API 与 `/sku-preview/vehicles` 页面可正常访问；当前车型库保持空状态，未写入示例车型。发布前备份已完成，线上原有 3 条 SKU、3 条 OE 关系保持不变，API 服务、静态资源和 Nginx 配置检查均正常。
 
 `20260928-adb6d54` 联合发布后已在线验证：首页主导航显示“车型库”并可进入 `/sku-preview/vehicles`，SKU 多图片能力与车型库 API 同时可用；Nginx 为 `assets` 和 `config` 增加明确静态资源路由，避免版本切换后旧文件缓存或 SPA 回退返回 HTML。发布前数据库已备份，线上已有 5 条 SKU 保持不变，浏览器控制台无报错。
+
+`20260928-94db398` 前端发布后已在线验证：SKU 图片预览区支持拖入图片，拖入时显示高亮接收状态，松开后图片加入缩略图列表并沿用原有格式、单张 2 MB 和最多 8 张校验。线上验收仅添加未保存的临时图片并关闭页面，数据库仍保持原有 5 条 SKU，未修改用户数据；车型库和多图片联合版本的其他功能继续保留。
 
 ## 回滚
 
