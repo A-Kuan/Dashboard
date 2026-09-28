@@ -128,6 +128,7 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await page.getByRole('button', { name: '创建草稿' }).click()
   await expect(page).toHaveURL(/\/skus\/created-sku-1\/edit$/)
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  expect(page.__apiRecords.find((item) => item.id === 'created-sku-1').brand).toBe('SKU_BRAND_PORSCHE_FACTORY')
 })
 
 test('restricts identifier fields to Latin codes', async ({ page }) => {

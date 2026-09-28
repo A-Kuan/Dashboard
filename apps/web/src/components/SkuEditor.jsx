@@ -6,11 +6,11 @@ import {
 import { DictionarySelect } from './Common'
 import { createSku, discontinueSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
 import { assetPath } from '../utils/assetPath'
-import { dictionaryItemLabel } from '../services/dictionaryService'
+import { ALL_DICTIONARY_VALUE, dictionaryItemLabel } from '../services/dictionaryService'
 
 const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
 const blankForm = {
-  skuCode: '', chineseName: '', brand: 'Porsche', category: '车身及内饰', subcategory: '',
+  skuCode: '', chineseName: '', brand: '', category: '', subcategory: '',
   manufacturerPartNumber: '', primaryOe: '', unit: '件', lifecycleStatus: '草稿', barcode: '',
   imageUrl: '', dataSource: '人工录入', sourceEvidence: null, conflictResolution: null,
   createdAt: '', updatedAt: '', updatedBy: '张伟', version: null,
@@ -122,6 +122,17 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     }).catch((reason) => { if (reason.name !== 'AbortError') setError(reason.message) }).finally(() => setLoading(false))
     return () => controller.abort()
   }, [mode, skuId])
+
+  useEffect(() => {
+    if (mode !== 'new') return
+    setForm((current) => {
+      const defaultValue = (code) => dictionaries[code]?.items?.find((item) => item.enabled !== false && item.value !== ALL_DICTIONARY_VALUE)?.value || ''
+      const validValue = (code, value) => dictionaries[code]?.items?.some((item) => item.enabled !== false && item.value === value)
+      const brand = validValue('sku_brand', current.brand) ? current.brand : defaultValue('sku_brand')
+      const category = validValue('part_category', current.category) ? current.category : defaultValue('part_category')
+      return brand === current.brand && category === current.category ? current : { ...current, brand, category }
+    })
+  }, [dictionaries, mode])
 
   const completion = useMemo(() => {
     const values = [form.skuCode, form.chineseName, form.brand, form.category, form.subcategory, form.manufacturerPartNumber, form.primaryOe, form.barcode]
