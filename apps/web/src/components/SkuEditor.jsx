@@ -37,10 +37,6 @@ function TextField({ label, value, onChange, required, readOnly = false, valid =
   return <EditorField label={label} required={required}><div className={className}><input aria-invalid={Boolean(error)} aria-describedby={error ? `${label}-input-error` : undefined} autoCapitalize={codeInput ? 'off' : undefined} lang={codeInput ? 'en' : undefined} spellCheck={codeInput ? false : undefined} value={value} onBlur={onBlur} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} />{valid ? <CheckCircle size={16} weight="fill" /> : null}</div>{error ? <small className="editor-field-error" id={`${label}-input-error`} role="alert">{error}</small> : null}</EditorField>
 }
 
-function SelectField({ label, value, onChange, options, required, status = false }) {
-  return <EditorField label={label} required={required}><div className={status ? 'editor-native-select has-status' : 'editor-native-select'}>{status ? <i /> : null}<select value={value} onChange={(event) => onChange(event.target.value)}>{required ? <option disabled value="">请选择{label}</option> : null}{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></EditorField>
-}
-
 function SectionHeading({ title, description, action }) {
   return <header className="editor-section-heading"><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div>{action}</header>
 }
@@ -49,21 +45,41 @@ function EditableCell({ value, onChange, label }) {
   return <input aria-label={label} className="table-cell-input" value={value} onChange={(event) => onChange(event.target.value)} />
 }
 
-function OeRelations({ rows, setRows }) {
+function DictionaryCell({ dictionaryCode, dictionaries, value, onChange, label, disabled = false }) {
+  const items = dictionaries[dictionaryCode]?.items?.filter((item) => item.enabled !== false && item.value !== '__all__') ?? []
+  const hasCurrentValue = !value || items.some((item) => item.value === value)
+  return <select aria-label={label} className="table-cell-select" disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)}>
+    <option value="">请选择</option>
+    {!hasCurrentValue ? <option value={value}>{value}</option> : null}
+    {items.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+  </select>
+}
+
+function OeRelations({ rows, setRows, dictionaries, dictionariesLoading, primaryOe, skuBrand, dataSource }) {
   const update = (index, key, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row))
-  const addOe = () => setRows((current) => [...current, { type: current.length ? '替代号' : '主 OE', oeNumber: '', brand: '', relation: '', source: '人工录入', confidence: '待核验' }])
+  const updateType = (index, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, type: value, relation: value === '主 OE' ? '' : row.relation } : row))
+  const hasIncompleteRow = rows.some((row) => !row.oeNumber?.trim())
+  const addOe = () => setRows((current) => [...current, {
+    type: current.length ? '替代号' : '主 OE',
+    oeNumber: current.length ? '' : primaryOe,
+    brand: skuBrand,
+    relation: '',
+    source: dataSource,
+    confidence: '待核验',
+  }])
   return <section className="editor-section" id="oe-relations">
-    <SectionHeading title="OE 与替代关系" description="维护该零件的 OE 号及替代关系，保存后同步写入数据库" action={<div className="section-actions"><button onClick={addOe} type="button"><Plus size={16} />添加 OE 号</button></div>} />
-    {rows.length ? <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>品牌</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-oe'}-${index}`}><td><EditableCell label={`OE 类型 ${index + 1}`} value={row.type} onChange={(value) => update(index, 'type', value)} /></td><td><EditableCell label={`OE 编号 ${index + 1}`} value={row.oeNumber} onChange={(value) => update(index, 'oeNumber', value)} /></td><td><EditableCell label={`OE 品牌 ${index + 1}`} value={row.brand} onChange={(value) => update(index, 'brand', value)} /></td><td><EditableCell label={`OE 关系 ${index + 1}`} value={row.relation} onChange={(value) => update(index, 'relation', value)} /></td><td><EditableCell label={`OE 来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><EditableCell label={`OE 可信度 ${index + 1}`} value={row.confidence} onChange={(value) => update(index, 'confidence', value)} /></td><td><button className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加 OE 或替代关系</div>}
+    <SectionHeading title="OE 与替代关系" description="维护该零件的 OE 号及替代关系，保存后同步写入数据库" action={<div className="section-actions"><button disabled={hasIncompleteRow} onClick={addOe} title={hasIncompleteRow ? '请先填写当前空白行的 OE 编号' : undefined} type="button"><Plus size={16} />添加 OE 号</button></div>} />
+    {rows.length ? <div className="editor-table-wrap"><table className="editor-table oe-editor-table"><thead><tr><th>类型</th><th>OE / 替代号</th><th>品牌</th><th>关系</th><th>来源</th><th>可信度</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-oe'}-${index}`}><td><DictionaryCell dictionaryCode="oe_type" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 类型 ${index + 1}`} value={row.type} onChange={(value) => updateType(index, value)} /></td><td><EditableCell label={`OE 编号 ${index + 1}`} value={row.oeNumber} onChange={(value) => update(index, 'oeNumber', value)} /></td><td><DictionaryCell dictionaryCode="sku_brand" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 品牌 ${index + 1}`} value={row.brand} onChange={(value) => update(index, 'brand', value)} /></td><td><DictionaryCell dictionaryCode="oe_relation" dictionaries={dictionaries} disabled={dictionariesLoading || row.type === '主 OE'} label={`OE 关系 ${index + 1}`} value={row.relation} onChange={(value) => update(index, 'relation', value)} /></td><td><DictionaryCell dictionaryCode="data_source" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><DictionaryCell dictionaryCode="confidence_level" dictionaries={dictionaries} disabled={dictionariesLoading} label={`OE 可信度 ${index + 1}`} value={row.confidence} onChange={(value) => update(index, 'confidence', value)} /></td><td><button aria-label={`删除第 ${index + 1} 条 OE 记录`} className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加 OE 或替代关系</div>}
   </section>
 }
 
-function FitmentTable({ rows, setRows }) {
+function FitmentTable({ rows, setRows, dictionaries, dictionariesLoading, dataSource }) {
   const update = (index, key, value) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row))
-  const addFitment = () => setRows((current) => [...current, { vehicle: '', years: '', engine: '', body: '', condition: '', source: '人工录入', verificationStatus: '待验证' }])
+  const hasIncompleteRow = rows.some((row) => !row.vehicle?.trim())
+  const addFitment = () => setRows((current) => [...current, { vehicle: '', years: '', engine: '', body: '', condition: '', source: dataSource, verificationStatus: '待验证' }])
   return <section className="editor-section" id="fitments">
-    <SectionHeading title="适配车型" description="指定适用的车型、年款、发动机和限制条件" action={<div className="section-actions"><button onClick={addFitment} type="button"><Plus size={16} />添加适配车型</button></div>} />
-    {rows.length ? <div className="editor-table-wrap"><table className="editor-table fitment-editor-table"><thead><tr><th>#</th><th>品牌 / 车型</th><th>年份</th><th>发动机</th><th>车身形式</th><th>适配条件</th><th>来源</th><th>验证状态</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-fitment'}-${index}`}><td>{index + 1}</td><td><EditableCell label={`适配车型 ${index + 1}`} value={row.vehicle} onChange={(value) => update(index, 'vehicle', value)} /></td><td><EditableCell label={`适配年份 ${index + 1}`} value={row.years} onChange={(value) => update(index, 'years', value)} /></td><td><EditableCell label={`适配发动机 ${index + 1}`} value={row.engine} onChange={(value) => update(index, 'engine', value)} /></td><td><EditableCell label={`车身形式 ${index + 1}`} value={row.body} onChange={(value) => update(index, 'body', value)} /></td><td><EditableCell label={`适配条件 ${index + 1}`} value={row.condition} onChange={(value) => update(index, 'condition', value)} /></td><td><EditableCell label={`适配来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><EditableCell label={`验证状态 ${index + 1}`} value={row.verificationStatus} onChange={(value) => update(index, 'verificationStatus', value)} /></td><td><button className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加适配车型</div>}
+    <SectionHeading title="适配车型" description="指定适用的车型、年款、发动机和限制条件" action={<div className="section-actions"><button disabled={hasIncompleteRow} onClick={addFitment} title={hasIncompleteRow ? '请先填写当前空白行的品牌 / 车型' : undefined} type="button"><Plus size={16} />添加适配车型</button></div>} />
+    {rows.length ? <div className="editor-table-wrap"><table className="editor-table fitment-editor-table"><thead><tr><th>#</th><th>品牌 / 车型</th><th>年份</th><th>发动机</th><th>车身形式</th><th>适配条件</th><th>来源</th><th>验证状态</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id || 'new-fitment'}-${index}`}><td>{index + 1}</td><td><EditableCell label={`适配车型 ${index + 1}`} value={row.vehicle} onChange={(value) => update(index, 'vehicle', value)} /></td><td><EditableCell label={`适配年份 ${index + 1}`} value={row.years} onChange={(value) => update(index, 'years', value)} /></td><td><EditableCell label={`适配发动机 ${index + 1}`} value={row.engine} onChange={(value) => update(index, 'engine', value)} /></td><td><DictionaryCell dictionaryCode="body_type" dictionaries={dictionaries} disabled={dictionariesLoading} label={`车身形式 ${index + 1}`} value={row.body} onChange={(value) => update(index, 'body', value)} /></td><td><EditableCell label={`适配条件 ${index + 1}`} value={row.condition} onChange={(value) => update(index, 'condition', value)} /></td><td><DictionaryCell dictionaryCode="data_source" dictionaries={dictionaries} disabled={dictionariesLoading} label={`适配来源 ${index + 1}`} value={row.source} onChange={(value) => update(index, 'source', value)} /></td><td><DictionaryCell dictionaryCode="verification_status" dictionaries={dictionaries} disabled={dictionariesLoading} label={`验证状态 ${index + 1}`} value={row.verificationStatus} onChange={(value) => update(index, 'verificationStatus', value)} /></td><td><button aria-label={`删除第 ${index + 1} 条适配记录`} className="remove-row-button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">删除</button></td></tr>)}</tbody></table></div> : <div className="editor-inline-empty">尚未添加适配车型</div>}
   </section>
 }
 
@@ -186,10 +202,10 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       <EditorField label="计量单位" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="unit" dictionaries={dictionaries} fallbackLabel="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} disabled={dictionariesLoading} /></EditorField>
       <TextField label="生命周期状态" value={form.lifecycleStatus} readOnly required />
       <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />
-      <SelectField label="数据来源" value={form.dataSource} onChange={(value) => setValue('dataSource', value)} options={['人工录入', 'EPC 导入', '供应商资料', '历史系统']} required />
+      <EditorField label="数据来源" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="data_source" dictionaries={dictionaries} fallbackLabel="数据来源" value={form.dataSource} onChange={(value) => setValue('dataSource', value)} disabled={dictionariesLoading} /></EditorField>
       <TextField label="最后更新" value={formatDate(form.updatedAt)} readOnly />
       <TextField label="更新者" value={form.updatedBy || '张伟'} readOnly />
-    </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
+    </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} primaryOe={form.primaryOe} skuBrand={form.brand} dataSource={form.dataSource} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} dataSource={form.dataSource} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
     {zoomOpen && form.sourceEvidence ? <div className="epc-zoom-backdrop" onMouseDown={() => setZoomOpen(false)}><section onMouseDown={(event) => event.stopPropagation()}><header><div><ImageSquare size={19} /><b>{form.sourceEvidence.title || 'EPC 来源图'}</b></div><button aria-label="关闭 EPC 大图" onClick={() => setZoomOpen(false)} type="button"><X size={19} /></button></header><img src={form.sourceEvidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 大图" /></section></div> : null}
   </main>
 }

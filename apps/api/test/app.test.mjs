@@ -137,4 +137,8 @@ test('reads, saves and resets shared dictionaries', async () => {
 
 test('provides maintainable unit dictionary defaults', () => {
   assert.deepEqual(defaultDictionaries.dictionaries.unit.items.map((item) => item.label), ['件', '套', '盒', '支'])
+  assert.deepEqual(
+    ['data_source', 'oe_type', 'oe_relation', 'confidence_level', 'body_type', 'verification_status'].filter((code) => defaultDictionaries.dictionaries[code]),
+    ['data_source', 'oe_type', 'oe_relation', 'confidence_level', 'body_type', 'verification_status'],
+  )
 })

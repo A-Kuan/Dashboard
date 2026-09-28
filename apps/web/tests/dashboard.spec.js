@@ -65,6 +65,12 @@ async function installMockDictionaryApi(page) {
       sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'SKU_BRAND_PORSCHE_FACTORY', label: '保时捷原厂', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
       part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
       unit: { label: '计量单位', items: [{ value: '件', label: '件', sort: 0, enabled: true }, { value: '套', label: '套', sort: 10, enabled: true }, { value: '盒', label: '盒', sort: 20, enabled: true }, { value: '支', label: '支', sort: 30, enabled: true }] },
+      data_source: { label: '数据来源', items: [{ value: '人工录入', label: '人工录入', sort: 0, enabled: true }, { value: 'EPC 导入', label: 'EPC 导入', sort: 10, enabled: true }, { value: '供应商资料', label: '供应商资料', sort: 20, enabled: true }, { value: '历史系统', label: '历史系统', sort: 30, enabled: true }] },
+      oe_type: { label: 'OE 类型', items: [{ value: '主 OE', label: '主 OE', sort: 0, enabled: true }, { value: '替代号', label: '替代号', sort: 10, enabled: true }, { value: '历史号', label: '历史号', sort: 20, enabled: true }] },
+      oe_relation: { label: 'OE 替代关系', items: [{ value: '直接替代', label: '直接替代', sort: 0, enabled: true }, { value: '可互换', label: '可互换', sort: 10, enabled: true }] },
+      confidence_level: { label: '可信度', items: [{ value: '待核验', label: '待核验', sort: 0, enabled: true }, { value: '高', label: '高', sort: 10, enabled: true }] },
+      body_type: { label: '车身形式', items: [{ value: 'SUV', label: 'SUV', sort: 0, enabled: true }, { value: 'Coupe', label: '轿跑 / Coupe', sort: 10, enabled: true }] },
+      verification_status: { label: '验证状态', items: [{ value: '待验证', label: '待验证', sort: 0, enabled: true }, { value: '已验证', label: '已验证', sort: 10, enabled: true }] },
       sku_status: { label: '状态', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '草稿', label: '草稿', sort: 10, enabled: true }, { value: '在售', label: '在售', sort: 20, enabled: true }] },
     },
   }
@@ -120,7 +126,7 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await expect(page.getByRole('combobox', { name: '品牌：请选择品牌' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: '零件大类：请选择零件大类' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: '计量单位：请选择计量单位' })).toBeVisible()
-  await expect(page.getByLabel('数据来源 *')).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: '数据来源：请选择数据来源' })).toBeVisible()
   await page.getByLabel('SKU 编码 *').fill('REAL-TEST-001')
   await page.getByLabel('中文名称 *').fill('流程测试零件')
   await page.getByRole('combobox', { name: '品牌：请选择品牌' }).click()
@@ -134,11 +140,21 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await page.getByLabel('主 OE 号 *').fill('REAL TEST 001')
   await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
   await page.getByRole('option', { name: '件', exact: true }).click()
-  await page.getByLabel('数据来源 *').selectOption('人工录入')
+  await page.getByRole('combobox', { name: '数据来源：请选择数据来源' }).click()
+  await page.getByRole('option', { name: '人工录入', exact: true }).click()
   await page.getByRole('button', { name: '添加 OE 号' }).click()
-  await page.getByLabel('OE 编号 1').fill('REAL TEST 001')
+  await expect(page.getByLabel('OE 编号 1')).toHaveValue('REAL TEST 001')
+  await expect(page.getByLabel('OE 类型 1')).toHaveValue('主 OE')
+  await expect(page.getByLabel('OE 品牌 1')).toHaveValue('SKU_BRAND_PORSCHE_FACTORY')
+  await expect(page.getByLabel('OE 来源 1')).toHaveValue('人工录入')
+  await expect(page.getByLabel('OE 可信度 1')).toHaveValue('待核验')
+  await expect(page.getByLabel('OE 关系 1', { exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '添加适配车型' }).click()
+  await expect(page.getByRole('button', { name: '添加适配车型' })).toBeDisabled()
+  await expect(page.getByLabel('适配来源 1')).toHaveValue('人工录入')
+  await expect(page.getByLabel('验证状态 1')).toHaveValue('待验证')
   await page.getByLabel('适配车型 1').fill('测试车型')
+  await expect(page.getByRole('button', { name: '添加适配车型' })).toBeEnabled()
   await page.getByRole('button', { name: '创建草稿' }).click()
   await expect(page).toHaveURL(/\/skus\/created-sku-1\/edit$/)
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
@@ -164,9 +180,18 @@ test('edits relations, fitment, dictionaries and saves to the API', async ({ pag
   await expect(brandDictionary.getByRole('option', { name: '全部' })).toHaveCount(0)
   await brandDictionary.getByRole('option', { name: 'BMW' }).click()
   await page.getByRole('button', { name: '添加 OE 号' }).click()
+  await expect(page.getByRole('button', { name: '添加 OE 号' })).toBeDisabled()
   await page.getByLabel('OE 编号 2').fill('BMW TEST 002')
+  await page.getByLabel('OE 关系 2', { exact: true }).selectOption('直接替代')
+  await page.getByLabel('OE 类型 2').selectOption('主 OE')
+  await expect(page.getByLabel('OE 关系 2', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('OE 关系 2', { exact: true })).toBeDisabled()
+  await page.getByLabel('OE 类型 2').selectOption('替代号')
+  await page.getByLabel('OE 关系 2', { exact: true }).selectOption('直接替代')
   await page.getByRole('button', { name: '添加适配车型' }).click()
   await page.getByLabel('适配车型 2').fill('BMW X5 (G05)')
+  await page.getByLabel('车身形式 2').selectOption('Coupe')
+  await page.getByLabel('验证状态 2').selectOption('已验证')
   await page.getByRole('button', { name: '发布 SKU' }).click()
   await expect(page.getByText('SKU 已保存并发布')).toBeVisible()
   await expect(page.getByRole('button', { name: '停产 SKU' })).toBeVisible()
@@ -224,7 +249,8 @@ test('publish stays disabled until required relationships are complete', async (
   await page.getByLabel('主 OE 号 *').fill('PUBLISH OE 001')
   await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
   await page.getByRole('option', { name: '件', exact: true }).click()
-  await page.getByLabel('数据来源 *').selectOption('人工录入')
+  await page.getByRole('combobox', { name: '数据来源：请选择数据来源' }).click()
+  await page.getByRole('option', { name: '人工录入', exact: true }).click()
   await page.getByRole('button', { name: '创建草稿' }).click()
   await page.getByRole('heading', { name: '编辑 SKU' }).waitFor()
   await expect(page.getByRole('button', { name: '发布 SKU' })).toBeDisabled()
