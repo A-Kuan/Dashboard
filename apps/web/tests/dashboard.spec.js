@@ -318,6 +318,23 @@ test('configures dictionaries and persists the result', async ({ page }) => {
   await expect(unitDictionary.getByRole('option', { name: '箱', exact: true })).toBeVisible()
 })
 
+test('keeps newly added dictionary options accessible after the list overflows', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('./dictionaries')
+  await expect(page.getByRole('heading', { name: '字典管理' })).toBeVisible()
+  const addButton = page.getByRole('button', { name: '新增选项' })
+  for (let index = 0; index < 12; index += 1) await addButton.click()
+  const tableBody = page.locator('.dictionary-table-body')
+  await expect.poll(() => tableBody.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await expect.poll(() => tableBody.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  const lastRow = page.locator('.dictionary-table-row').last()
+  const lastLabel = lastRow.locator('input').first()
+  await expect(lastRow).toBeVisible()
+  await expect(lastLabel).toBeFocused()
+  await lastLabel.fill('溢出后新增项')
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeVisible()
+})
+
 test('renders the persisted editor at 1920 by 1080', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 })
   await page.goto('./skus/sku-fixture-1/edit')
