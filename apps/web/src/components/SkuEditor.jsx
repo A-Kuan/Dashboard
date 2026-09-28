@@ -116,7 +116,9 @@ function readImage(file) {
 
 function SkuImageManager({ form, setForm, setError, setSaveState }) {
   const inputRef = useRef(null)
+  const dragDepthRef = useRef(0)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
   const images = skuImages(form)
   const selectedImage = images[Math.min(activeIndex, Math.max(images.length - 1, 0))] || ''
 
@@ -125,11 +127,12 @@ function SkuImageManager({ form, setForm, setError, setSaveState }) {
   }, [activeIndex, images.length])
 
   const applyImages = (nextImages) => setForm((current) => ({ ...current, imageUrls: nextImages, imageUrl: nextImages[0] || '' }))
-  const uploadImages = async (event) => {
-    const files = [...(event.target.files || [])]
-    event.target.value = ''
+  const addImages = async (fileList) => {
+    const files = [...(fileList || [])]
     if (!files.length) return
     if (images.length + files.length > maxSkuImages) return setError(`SKU 图片最多上传 ${maxSkuImages} 张，当前还可上传 ${maxSkuImages - images.length} 张`)
+    const unsupported = files.find((file) => !file.type.startsWith('image/'))
+    if (unsupported) return setError(`文件“${unsupported.name}”不是支持的图片格式`)
     const oversized = files.find((file) => file.size > maxSkuImageBytes)
     if (oversized) return setError(`图片“${oversized.name}”超过 2MB`)
     try {
@@ -142,6 +145,26 @@ function SkuImageManager({ form, setForm, setError, setSaveState }) {
     } catch (reason) {
       setError(reason.message)
     }
+  }
+  const uploadImages = (event) => {
+    addImages(event.target.files)
+    event.target.value = ''
+  }
+  const enterDropZone = (event) => {
+    event.preventDefault()
+    dragDepthRef.current += 1
+    setIsDragging(true)
+  }
+  const leaveDropZone = (event) => {
+    event.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (!dragDepthRef.current) setIsDragging(false)
+  }
+  const dropImages = (event) => {
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setIsDragging(false)
+    addImages(event.dataTransfer.files)
   }
   const removeImage = () => {
     if (!window.confirm(`确认删除第 ${activeIndex + 1} 张商品图片吗？保存 SKU 后将正式移除。`)) return
@@ -158,7 +181,7 @@ function SkuImageManager({ form, setForm, setError, setSaveState }) {
     setSaveState('主图已调整，保存后生效')
   }
 
-  return <div className="identity-image"><div className="identity-image-preview">{selectedImage ? <img src={selectedImage} alt={`${form.chineseName || 'SKU 商品图'} 第 ${activeIndex + 1} 张`} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}{images.length ? <span className="identity-image-count">{activeIndex + 1} / {images.length}</span> : null}</div><div className={`identity-image-actions${images.length ? ' has-images' : ''}`}><button onClick={() => inputRef.current?.click()} type="button"><Camera size={16} />{images.length ? '追加图片' : '上传图片'}</button>{images.length ? <><button disabled={activeIndex === 0} onClick={makePrimary} title={activeIndex === 0 ? '当前已是主图' : '设为主图'} type="button"><Star size={15} weight={activeIndex === 0 ? 'fill' : 'regular'} />主图</button><button className="remove-image-button" onClick={removeImage} type="button"><Trash size={15} />删除</button></> : null}</div>{images.length ? <div className="identity-image-gallery" aria-label="SKU 图片列表" role="list">{images.map((image, index) => <button aria-label={`查看第 ${index + 1} 张图片${index === 0 ? '（主图）' : ''}`} className={index === activeIndex ? 'active' : ''} key={`${image.slice(0, 28)}-${index}`} onClick={() => setActiveIndex(index)} role="listitem" type="button"><img alt="" src={image} />{index === 0 ? <span>主图</span> : null}</button>)}</div> : <p className="identity-image-hint">最多 8 张，单张不超过 2MB</p>}<input ref={inputRef} accept="image/*" hidden multiple onChange={uploadImages} type="file" /></div>
+  return <div className="identity-image"><div aria-label="SKU 图片拖拽上传区" className={`identity-image-preview${isDragging ? ' is-dragging' : ''}`} onDragEnter={enterDropZone} onDragLeave={leaveDropZone} onDragOver={(event) => event.preventDefault()} onDrop={dropImages}>{selectedImage ? <img src={selectedImage} alt={`${form.chineseName || 'SKU 商品图'} 第 ${activeIndex + 1} 张`} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片<small>可将图片拖入此处</small></span>}{isDragging ? <span className="identity-image-drop-state"><ImageSquare size={30} weight="duotone" />松开即可添加图片</span> : null}{images.length ? <span className="identity-image-count">{activeIndex + 1} / {images.length}</span> : null}</div><div className={`identity-image-actions${images.length ? ' has-images' : ''}`}><button onClick={() => inputRef.current?.click()} type="button"><Camera size={16} />{images.length ? '追加图片' : '上传图片'}</button>{images.length ? <><button disabled={activeIndex === 0} onClick={makePrimary} title={activeIndex === 0 ? '当前已是主图' : '设为主图'} type="button"><Star size={15} weight={activeIndex === 0 ? 'fill' : 'regular'} />主图</button><button className="remove-image-button" onClick={removeImage} type="button"><Trash size={15} />删除</button></> : null}</div>{images.length ? <div className="identity-image-gallery" aria-label="SKU 图片列表" role="list">{images.map((image, index) => <button aria-label={`查看第 ${index + 1} 张图片${index === 0 ? '（主图）' : ''}`} className={index === activeIndex ? 'active' : ''} key={`${image.slice(0, 28)}-${index}`} onClick={() => setActiveIndex(index)} role="listitem" type="button"><img alt="" src={image} />{index === 0 ? <span>主图</span> : null}</button>)}</div> : <p className="identity-image-hint">最多 8 张，单张不超过 2MB；支持拖入图片</p>}<input ref={inputRef} accept="image/*" hidden multiple onChange={uploadImages} type="file" /></div>
 }
 
 function EvidencePanel({ form, oeRows, fitmentRows, onZoom }) {
