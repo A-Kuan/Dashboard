@@ -156,6 +156,14 @@ test('vehicle library supports parts, packages and quote-ready selection without
   await expect(page.getByLabel('待报价选品')).toContainText('本步只整理待报价商品，不生成报价单')
   await expect(page.getByRole('button', { name: '生成报价单' })).toHaveCount(0)
   await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-selection.png', fullPage: false })
+  await page.getByRole('button', { name: '关闭快速选品' }).click()
+  await page.getByRole('button', { name: '编辑车型' }).click()
+  await page.getByRole('button', { name: '常用配件' }).click()
+  await page.getByRole('button', { name: '批量粘贴' }).click()
+  await page.getByLabel('批量配件数据').fill('后雨刮片\t97062818900\t后\t雨刮系统\n助力油\t\t转向系统\t油液与传动')
+  await page.getByRole('button', { name: '导入到配件表' }).click()
+  await expect(page.getByLabel('配件项目 7')).toHaveValue('后雨刮片')
+  await expect(page.getByLabel('零件号 8')).toHaveValue('')
 })
 
 test('loads persisted SKU data and captures the default state', async ({ page }) => {

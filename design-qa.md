@@ -44,6 +44,7 @@ The focused lower-region comparison covers the tab strip, common-parts heading, 
 - Open the focused vehicle detail route and return to the vehicle directory.
 - Read the supplied VIN, engine, transmission, production date, market, part numbers, linked SKUs, source, and verification status.
 - Detect and display a retained part requirement with no part number.
+- Paste tab-separated Excel rows into the vehicle editor and retain rows with an empty part number.
 - Open the service-package tab and start fast selection from the minor-service package.
 - Confirm the selection drawer exposes unresolved items and explicitly does not create a quote document.
 - Confirm there is no `生成报价单` action.
