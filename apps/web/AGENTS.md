@@ -18,6 +18,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Selection values such as brand, part category, and SKU status must come from shared configurable dictionaries; do not add page-local hardcoded option arrays.
 - Dictionary-backed filters should use the shared searchable picker, and SKU management must retain a visible page-level entry for dictionary configuration.
 - Dictionary item values are system-generated immutable codes. Preserve existing values for compatibility; users may edit only the display label and other non-identifier properties.
+- Dictionary option lists must scroll independently when they exceed the editor height. After adding an option, keep the new row visible and focus its display-name field.
 - OE and replacement relations do not ask for a separate brand; brand belongs to the SKU master record. Preserve any historical relation-brand values in persisted records for compatibility.
 - Never substitute demo content for missing persisted values. Use an explicit empty-state image or `—`; generic system-operator text is allowed only until identity integration is available.
 - SKU create/edit screens should use the horizontal section-tab navigation selected in the 2026-09-27 visual direction. Keep the editor single-page and combine it with a persistent EPC evidence pane for source comparison and publish checks; do not replace it with a wizard or global sidebar.
