@@ -255,15 +255,39 @@ test('detail tabs render persisted fitment and edit opens the editor', async ({ 
 test('removes an uploaded SKU image after confirmation and save', async ({ page }) => {
   await page.goto('./skus/sku-fixture-1/edit')
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  await expect(page.getByRole('img', { name: '行李厢内饰板（黑色）' })).toBeVisible()
+  await expect(page.getByRole('img', { name: /行李厢内饰板（黑色）/ })).toBeVisible()
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByRole('button', { name: '删除图片' }).click()
+  await page.getByRole('button', { name: '删除', exact: true }).click()
   await expect(page.getByText('尚未上传图片')).toBeVisible()
   await expect(page.getByText('图片已移除，保存后生效')).toBeVisible()
-  await expect(page.getByRole('button', { name: '删除图片' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText('草稿已保存到数据库')).toBeVisible()
   expect(page.__apiRecords[0].imageUrl).toBe('')
+  expect(page.__apiRecords[0].imageUrls).toEqual([])
+})
+
+test('uploads multiple SKU images and allows changing the primary image', async ({ page }) => {
+  await page.goto('./skus/sku-fixture-1/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await page.locator('.identity-image input[type="file"]').setInputFiles([
+    'public/assets/parts/brake-disc.png',
+    'public/assets/parts/tail-light.png',
+  ])
+  await expect(page.getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByText('已添加 2 张图片，保存后生效')).toBeVisible()
+  await expect(page.getByText('2 / 3')).toBeVisible()
+  await page.getByRole('button', { name: '主图', exact: true }).click()
+  await expect(page.getByText('主图已调整，保存后生效')).toBeVisible()
+  await expect(page.getByText('1 / 3')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-multiple-images.png', fullPage: false })
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText('草稿已保存到数据库')).toBeVisible()
+  expect(page.__apiRecords[0].imageUrls).toHaveLength(3)
+  expect(page.__apiRecords[0].imageUrl).toBe(page.__apiRecords[0].imageUrls[0])
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(3)
 })
 
 test('publish stays disabled until required relationships are complete', async ({ page }) => {

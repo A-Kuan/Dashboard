@@ -56,6 +56,22 @@ test('creates, lists, reads and updates a SKU', async () => {
   await app.close()
 })
 
+test('normalizes legacy and multiple SKU images', async () => {
+  const app = buildApp({ repository: createRepository(), logger: false })
+  const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: { ...input, imageUrl: 'legacy-image' } })
+  assert.equal(created.statusCode, 201)
+  assert.deepEqual(created.json().imageUrls, ['legacy-image'])
+  assert.equal(created.json().imageUrl, 'legacy-image')
+  const updated = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 1, imageUrls: ['primary-image', 'detail-image'] } })
+  assert.equal(updated.statusCode, 200)
+  assert.deepEqual(updated.json().imageUrls, ['primary-image', 'detail-image'])
+  assert.equal(updated.json().imageUrl, 'primary-image')
+  const tooMany = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 2, imageUrls: Array.from({ length: 9 }, (_, index) => `image-${index}`) } })
+  assert.equal(tooMany.statusCode, 400)
+  assert.match(tooMany.json().message, /最多上传 8 张/)
+  await app.close()
+})
+
 test('rejects missing fields and duplicate SKU codes', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/skus', payload: {} })).statusCode, 400)

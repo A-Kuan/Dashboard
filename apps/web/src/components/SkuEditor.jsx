@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft, Camera, CheckCircle, Circle, FloppyDisk, ImageSquare,
-  MagnifyingGlassPlus, Plus, SealCheck, Trash, Warning, X,
+  MagnifyingGlassPlus, Plus, SealCheck, Star, Trash, Warning, X,
 } from '@phosphor-icons/react'
 import { DictionarySelect } from './Common'
 import { createSku, discontinueSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
@@ -11,7 +11,7 @@ const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
 const blankForm = {
   skuCode: '', chineseName: '', brand: '', category: '', subcategory: '',
   manufacturerPartNumber: '', primaryOe: '', unit: '', lifecycleStatus: '草稿', barcode: '',
-  imageUrl: '', dataSource: '', sourceEvidence: null, conflictResolution: null,
+  imageUrl: '', imageUrls: [], dataSource: '', sourceEvidence: null, conflictResolution: null,
   createdAt: '', updatedAt: '', updatedBy: '', version: null,
 }
 
@@ -93,8 +93,72 @@ function getRequiredPublishChecks(form, oeRows, fitmentRows) {
 function PublishCheck({ form, oeRows, fitmentRows }) {
   const checks = getRequiredPublishChecks(form, oeRows, fitmentRows)
   const completed = checks.filter(([, value]) => value).length
-  const recommendations = [['商品图片', Boolean(form.imageUrl)], ['条形码', Boolean(form.barcode)]]
+  const recommendations = [['商品图片', Boolean(form.imageUrls?.length || form.imageUrl)], ['条形码', Boolean(form.barcode)]]
   return <section className="publish-check"><h3>发布必填 <b>{completed}/{checks.length}</b></h3><div className="publish-progress"><span style={{ width: `${completed / checks.length * 100}%` }} /></div><div className="publish-check-grid">{checks.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '待完成'}</em></span>)}</div><h4>建议补充</h4><div className="publish-check-grid">{recommendations.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '可后补'}</em></span>)}</div></section>
+}
+
+const maxSkuImages = 8
+const maxSkuImageBytes = 2 * 1024 * 1024
+
+function skuImages(form) {
+  if (Array.isArray(form.imageUrls) && form.imageUrls.length) return form.imageUrls
+  return form.imageUrl ? [form.imageUrl] : []
+}
+
+function readImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`))
+    reader.readAsDataURL(file)
+  })
+}
+
+function SkuImageManager({ form, setForm, setError, setSaveState }) {
+  const inputRef = useRef(null)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const images = skuImages(form)
+  const selectedImage = images[Math.min(activeIndex, Math.max(images.length - 1, 0))] || ''
+
+  useEffect(() => {
+    if (activeIndex >= images.length) setActiveIndex(Math.max(images.length - 1, 0))
+  }, [activeIndex, images.length])
+
+  const applyImages = (nextImages) => setForm((current) => ({ ...current, imageUrls: nextImages, imageUrl: nextImages[0] || '' }))
+  const uploadImages = async (event) => {
+    const files = [...(event.target.files || [])]
+    event.target.value = ''
+    if (!files.length) return
+    if (images.length + files.length > maxSkuImages) return setError(`SKU 图片最多上传 ${maxSkuImages} 张，当前还可上传 ${maxSkuImages - images.length} 张`)
+    const oversized = files.find((file) => file.size > maxSkuImageBytes)
+    if (oversized) return setError(`图片“${oversized.name}”超过 2MB`)
+    try {
+      const addedImages = await Promise.all(files.map(readImage))
+      const nextImages = [...images, ...addedImages]
+      applyImages(nextImages)
+      setActiveIndex(images.length)
+      setError('')
+      setSaveState(`已添加 ${addedImages.length} 张图片，保存后生效`)
+    } catch (reason) {
+      setError(reason.message)
+    }
+  }
+  const removeImage = () => {
+    if (!window.confirm(`确认删除第 ${activeIndex + 1} 张商品图片吗？保存 SKU 后将正式移除。`)) return
+    const nextImages = images.filter((_, index) => index !== activeIndex)
+    applyImages(nextImages)
+    setActiveIndex(Math.min(activeIndex, Math.max(nextImages.length - 1, 0)))
+    setSaveState('图片已移除，保存后生效')
+  }
+  const makePrimary = () => {
+    if (activeIndex === 0) return
+    const nextImages = [images[activeIndex], ...images.filter((_, index) => index !== activeIndex)]
+    applyImages(nextImages)
+    setActiveIndex(0)
+    setSaveState('主图已调整，保存后生效')
+  }
+
+  return <div className="identity-image"><div className="identity-image-preview">{selectedImage ? <img src={selectedImage} alt={`${form.chineseName || 'SKU 商品图'} 第 ${activeIndex + 1} 张`} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}{images.length ? <span className="identity-image-count">{activeIndex + 1} / {images.length}</span> : null}</div><div className={`identity-image-actions${images.length ? ' has-images' : ''}`}><button onClick={() => inputRef.current?.click()} type="button"><Camera size={16} />{images.length ? '追加图片' : '上传图片'}</button>{images.length ? <><button disabled={activeIndex === 0} onClick={makePrimary} title={activeIndex === 0 ? '当前已是主图' : '设为主图'} type="button"><Star size={15} weight={activeIndex === 0 ? 'fill' : 'regular'} />主图</button><button className="remove-image-button" onClick={removeImage} type="button"><Trash size={15} />删除</button></> : null}</div>{images.length ? <div className="identity-image-gallery" aria-label="SKU 图片列表" role="list">{images.map((image, index) => <button aria-label={`查看第 ${index + 1} 张图片${index === 0 ? '（主图）' : ''}`} className={index === activeIndex ? 'active' : ''} key={`${image.slice(0, 28)}-${index}`} onClick={() => setActiveIndex(index)} role="listitem" type="button"><img alt="" src={image} />{index === 0 ? <span>主图</span> : null}</button>)}</div> : <p className="identity-image-hint">最多 8 张，单张不超过 2MB</p>}<input ref={inputRef} accept="image/*" hidden multiple onChange={uploadImages} type="file" /></div>
 }
 
 function EvidencePanel({ form, oeRows, fitmentRows, onZoom }) {
@@ -116,7 +180,6 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
   const [codeAvailable, setCodeAvailable] = useState(null)
   const [codeFieldErrors, setCodeFieldErrors] = useState({})
   const [zoomOpen, setZoomOpen] = useState(false)
-  const imageInputRef = useRef(null)
   const setValue = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const setCodeValue = (key, value) => {
     const sanitized = sanitizeCodeValue(value)
@@ -128,7 +191,8 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     if (mode !== 'edit' || !skuId) return
     const controller = new AbortController()
     getSku(skuId, { signal: controller.signal }).then((item) => {
-      setForm({ ...blankForm, ...item })
+      const imageUrls = Array.isArray(item.imageUrls) && item.imageUrls.length ? item.imageUrls : item.imageUrl ? [item.imageUrl] : []
+      setForm({ ...blankForm, ...item, imageUrls, imageUrl: imageUrls[0] || '' })
       setOeRows(item.oeRelations || [])
       setFitmentRows(item.fitments || [])
       setCodeAvailable(true)
@@ -152,7 +216,8 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
   const save = async (publish = false) => {
     setError('')
     setSaveState('正在保存…')
-    const payload = { ...form, oeRelations: oeRows, fitments: fitmentRows }
+    const imageUrls = skuImages(form)
+    const payload = { ...form, imageUrls, imageUrl: imageUrls[0] || '', oeRelations: oeRows, fitments: fitmentRows }
     try {
       let item
       if (mode === 'new') item = await createSku(payload)
@@ -178,12 +243,6 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       setSaveState('停产失败')
     }
   }
-  const removeImage = () => {
-    if (!window.confirm('确认删除当前商品图片吗？保存 SKU 后将正式移除。')) return
-    setValue('imageUrl', '')
-    if (imageInputRef.current) imageInputRef.current.value = ''
-    setSaveState('图片已移除，保存后生效')
-  }
   const selectTab = (tab) => {
     setActiveTab(tab)
     const targets = { '基本信息': 'basic-information', 'OE 与替代': 'oe-relations', '适配车型': 'fitments' }
@@ -195,7 +254,7 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') || saveState.includes('已标记') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') || saveState.includes('已标记') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button>{mode === 'edit' && form.lifecycleStatus === '在售' ? <button className="secondary-button danger-button" onClick={discontinue} type="button">停产 SKU</button> : null}{mode === 'edit' ? <button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button> : null}<button className="primary-button" disabled={mode === 'edit' && !canPublish} onClick={() => save(mode === 'edit')} title={mode === 'edit' && !canPublish ? '请先完成发布必填项' : undefined} type="button">{mode === 'new' ? '创建草稿' : form.lifecycleStatus === '停产' ? '重新发布 SKU' : '发布 SKU'}</button></div></header>
     {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
-    <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div className="identity-image-preview">{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><div className="identity-image-actions"><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />{form.imageUrl ? '更换图片' : '上传图片'}</button>{form.imageUrl ? <button className="remove-image-button" onClick={removeImage} type="button"><Trash size={16} />删除图片</button> : null}</div><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => { setValue('imageUrl', reader.result); setSaveState('图片已更新，保存后生效') }; reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{brandLabel}</b><i />零件大类　<b>{categoryLabel}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '—'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
+    <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><SkuImageManager form={form} setForm={setForm} setError={setError} setSaveState={setSaveState} /><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{brandLabel}</b><i />零件大类　<b>{categoryLabel}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '—'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
       <TextField codeInput error={codeFieldErrors.skuCode} label="SKU 编码" value={form.skuCode} onChange={(value) => { setCodeValue('skuCode', value); setCodeAvailable(null) }} onBlur={checkCode} required valid={codeAvailable === true} />
       <TextField label="中文名称" value={form.chineseName} onChange={(value) => setValue('chineseName', value)} required />
       <EditorField label="品牌" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={form.brand} onChange={(value) => setValue('brand', value)} disabled={dictionariesLoading} /></EditorField>

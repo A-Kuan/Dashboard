@@ -2,7 +2,7 @@ import Fastify from 'fastify'
 import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './validation.mjs'
 
 export function buildApp({ repository, dictionaryRepository, logger = true }) {
-  const app = Fastify({ logger, trustProxy: true, bodyLimit: 5 * 1024 * 1024 })
+  const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
