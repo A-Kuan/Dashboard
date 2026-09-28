@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
 function mapSku(row, oeRelations = [], fitments = [], changeHistory = []) {
+  const imageUrls = Array.isArray(row.image_urls) && row.image_urls.length
+    ? row.image_urls.filter((value) => typeof value === 'string' && value)
+    : row.image_url ? [row.image_url] : []
   return {
     id: row.id,
     skuCode: row.sku_code,
@@ -14,7 +17,8 @@ function mapSku(row, oeRelations = [], fitments = [], changeHistory = []) {
     unit: row.unit,
     lifecycleStatus: row.lifecycle_status,
     barcode: row.barcode || '',
-    imageUrl: row.image_url || '',
+    imageUrl: imageUrls[0] || '',
+    imageUrls,
     dataSource: row.data_source || '',
     sourceEvidence: row.source_evidence,
     conflictResolution: row.conflict_resolution,
@@ -47,7 +51,8 @@ function auditDetails(input) {
     dataSource: input.dataSource,
     oeRelationCount: input.oeRelations.length,
     fitmentCount: input.fitments.length,
-    hasImage: Boolean(input.imageUrl),
+    hasImage: Boolean(input.imageUrls.length),
+    imageCount: input.imageUrls.length,
   }
 }
 
@@ -96,7 +101,10 @@ export function createSkuRepository(pool) {
       const { rows } = await pool.query(`SELECT s.*,
         (SELECT COUNT(*)::int FROM sku_fitment f WHERE f.sku_id = s.id) AS fitment_count
         FROM sku s ${where} ORDER BY s.updated_at DESC`, values)
-      return rows.map((row) => ({ ...mapSku(row), fitmentCount: row.fitment_count }))
+      return rows.map((row) => {
+        const { imageUrls: _imageUrls, ...summary } = mapSku(row)
+        return { ...summary, fitmentCount: row.fitment_count }
+      })
     },
     async get(id) {
       const { rows } = await pool.query('SELECT * FROM sku WHERE id = $1 OR sku_code = $1 LIMIT 1', [id])
@@ -113,12 +121,12 @@ export function createSkuRepository(pool) {
         const id = randomUUID()
         const { rows } = await client.query(`INSERT INTO sku
           (id, sku_code, chinese_name, brand, category, subcategory, manufacturer_part_number,
-           primary_oe, unit, lifecycle_status, barcode, image_url, data_source, source_evidence,
+           primary_oe, unit, lifecycle_status, barcode, image_url, image_urls, data_source, source_evidence,
            conflict_resolution, created_by, updated_by)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16) RETURNING *`,
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$17) RETURNING *`,
         [id, input.skuCode, input.chineseName, input.brand, input.category, input.subcategory,
           input.manufacturerPartNumber, input.primaryOe, input.unit, input.lifecycleStatus,
-          input.barcode || null, input.imageUrl || null, input.dataSource || null,
+          input.barcode || null, input.imageUrl || null, JSON.stringify(input.imageUrls), input.dataSource || null,
           input.sourceEvidence, input.conflictResolution, actor])
         await replaceChildren(client, id, input)
         await addChangeLog(client, id, rows[0].version, '创建草稿', input, actor)
@@ -140,12 +148,12 @@ export function createSkuRepository(pool) {
         const { rows } = await client.query(`UPDATE sku SET
           sku_code=$2, chinese_name=$3, brand=$4, category=$5, subcategory=$6,
           manufacturer_part_number=$7, primary_oe=$8, unit=$9, lifecycle_status=$10,
-          barcode=$11, image_url=$12, data_source=$13, source_evidence=$14,
-          conflict_resolution=$15, updated_by=$16, updated_at=now(), version=version+1
+          barcode=$11, image_url=$12, image_urls=$13::jsonb, data_source=$14, source_evidence=$15,
+          conflict_resolution=$16, updated_by=$17, updated_at=now(), version=version+1
           WHERE id=$1 RETURNING *`,
         [current.id, input.skuCode, input.chineseName, input.brand, input.category, input.subcategory,
           input.manufacturerPartNumber, input.primaryOe, input.unit, input.lifecycleStatus,
-          input.barcode || null, input.imageUrl || null, input.dataSource || null,
+          input.barcode || null, input.imageUrl || null, JSON.stringify(input.imageUrls), input.dataSource || null,
           input.sourceEvidence, input.conflictResolution, actor])
         if (!rows[0]) return null
         await replaceChildren(client, rows[0].id, input)
