@@ -166,6 +166,26 @@ test('vehicle library supports parts, packages and quote-ready selection without
   await expect(page.getByLabel('零件号 8')).toHaveValue('')
 })
 
+test('creates a vehicle from a VIN-recognized template and keeps imported parts selectable', async ({ page }) => {
+  await installMockVehicleApi(page)
+  await page.goto('./vehicles')
+  await page.getByRole('button', { name: '新建车型', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '新建车型' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'VIN 识别' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByLabel('VIN 码').fill('WP1AA2951HLB19468')
+  await page.getByRole('button', { name: '识别车型' }).click()
+  await expect(page.getByRole('heading', { name: '识别结果' })).toBeVisible()
+  await expect(page.getByText('将导入 6 个常用配件、1 个保养套餐')).toBeVisible()
+  await expect(page.getByLabel('选择配件 1')).toBeChecked()
+  await page.getByLabel('选择配件 6').uncheck()
+  await expect(page.getByText('将导入 5 个常用配件、1 个保养套餐')).toBeVisible()
+  await page.getByLabel('车型版本编码').fill('POR-MACAN-95B-20T-2018-NEW')
+  await page.screenshot({ path: 'qa-artifacts/implementation-new-vehicle-template.png', fullPage: false })
+  await page.getByRole('button', { name: '创建并导入模板' }).click()
+  await expect(page).toHaveURL(/\/vehicles\/new-vehicle$/)
+  await expect(page.getByRole('heading', { name: /保时捷 Macan 95B/ })).toBeVisible()
+})
+
 test('loads persisted SKU data and captures the default state', async ({ page }) => {
   await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toHaveClass(/selected/)
   await expect(page.getByText('保时捷原厂').first()).toBeVisible()
