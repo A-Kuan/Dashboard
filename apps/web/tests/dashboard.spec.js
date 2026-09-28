@@ -356,6 +356,25 @@ test('uploads multiple SKU images and allows changing the primary image', async 
   await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(3)
 })
 
+test('adds an SKU image by dragging it into the preview', async ({ page }) => {
+  await page.goto('./skus/sku-fixture-1/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  const dataTransfer = await page.evaluateHandle(() => {
+    const content = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#075cf6"/></svg>'
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([content], 'dragged-part.svg', { type: 'image/svg+xml' }))
+    return transfer
+  })
+  const dropZone = page.getByLabel('SKU 图片拖拽上传区')
+  await dropZone.dispatchEvent('dragenter', { dataTransfer })
+  await expect(dropZone).toHaveClass(/is-dragging/)
+  await expect(page.getByText('松开即可添加图片')).toBeVisible()
+  await dropZone.dispatchEvent('drop', { dataTransfer })
+  await expect(dropZone).not.toHaveClass(/is-dragging/)
+  await expect(page.getByText('已添加 1 张图片，保存后生效')).toBeVisible()
+  await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(2)
+})
+
 test('publish stays disabled until required relationships are complete', async ({ page }) => {
   await page.getByRole('button', { name: '新建 SKU' }).click()
   await page.getByLabel('SKU 编码 *').fill('PUBLISH-GATE-001')
