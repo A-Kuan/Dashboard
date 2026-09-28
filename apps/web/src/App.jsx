@@ -9,8 +9,26 @@ import { SkuTable } from './components/SkuTable'
 import { SkuEditor } from './components/SkuEditor'
 import { useDictionaries } from './hooks/useDictionaries'
 import { ALL_DICTIONARY_VALUE } from './services/dictionaryService'
-import { listSkus } from './services/skuService'
+import { getSku, listSkus } from './services/skuService'
 import { assetPath } from './utils/assetPath'
+
+function toSkuRow(item) {
+  return {
+    id: item.id,
+    image: item.imageUrl || assetPath('assets/parts/selected-part.png'),
+    sku: item.skuCode,
+    oe: item.primaryOe,
+    name: item.chineseName,
+    category: item.category,
+    brand: item.brand,
+    vehicle: item.fitmentCount ? `${item.fitmentCount} 个适配车型` : '未配置',
+    stock: '—',
+    purchasePrice: '—',
+    salePrice: '—',
+    source: item.dataSource || '人工录入',
+    status: item.lifecycleStatus,
+  }
+}
 
 export function App() {
   const { dictionaries, loading: dictionariesLoading, saveDictionaries, resetDictionaries } = useDictionaries()
@@ -18,6 +36,7 @@ export function App() {
   const [recordsLoading, setRecordsLoading] = useState(true)
   const [recordsError, setRecordsError] = useState('')
   const [selectedId, setSelectedId] = useState(null)
+  const [selectedRecord, setSelectedRecord] = useState(null)
   const [summaryTab, setSummaryTab] = useState('全部零件')
   const [brand, setBrand] = useState(ALL_DICTIONARY_VALUE)
   const [category, setCategory] = useState(ALL_DICTIONARY_VALUE)
@@ -30,6 +49,7 @@ export function App() {
   }, [])
   const [commandState, setCommandState] = useState(initialCommand.state)
   const [searchValue, setSearchValue] = useState(initialCommand.value)
+  const [commandRows, setCommandRows] = useState([])
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const isDictionaryModule = window.location.pathname.replace(/\/+$/, '').endsWith('/dictionaries')
   const editorMatch = window.location.pathname.match(/\/skus\/(new|[^/]+\/edit)\/?$/)
@@ -48,6 +68,18 @@ export function App() {
   }, [isDictionaryModule, isSkuEditor])
 
   useEffect(() => {
+    if (!selectedId || isDictionaryModule || isSkuEditor) {
+      setSelectedRecord(null)
+      return
+    }
+    const controller = new AbortController()
+    getSku(selectedId, { signal: controller.signal }).then(setSelectedRecord).catch((error) => {
+      if (error.name !== 'AbortError') setRecordsError(error.message)
+    })
+    return () => controller.abort()
+  }, [isDictionaryModule, isSkuEditor, selectedId])
+
+  useEffect(() => {
     const openCommandPanel = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -63,22 +95,13 @@ export function App() {
     return () => window.removeEventListener('keydown', openCommandPanel)
   }, [])
 
-  const skuRows = useMemo(() => records.map((item) => ({
-    id: item.id,
-    image: item.imageUrl || assetPath('assets/parts/selected-part.png'),
-    sku: item.skuCode,
-    oe: item.primaryOe,
-    name: item.chineseName,
-    category: item.category,
-    brand: item.brand,
-    vehicle: item.fitmentCount ? `${item.fitmentCount} 个适配车型` : '未配置',
-    stock: '—',
-    purchasePrice: '—',
-    salePrice: '—',
-    source: item.dataSource || '人工录入',
-    status: item.lifecycleStatus,
-  })), [records])
-  const summaryTabs = useMemo(() => [['全部零件', String(skuRows.length)], ['待补全', String(skuRows.filter((row) => !row.vehicle || row.vehicle === '未配置').length)], ['低库存', '0'], ['适配冲突', '0']], [skuRows])
+  const skuRows = useMemo(() => records.map(toSkuRow), [records])
+  const summaryTabs = useMemo(() => [
+    { label: '全部零件', count: String(skuRows.length) },
+    { label: '待补全', count: String(skuRows.filter((row) => !row.vehicle || row.vehicle === '未配置').length) },
+    { label: '低库存', count: '0', disabled: true },
+    { label: '适配冲突', count: '0', disabled: true },
+  ], [skuRows])
   const filteredRows = useMemo(() => skuRows.filter((row) => {
     const matchesSummary = summaryTab === '全部零件'
       || (summaryTab === '低库存' && row.status === '低库存')
@@ -89,8 +112,23 @@ export function App() {
       && (status === ALL_DICTIONARY_VALUE || row.status === status)
   }), [brand, category, skuRows, status, summaryTab])
 
-  const selectedItem = skuRows.find((row) => row.id === selectedId) ?? null
-  const commandCenter = commandState !== 'closed' ? <CommandCenter rows={skuRows} state={commandState} value={searchValue} onChange={setSearchValue} onClose={() => { setCommandState('closed'); setSearchValue('') }} onSubmit={(event) => { event.preventDefault(); const query = searchValue.trim(); setCommandState('loading'); window.setTimeout(() => { if (/^WP1/i.test(query)) setCommandState('vin'); else if (/error/i.test(query)) setCommandState('error'); else setCommandState(skuRows.length ? 'oe' : 'empty') }, 650) }} onStateChange={(nextState, nextValue = searchValue) => { setSearchValue(nextValue); setCommandState(nextState); if (nextState === 'loading') window.setTimeout(() => setCommandState(skuRows.length ? 'oe' : 'empty'), 650) }} onSelect={(id) => { setSelectedId(id); setCommandState('closed'); setSearchValue('') }} /> : null
+  const closeCommandCenter = () => { setCommandState('closed'); setSearchValue(''); setCommandRows([]) }
+  const runCommandSearch = async (query = searchValue) => {
+    const normalized = query.trim()
+    setSearchValue(query)
+    if (!normalized) return setCommandState('expanded')
+    if (/^WP1/i.test(normalized)) return setCommandState('vin')
+    setCommandState('loading')
+    try {
+      const results = await listSkus({ query: normalized })
+      setCommandRows(results.map(toSkuRow))
+      setCommandState(results.length ? 'oe' : 'empty')
+    } catch {
+      setCommandRows([])
+      setCommandState('error')
+    }
+  }
+  const commandCenter = commandState !== 'closed' ? <CommandCenter rows={commandState === 'expanded' ? skuRows : commandRows} state={commandState} value={searchValue} onChange={setSearchValue} onClose={closeCommandCenter} onSubmit={(event) => { event.preventDefault(); runCommandSearch() }} onRetry={() => runCommandSearch(searchValue)} onNewSku={() => window.location.assign(assetPath('skus/new'))} onSelect={(id) => { setSelectedId(id); closeCommandCenter() }} /> : null
 
   if (isDictionaryModule) {
     return <div className="app-shell"><AppHeader activeNav="" currentSpace="字典管理" onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><DictionaryManagement dictionaries={dictionaries} onReset={resetDictionaries} onSave={saveDictionaries} />{commandCenter}</div>
@@ -112,7 +150,7 @@ export function App() {
         </section>
 
         <div className="summary-tabs" role="tablist">
-          {summaryTabs.map(([label, count]) => <button className={summaryTab === label ? 'active' : ''} key={label} onClick={() => setSummaryTab(label)} role="tab" type="button">{label} <strong>{count}</strong></button>)}
+          {summaryTabs.map(({ label, count, disabled }) => <button aria-disabled={disabled || undefined} className={summaryTab === label ? 'active' : ''} disabled={disabled} key={label} onClick={() => setSummaryTab(label)} role="tab" title={disabled ? `${label}需要相应业务模块接入后开放` : undefined} type="button">{label} <strong>{count}</strong></button>)}
         </div>
 
         <div className="filters-row">
@@ -121,12 +159,12 @@ export function App() {
             <DictionarySelect dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={category} onChange={setCategory} disabled={dictionariesLoading} />
             <DictionarySelect dictionaryCode="sku_status" dictionaries={dictionaries} fallbackLabel="状态" value={status} onChange={setStatus} disabled={dictionariesLoading} />
           </div>
-          <div className="filters-right"><button className="secondary-button" type="button"><Funnel size={17} /> 更多筛选</button><button className="secondary-button sort-button" type="button">默认排序 <CaretDown size={13} weight="bold" /></button></div>
+          <div className="filters-right"><button className="secondary-button" disabled title="更多筛选尚未开放" type="button"><Funnel size={17} /> 更多筛选</button><button className="secondary-button sort-button" disabled title="自定义排序尚未开放" type="button">默认排序 <CaretDown size={13} weight="bold" /></button></div>
         </div>
 
         {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}
         {!recordsLoading && recordsError ? <div className="sku-data-state error"><Warning size={23} weight="fill" /><b>无法读取 SKU 数据</b><span>{recordsError}</span><button className="secondary-button" onClick={() => window.location.reload()} type="button">重新加载</button></div> : null}
-        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedItem ? <DetailPanels item={selectedItem} activeTab={detailTab} onTabChange={setDetailTab} /> : null}</> : null}
+        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedRecord ? <DetailPanels item={selectedRecord} activeTab={detailTab} onTabChange={setDetailTab} onClose={() => setSelectedId(null)} onEdit={() => window.location.assign(assetPath(`skus/${selectedRecord.id}/edit`))} /> : null}</> : null}
         {!recordsLoading && !recordsError && !filteredRows.length ? <div className="sku-data-state empty"><Package size={38} /><h2>{records.length ? '当前筛选没有结果' : '还没有 SKU'}</h2><p>{records.length ? '调整筛选条件后再试。' : '数据库已准备好，从第一条真实 SKU 开始建立零件主数据。'}</p>{records.length ? null : <button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={17} />新建第一个 SKU</button>}</div> : null}
       </main>
 

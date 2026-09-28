@@ -12,8 +12,9 @@ async function request(path = '', options = {}) {
   return body
 }
 
-export async function listSkus({ signal } = {}) {
-  const result = await request('', { signal })
+export async function listSkus({ signal, query = '' } = {}) {
+  const suffix = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''
+  const result = await request(suffix, { signal })
   return result.items || []
 }
 

@@ -6,7 +6,7 @@ export function AppHeader({ onSearchFocus, searchValue = '', activeNav = '零件
     <header className="app-header">
       <div className="brand-lockup"><span className="brand-name">命令中枢</span><span className="brand-tagline">让零件流动更简单</span></div>
       <nav className="global-nav" aria-label="主导航">
-        {['零件库', '采购', '库存', '销售'].map((item) => <button className={item === activeNav ? 'nav-item active' : 'nav-item'} key={item}>{item}</button>)}
+        {['零件库', '采购', '库存', '销售'].map((item) => <button aria-disabled={item !== '零件库'} className={item === activeNav ? 'nav-item active' : 'nav-item'} disabled={item !== '零件库'} key={item} title={item === '零件库' ? undefined : `${item}模块尚未开放`}>{item}</button>)}
       </nav>
       <button className="global-search" onClick={onSearchFocus} type="button">
         <MagnifyingGlass size={17} /><span>{searchValue || '搜索 VIN、OE号、SKU、车型，或输入命令…'}</span>{searchValue ? <span className="header-clear"><X size={14} /></span> : <span className="shortcut"><Command size={13} /> K</span>}

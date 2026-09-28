@@ -60,6 +60,7 @@ button { color: inherit; }
 .summary-tabs button { height: 35px; border: 1px solid #e3e9f2; border-radius: 5px; padding: 0 16px; background: rgba(255,255,255,.82); color: #4a5872; font-size: 13px; cursor: pointer; position: relative; }
 .summary-tabs button strong { margin-left: 7px; font-weight: 650; }
 .summary-tabs button.active { color: var(--blue); font-weight: 650; background: white; }
+.summary-tabs button:disabled { opacity: .48; cursor: not-allowed; }
 .summary-tabs button.active::after { content: ""; position: absolute; height: 2px; left: 0; right: 0; bottom: -1px; background: var(--blue); }
 .filters-row { display: flex; justify-content: space-between; align-items: center; height: 44px; }
 .filters-left, .filters-right { display: flex; gap: 10px; }
@@ -127,11 +128,13 @@ button { color: inherit; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
 .detail-grid { margin: 10px -16px 0; display: grid; grid-template-columns: 32.55% 16.4% 25.4% 25.65%; min-height: 317px; border-top: 1px solid #dfe6f0; }
+.detail-grid.focused { grid-template-columns: 1fr; }
 .part-summary-card, .panel-card { background: rgba(255,255,255,.94); border: 1px solid #e0e7f0; border-radius: 4px; }
 .detail-grid > * { margin: 7px 4px 0; }
 .detail-grid > *:first-child { margin-left: 0; }
 .detail-grid > *:last-child { margin-right: 0; }
 .part-summary-card { overflow: hidden; }
+.part-summary-card.focused { min-height: 300px; }
 .part-summary-top { height: 100px; padding: 11px 11px 8px; display: flex; align-items: flex-start; gap: 13px; }
 .part-preview { width: 106px; height: 81px; object-fit: cover; border: 1px solid #dfe6ee; border-radius: 4px; }
 .part-title { min-width: 0; flex: 1; }
@@ -149,6 +152,12 @@ button { color: inherit; }
 .detail-facts div { display: grid; grid-template-columns: 92px 1fr; align-items: center; }
 .detail-facts dt { color: #566682; }
 .detail-facts dd { margin: 0; color: #344663; font-weight: 500; }
+.detail-tab-panel { padding: 18px 22px 22px; }
+.detail-tab-panel h3 { margin: 0 0 13px; color: #1f2e49; font-size: 15px; }
+.detail-tab-panel .detail-facts { padding: 4px 0 10px; }
+.detail-tab-panel .detail-data-empty { min-height: 150px; }
+.detail-panel-note { margin: 6px 0 0; color: #8491a4; font-size: 10px; }
+.nav-item:disabled, .filters-right button:disabled, .quick-actions button:disabled, .saved-list button:disabled, .more-commands button:disabled { opacity: .48; cursor: not-allowed; }
 
 .panel-card { padding: 11px 10px 10px; }
 .panel-header { min-height: 44px; display: flex; align-items: flex-start; justify-content: space-between; }
@@ -475,6 +484,7 @@ button { color: inherit; }
 .editor-title-line > span { height: 24px; padding: 0 10px; display: inline-flex; align-items: center; color: var(--blue); border-radius: 3px; background: #e7f1ff; font-size: 11px; font-weight: 650; }
 .editor-save-actions { padding-top: 20px; display: flex; align-items: center; gap: 9px; }
 .editor-save-actions .primary-button { min-width: 108px; justify-content: center; }
+.editor-save-actions .primary-button:disabled { opacity: .48; cursor: not-allowed; box-shadow: none; }
 .save-message { min-width: 148px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; color: #60708a; font-size: 10.5px; }
 .save-message svg { color: var(--green); }
 .save-message.success { color: var(--green); }
@@ -592,6 +602,7 @@ button { color: inherit; }
 .resolved-message { height: 50px; margin-top: 8px; padding: 0 11px; display: flex; align-items: center; gap: 8px; color: var(--green); border: 1px solid #cdebdc; border-radius: 4px; background: #f0fbf5; font-size: 10.5px; font-weight: 650; }
 .publish-check { margin-top: 10px; }
 .publish-check h3 { margin: 0 0 6px; color: #172645; font-size: 15px; }
+.publish-check h4 { margin: 12px 0 6px; color: #566682; font-size: 10px; }
 .publish-check h3 b { font-size: inherit; }
 .publish-progress { height: 6px; overflow: hidden; border-radius: 5px; background: #e4eaf2; }
 .publish-progress span { height: 100%; display: block; border-radius: inherit; background: var(--blue); transition: width .2s ease; }

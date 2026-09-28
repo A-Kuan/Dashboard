@@ -47,7 +47,7 @@ SKU 主数据保存默认供应商、供应商件号、采购单位、最小起�
 
 ### 7. 数据治理
 
-系统自动维护创建人、创建时间、更新人、更新时间、数据负责人、完整度、冲突项、审批状态和变更记录。发布前必须通过唯一性、来源、OE 关系、车型适配、图片/条码和冲突确认检查。
+系统自动维护创建人、创建时间、更新人、更新时间和版本。发布前强制校验基本信息、与主 OE 一致的 OE 关系、至少一条适配车型和数据来源；图片与条码作为建议补充项。完整审批流和字段级变更记录属于后续阶段。
 
 ## 前端组件
 
@@ -62,14 +62,16 @@ SKU 主数据保存默认供应商、供应商件号、采购单位、最小起�
 
 SKU API 位于 `apps/api`，提供：
 
+- `GET /api/v1/skus?q=<keyword>`：列表或按 SKU、OE、名称、品牌、分类和车型搜索。
 - `GET /api/v1/skus/:id`：读取 SKU 聚合详情。
 - `POST /api/v1/skus`：创建 SKU。
 - `PUT /api/v1/skus/:id`：更新主数据草稿。
 - `POST /api/v1/skus/:id/publish`：完成校验并发布。
 - `POST /api/v1/skus/validate-code`：校验 SKU 编码唯一性。
-- `GET /api/v1/skus/:id/source-evidence`：读取 EPC/供应商来源证据。
-- `POST /api/v1/skus/:id/conflicts/:conflictId/resolve`：记录差异处理结论。
+- `GET /api/v1/dictionaries`：读取共享业务字典。
+- `PUT /api/v1/dictionaries`：保存共享业务字典。
+- `POST /api/v1/dictionaries/reset`：恢复默认字典。
 
-数据库使用 `sku`、`sku_oe_relation`、`sku_fitment` 三张表。每次更新递增 `sku.version`，OE 与适配记录使用外键级联并在同一事务中替换。后续多人协作阶段应在接口中增加版本条件，拒绝覆盖过期版本，并扩展独立变更审计表。
+数据库使用 `sku`、`sku_oe_relation`、`sku_fitment` 和 `app_configuration` 表。每次更新递增 `sku.version`，OE 与适配记录使用外键级联并在同一事务中替换。后续多人协作阶段应在接口中增加版本条件，拒绝覆盖过期版本，并扩展独立变更审计表。
 
 本地开发先启动 API，再启动前端；Vite 将 `/api` 代理到 `127.0.0.1:4183`。生产环境由 Nginx 将 `/sku-preview/api/` 转发到同一端口。

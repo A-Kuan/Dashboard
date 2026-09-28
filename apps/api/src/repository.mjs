@@ -62,10 +62,16 @@ export function createSkuRepository(pool) {
   }
 
   return {
-    async list() {
+    async list(query = '') {
+      const term = String(query || '').trim().toLowerCase()
+      const values = term ? [`%${term}%`] : []
+      const where = term ? `WHERE lower(concat_ws(' ', s.sku_code, s.primary_oe, s.manufacturer_part_number,
+        s.chinese_name, s.brand, s.category, s.subcategory)) LIKE $1
+        OR EXISTS (SELECT 1 FROM sku_oe_relation oe WHERE oe.sku_id = s.id AND lower(oe.oe_number) LIKE $1)
+        OR EXISTS (SELECT 1 FROM sku_fitment f WHERE f.sku_id = s.id AND lower(concat_ws(' ', f.vehicle, f.years, f.engine, f.body, f.fitment_condition)) LIKE $1)` : ''
       const { rows } = await pool.query(`SELECT s.*,
         (SELECT COUNT(*)::int FROM sku_fitment f WHERE f.sku_id = s.id) AS fitment_count
-        FROM sku s ORDER BY s.updated_at DESC`)
+        FROM sku s ${where} ORDER BY s.updated_at DESC`, values)
       return rows.map((row) => ({ ...mapSku(row), fitmentCount: row.fitment_count }))
     },
     async get(id) {

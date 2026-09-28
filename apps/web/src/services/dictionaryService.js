@@ -48,18 +48,39 @@ async function requestDictionaries(endpoint, signal) {
   return normalizeDictionaries(await response.json())
 }
 
+async function writeDictionaries(endpoint, options = {}) {
+  const response = await fetch(endpoint, {
+    method: options.method || 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.message || `字典保存失败 (${response.status})`)
+  return normalizeDictionaries(payload)
+}
+
 export async function fetchDictionaries({ signal } = {}) {
-  const configuredEndpoint = import.meta.env.VITE_DICTIONARY_ENDPOINT
+  const configuredEndpoint = dictionaryEndpoint()
   const localEndpoint = assetPath('config/dictionaries.json')
 
-  if (configuredEndpoint) {
-    try {
-      return await requestDictionaries(configuredEndpoint, signal)
-    } catch (error) {
-      if (error.name === 'AbortError') throw error
-      console.warn(`字典接口不可用，改用本地配置：${error.message}`)
-    }
+  try {
+    return await requestDictionaries(configuredEndpoint, signal)
+  } catch (error) {
+    if (error.name === 'AbortError') throw error
+    console.warn(`字典接口不可用，改用本地配置：${error.message}`)
   }
 
   return requestDictionaries(localEndpoint, signal)
+}
+
+export function saveDictionariesToServer(dictionaries) {
+  return writeDictionaries(dictionaryEndpoint(), { body: { version: 1, dictionaries } })
+}
+
+export function resetDictionariesOnServer() {
+  return writeDictionaries(`${dictionaryEndpoint().replace(/\/$/, '')}/reset`, { method: 'POST' })
+}
+
+function dictionaryEndpoint() {
+  return import.meta.env.VITE_DICTIONARY_ENDPOINT || assetPath('api/v1/dictionaries')
 }

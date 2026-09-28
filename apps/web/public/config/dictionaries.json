@@ -25,8 +25,10 @@
       "label": "状态",
       "items": [
         { "value": "__all__", "label": "全部", "sort": 0, "enabled": true },
-        { "value": "在售", "label": "在售", "sort": 10, "enabled": true },
-        { "value": "低库存", "label": "低库存", "sort": 20, "enabled": true }
+        { "value": "草稿", "label": "草稿", "sort": 10, "enabled": true },
+        { "value": "待复核", "label": "待复核", "sort": 20, "enabled": true },
+        { "value": "在售", "label": "在售", "sort": 30, "enabled": true },
+        { "value": "停产", "label": "停产", "sort": 40, "enabled": true }
       ]
     }
   }

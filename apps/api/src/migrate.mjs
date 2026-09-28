@@ -1,13 +1,16 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { createPool } from './db.mjs'
 
 const pool = createPool()
-const migrationUrl = new URL('../migrations/001_init.sql', import.meta.url)
-const sql = await readFile(fileURLToPath(migrationUrl), 'utf8')
+const migrationDirectory = fileURLToPath(new URL('../migrations/', import.meta.url))
 try {
-  await pool.query(sql)
-  console.log('Applied migration 001_init.sql')
+  const migrations = (await readdir(migrationDirectory)).filter((file) => file.endsWith('.sql')).sort()
+  for (const migration of migrations) {
+    const sql = await readFile(`${migrationDirectory}/${migration}`, 'utf8')
+    await pool.query(sql)
+    console.log(`Applied migration ${migration}`)
+  }
 } finally {
   await pool.end()
 }

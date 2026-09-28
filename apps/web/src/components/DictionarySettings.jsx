@@ -13,6 +13,7 @@ export function DictionaryManagement({ dictionaries, onReset, onSave }) {
   const [draft, setDraft] = useState(() => cloneDictionaries(dictionaries))
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const currentCode = activeCode ?? codes[0]
   const activeDictionary = draft[currentCode] ?? dictionaries[currentCode]
   const activeItems = useMemo(() => activeDictionary?.items ?? [], [activeDictionary])
@@ -41,7 +42,7 @@ export function DictionaryManagement({ dictionaries, onReset, onSave }) {
     sort: activeItems.length * 10,
   }])
   const removeItem = (index) => updateItems(activeItems.filter((_, itemIndex) => itemIndex !== index))
-  const submit = () => {
+  const submit = async () => {
     const invalid = Object.values(draft).some((dictionary) => {
       const values = dictionary.items.map((item) => item.value.trim())
       return dictionary.items.some((item) => !item.label.trim() || !item.value.trim()) || new Set(values).size !== values.length
@@ -50,13 +51,34 @@ export function DictionaryManagement({ dictionaries, onReset, onSave }) {
       setError('显示名称不能为空，系统编码必须保持唯一。')
       return
     }
-    onSave(draft)
-    setError('')
-    setSaved(true)
+    setSaving(true)
+    try {
+      const persisted = await onSave(draft)
+      setDraft(cloneDictionaries(persisted))
+      setError('')
+      setSaved(true)
+    } catch (reason) {
+      setError(reason.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+  const reset = async () => {
+    setSaving(true)
+    try {
+      const persisted = await onReset()
+      setDraft(cloneDictionaries(persisted))
+      setError('')
+      setSaved(false)
+    } catch (reason) {
+      setError(reason.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return <main className="dictionary-module">
-    <header className="dictionary-module-heading"><div><a href={assetPath('')}><ArrowLeft size={16} />返回 SKU 管理</a><h1>字典管理</h1><p>集中维护业务系统中的公共选项，确保 SKU 数据口径一致</p></div><div className="dictionary-module-actions">{saved ? <span><CheckCircle size={16} weight="fill" />配置已保存</span> : null}<button className="secondary-button" onClick={() => { onReset(); setSaved(false) }} type="button">恢复系统默认</button><button className="primary-button" onClick={submit} type="button">保存配置</button></div></header>
+    <header className="dictionary-module-heading"><div><a href={assetPath('')}><ArrowLeft size={16} />返回 SKU 管理</a><h1>字典管理</h1><p>集中维护业务系统中的公共选项，保存后同步到服务端</p></div><div className="dictionary-module-actions">{saved ? <span><CheckCircle size={16} weight="fill" />配置已保存到数据库</span> : null}<button className="secondary-button" disabled={saving} onClick={reset} type="button">恢复系统默认</button><button className="primary-button" disabled={saving} onClick={submit} type="button">{saving ? '正在保存…' : '保存配置'}</button></div></header>
     <div className="dictionary-module-layout">
       <aside className="dictionary-catalog"><div className="catalog-title"><SlidersHorizontal size={18} /><span><b>业务字典</b><small>{codes.length} 个字典</small></span></div><nav aria-label="字典类型">{codes.map((code) => { const dictionary = draft[code] ?? dictionaries[code]; return <button className={code === currentCode ? 'active' : ''} key={code} onClick={() => { setActiveCode(code); setError(''); setSaved(false) }} type="button"><span>{dictionary.label}<small>{code}</small></span><em>{dictionary.items.filter((item) => item.enabled).length} 项</em></button> })}</nav><div className="catalog-note"><b>配置说明</b><p>停用选项不会影响已有数据，但将从新建与筛选入口中隐藏。</p></div></aside>
       <section className="dictionary-page-editor"><div className="dictionary-page-toolbar"><div><span>当前字典</span><h2>{activeDictionary?.label}</h2><p>调整显示顺序、名称和启用状态；系统编码自动生成且不可修改</p></div><button className="secondary-button" onClick={addItem} type="button"><Plus size={16} />新增选项</button></div>

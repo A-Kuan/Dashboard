@@ -27,7 +27,11 @@ async function installMockSkuApi(page) {
     }
     const marker = '/api/v1/skus/'
     const suffix = path.includes(marker) ? decodeURIComponent(path.split(marker)[1]) : ''
-    if (!suffix && method === 'GET') return json(200, { items: records })
+    if (!suffix && method === 'GET') {
+      const query = (url.searchParams.get('q') || '').toLowerCase()
+      const items = query ? records.filter((item) => [item.skuCode, item.primaryOe, item.chineseName, item.brand, item.category, ...item.oeRelations.map((row) => row.oeNumber), ...item.fitments.map((row) => row.vehicle)].join(' ').toLowerCase().includes(query)) : records
+      return json(200, { items })
+    }
     if (!suffix && method === 'POST') {
       const body = request.postDataJSON()
       const item = { id: 'created-sku-1', ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: '张伟', fitmentCount: body.fitments?.length || 0 }
@@ -46,10 +50,30 @@ async function installMockSkuApi(page) {
   })
 }
 
+async function installMockDictionaryApi(page) {
+  let payload = {
+    version: 1,
+    dictionaries: {
+      sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'Porsche', label: 'Porsche', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
+      part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
+      sku_status: { label: '状态', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '草稿', label: '草稿', sort: 10, enabled: true }, { value: '在售', label: '在售', sort: 20, enabled: true }] },
+    },
+  }
+  const defaults = structuredClone(payload)
+  await page.route('**/api/v1/dictionaries**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) })
+    if (request.url().endsWith('/reset')) payload = structuredClone(defaults)
+    else payload = { ...request.postDataJSON(), version: payload.version + 1 }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) })
+  })
+}
+
 test.beforeEach(async ({ page }) => {
   const errors = []
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
   page.on('pageerror', (error) => errors.push(error.message))
+  await installMockDictionaryApi(page)
   await installMockSkuApi(page)
   await page.goto('./')
   await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
@@ -91,7 +115,7 @@ test('creates a SKU through the persisted form flow', async ({ page }) => {
   await page.getByLabel('OE 编号 1').fill('REAL TEST 001')
   await page.getByRole('button', { name: '添加适配车型' }).click()
   await page.getByLabel('适配车型 1').fill('测试车型')
-  await page.getByRole('button', { name: '保存草稿' }).click()
+  await page.getByRole('button', { name: '创建草稿' }).click()
   await expect(page).toHaveURL(/\/skus\/created-sku-1\/edit$/)
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
 })
@@ -118,10 +142,42 @@ test('edits relations, fitment, dictionaries and saves to the API', async ({ pag
   await page.getByLabel('OE 编号 2').fill('BMW TEST 002')
   await page.getByRole('button', { name: '添加适配车型' }).click()
   await page.getByLabel('适配车型 2').fill('BMW X5 (G05)')
-  await page.getByRole('button', { name: '保存 SKU' }).click()
+  await page.getByRole('button', { name: '发布 SKU' }).click()
   await expect(page.getByText('SKU 已保存并发布')).toBeVisible()
   await page.getByRole('button', { name: '放大 EPC 图' }).click()
   await expect(page.getByRole('button', { name: '关闭 EPC 大图' })).toBeVisible()
+})
+
+test('search returns only actual database matches', async ({ page }) => {
+  await page.getByRole('button', { name: /SKU、车型/ }).click()
+  await page.getByLabel('命令搜索').fill('NO-MATCH-XYZ')
+  await page.getByLabel('命令搜索').press('Enter')
+  await expect(page.getByRole('heading', { name: '数据库中没有匹配记录' })).toBeVisible()
+  await page.locator('.empty-results').getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('button', { name: /SKU、车型/ }).click()
+  await page.getByLabel('命令搜索').fill('95B 867 288')
+  await page.getByLabel('命令搜索').press('Enter')
+  await expect(page.getByText('95B-867-288-OM8', { exact: true }).first()).toBeVisible()
+})
+
+test('detail tabs render persisted fitment and edit opens the editor', async ({ page }) => {
+  await page.getByRole('tab', { name: '适配信息' }).click()
+  await expect(page.getByRole('tabpanel')).toContainText('Porsche Cayenne (9YA)')
+  await expect(page.getByRole('tab', { name: '适配信息' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: '编辑', exact: true }).click()
+  await expect(page).toHaveURL(/\/skus\/sku-fixture-1\/edit$/)
+})
+
+test('publish stays disabled until required relationships are complete', async ({ page }) => {
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByLabel('SKU 编码 *').fill('PUBLISH-GATE-001')
+  await page.getByLabel('中文名称 *').fill('发布校验件')
+  await page.getByLabel('零件小类 *').fill('校验类')
+  await page.getByLabel('制造商零件号 *').fill('PUBLISH MPN 001')
+  await page.getByLabel('主 OE 号 *').fill('PUBLISH OE 001')
+  await page.getByRole('button', { name: '创建草稿' }).click()
+  await page.getByRole('heading', { name: '编辑 SKU' }).waitFor()
+  await expect(page.getByRole('button', { name: '发布 SKU' })).toBeDisabled()
 })
 
 test('configures dictionaries and persists the result', async ({ page }) => {

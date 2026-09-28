@@ -65,3 +65,16 @@ export function normalizeSkuInput(input = {}) {
   }
   return sku
 }
+
+export function validatePublishableSku(sku) {
+  const missing = []
+  if (!sku.oeRelations.some((row) => row.oeNumber.toLowerCase() === sku.primaryOe.toLowerCase())) missing.push('与主 OE 号一致的 OE 关系')
+  if (!sku.fitments.length) missing.push('至少一条适配车型')
+  if (!sku.dataSource) missing.push('数据来源')
+  if (missing.length) {
+    const error = new Error(`发布前请完成：${missing.join('、')}`)
+    error.statusCode = 422
+    throw error
+  }
+  return sku
+}

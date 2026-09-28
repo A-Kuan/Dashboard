@@ -1,11 +1,11 @@
 import Fastify from 'fastify'
-import { normalizeSkuInput } from './validation.mjs'
+import { normalizeSkuInput, validatePublishableSku } from './validation.mjs'
 
-export function buildApp({ repository, logger = true }) {
+export function buildApp({ repository, dictionaryRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 5 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
-  app.get('/api/v1/skus', async () => ({ items: await repository.list() }))
+  app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {
     const item = await repository.get(request.params.id)
     if (!item) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
@@ -16,22 +16,35 @@ export function buildApp({ repository, logger = true }) {
     return { available: Boolean(code) && !(await repository.codeExists(code, request.body?.exceptId || null)) }
   })
   app.post('/api/v1/skus', async (request, reply) => {
-    const input = normalizeSkuInput(request.body)
+    const input = { ...normalizeSkuInput(request.body), lifecycleStatus: '草稿' }
     if (await repository.codeExists(input.skuCode)) return reply.code(409).send({ error: 'SKU_CODE_EXISTS', message: 'SKU 编码已存在' })
     return reply.code(201).send(await repository.create(input, request.headers['x-operator-name'] || '张伟'))
   })
   app.put('/api/v1/skus/:id', async (request, reply) => {
-    const input = normalizeSkuInput(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
+    const input = { ...normalizeSkuInput(request.body), lifecycleStatus: existing.lifecycleStatus }
     if (await repository.codeExists(input.skuCode, existing.id)) return reply.code(409).send({ error: 'SKU_CODE_EXISTS', message: 'SKU 编码已存在' })
     return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟')
   })
   app.post('/api/v1/skus/:id/publish', async (request, reply) => {
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
-    const input = normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '在售' })
+    const input = validatePublishableSku(normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '在售' }))
     return repository.update(existing.id, input, request.headers['x-operator-name'] || '张伟')
+  })
+
+  app.get('/api/v1/dictionaries', async (_request, reply) => {
+    if (!dictionaryRepository) return reply.code(503).send({ error: 'DICTIONARY_SERVICE_UNAVAILABLE', message: '字典服务未配置' })
+    return dictionaryRepository.get()
+  })
+  app.put('/api/v1/dictionaries', async (request, reply) => {
+    if (!dictionaryRepository) return reply.code(503).send({ error: 'DICTIONARY_SERVICE_UNAVAILABLE', message: '字典服务未配置' })
+    return dictionaryRepository.save(request.body, request.headers['x-operator-name'] || '张伟')
+  })
+  app.post('/api/v1/dictionaries/reset', async (request, reply) => {
+    if (!dictionaryRepository) return reply.code(503).send({ error: 'DICTIONARY_SERVICE_UNAVAILABLE', message: '字典服务未配置' })
+    return dictionaryRepository.reset(request.headers['x-operator-name'] || '张伟')
   })
 
   app.setErrorHandler((error, _request, reply) => {

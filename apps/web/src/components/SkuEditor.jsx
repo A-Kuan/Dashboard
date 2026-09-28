@@ -7,11 +7,11 @@ import { DictionarySelect } from './Common'
 import { createSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
 import { assetPath } from '../utils/assetPath'
 
-const editorTabs = ['基本信息', 'OE 与替代', '适配车型', '技术规格', '采购与库存', '媒体资料', '变更记录']
+const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
 const blankForm = {
   skuCode: '', chineseName: '', brand: 'Porsche', category: '车身及内饰', subcategory: '',
   manufacturerPartNumber: '', primaryOe: '', unit: '件', lifecycleStatus: '草稿', barcode: '',
-  imageUrl: '', dataSource: '', sourceEvidence: null, conflictResolution: null,
+  imageUrl: '', dataSource: '人工录入', sourceEvidence: null, conflictResolution: null,
   createdAt: '', updatedAt: '', updatedBy: '张伟',
 }
 
@@ -66,22 +66,28 @@ function FitmentTable({ rows, setRows }) {
   </section>
 }
 
-function PublishCheck({ form, oeRows, fitmentRows, sourceEvidence }) {
-  const checks = [
+function getRequiredPublishChecks(form, oeRows, fitmentRows) {
+  return [
     ['基本信息', Boolean(form.skuCode && form.chineseName && form.brand && form.category && form.subcategory && form.manufacturerPartNumber && form.primaryOe)],
-    ['图片', Boolean(form.imageUrl)], ['OE 与替代关系', oeRows.length > 0], ['条形码', Boolean(form.barcode)],
-    ['适配车型', fitmentRows.length > 0], ['来源证据', Boolean(sourceEvidence)],
+    ['主 OE 关系', oeRows.some((row) => row.oeNumber?.trim().toLowerCase() === form.primaryOe?.trim().toLowerCase())],
+    ['适配车型', fitmentRows.some((row) => row.vehicle?.trim())],
+    ['数据来源', Boolean(form.dataSource)],
   ]
+}
+
+function PublishCheck({ form, oeRows, fitmentRows }) {
+  const checks = getRequiredPublishChecks(form, oeRows, fitmentRows)
   const completed = checks.filter(([, value]) => value).length
-  return <section className="publish-check"><h3>发布前检查 <b>{completed}/6</b></h3><div className="publish-progress"><span style={{ width: `${completed / 6 * 100}%` }} /></div><div className="publish-check-grid">{checks.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '待完成'}</em></span>)}</div></section>
+  const recommendations = [['商品图片', Boolean(form.imageUrl)], ['条形码', Boolean(form.barcode)]]
+  return <section className="publish-check"><h3>发布必填 <b>{completed}/{checks.length}</b></h3><div className="publish-progress"><span style={{ width: `${completed / checks.length * 100}%` }} /></div><div className="publish-check-grid">{checks.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '待完成'}</em></span>)}</div><h4>建议补充</h4><div className="publish-check-grid">{recommendations.map(([item, complete]) => <span className={complete ? 'complete' : ''} key={item}>{complete ? <CheckCircle size={15} weight="fill" /> : <Circle size={15} />}<b>{item}</b><em>{complete ? '已完成' : '可后补'}</em></span>)}</div></section>
 }
 
 function EvidencePanel({ form, oeRows, fitmentRows, onZoom }) {
   const evidence = form.sourceEvidence
-  if (!evidence) return <aside className="evidence-panel evidence-empty"><header className="evidence-title"><div><h2>来源证据</h2></div></header><div className="evidence-empty-state"><ImageSquare size={38} /><h3>尚未关联 EPC 来源</h3><p>通过 EPC 导入或来源匹配后，原始图组、OE 编号、车型和参考价会在这里显示。</p></div><PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} sourceEvidence={evidence} /></aside>
+  if (!evidence) return <aside className="evidence-panel evidence-empty"><header className="evidence-title"><div><h2>来源证据</h2></div></header><div className="evidence-empty-state"><ImageSquare size={38} /><h3>尚未关联 EPC 来源</h3><p>人工录入可先建档；接入 EPC 后，原始图组、OE 编号、车型和参考价会在这里显示。</p></div><PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} /></aside>
 
   const comparisons = evidence.comparisons || []
-  return <aside className="evidence-panel"><header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：{evidence.syncedAt || '—'}</small></header><section className="source-record"><h3>{evidence.title || 'EPC 原始记录'}</h3><div className="source-record-main"><div className="epc-editor-image"><img src={evidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 图组" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></div><dl><div><dt>OE 号</dt><dd>{evidence.oe || form.primaryOe}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>图组</dt><dd>{evidence.group || '—'}</dd></div><div><dt>位置</dt><dd>{evidence.position || '—'}</dd></div><div><dt>适配车型</dt><dd>{evidence.fitment || '—'}</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>{evidence.referencePrice || '—'}</dd></div></dl></div></section>{comparisons.length ? <section className="field-comparison"><h3>字段对比结果</h3>{comparisons.map((item) => <div className={item.passed ? 'comparison-row' : 'comparison-row warning-row'} key={item.label}>{item.passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{item.label}</b><strong className={item.passed ? '' : 'warning'}>{item.result}</strong><span>{item.note}</span></div>)}</section> : null}<PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} sourceEvidence={evidence} /></aside>
+  return <aside className="evidence-panel"><header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：{evidence.syncedAt || '—'}</small></header><section className="source-record"><h3>{evidence.title || 'EPC 原始记录'}</h3><div className="source-record-main"><div className="epc-editor-image"><img src={evidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 图组" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></div><dl><div><dt>OE 号</dt><dd>{evidence.oe || form.primaryOe}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>图组</dt><dd>{evidence.group || '—'}</dd></div><div><dt>位置</dt><dd>{evidence.position || '—'}</dd></div><div><dt>适配车型</dt><dd>{evidence.fitment || '—'}</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>{evidence.referencePrice || '—'}</dd></div></dl></div></section>{comparisons.length ? <section className="field-comparison"><h3>字段对比结果</h3>{comparisons.map((item) => <div className={item.passed ? 'comparison-row' : 'comparison-row warning-row'} key={item.label}>{item.passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{item.label}</b><strong className={item.passed ? '' : 'warning'}>{item.result}</strong><span>{item.note}</span></div>)}</section> : null}<PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} /></aside>
 }
 
 export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', skuId, onBack, onSaved }) {
@@ -120,6 +126,7 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
     const values = [form.skuCode, form.chineseName, form.brand, form.category, form.subcategory, form.manufacturerPartNumber, form.primaryOe, form.barcode]
     return Math.round(values.filter(Boolean).length / values.length * 100)
   }, [form])
+  const canPublish = useMemo(() => getRequiredPublishChecks(form, oeRows, fitmentRows).every(([, complete]) => complete), [fitmentRows, form, oeRows])
 
   const checkCode = async () => {
     if (!form.skuCode) return setCodeAvailable(null)
@@ -149,7 +156,7 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
 
   if (loading) return <main className="sku-editor-page editor-loading"><span />正在读取 SKU 数据…</main>
   return <main className="sku-editor-page">
-    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button><button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button><button className="primary-button" onClick={() => save(true)} type="button">保存 SKU</button></div></header>
+    <header className="sku-editor-heading"><div><button className="editor-back" onClick={onBack} type="button"><ArrowLeft size={15} />返回 SKU 管理</button><div className="editor-title-line"><h1>{mode === 'new' ? '新建 SKU' : '编辑 SKU'}</h1><span>{form.lifecycleStatus || '草稿'}</span></div></div><div className="editor-save-actions"><span className={saveState.includes('已保存') ? 'save-message success' : 'save-message'}>{saveState.includes('已保存') ? <CheckCircle size={15} weight="fill" /> : null}{saveState}</span><button className="secondary-button" onClick={onBack} type="button">取消</button>{mode === 'edit' ? <button className="secondary-button" onClick={() => save(false)} type="button"><FloppyDisk size={16} />保存草稿</button> : null}<button className="primary-button" disabled={mode === 'edit' && !canPublish} onClick={() => save(mode === 'edit')} title={mode === 'edit' && !canPublish ? '请先完成发布必填项' : undefined} type="button">{mode === 'new' ? '创建草稿' : '发布 SKU'}</button></div></header>
     {error ? <div className="editor-error"><Warning size={17} weight="fill" />{error}</div> : null}
     <nav className="editor-tabs" aria-label="SKU 编辑区段">{editorTabs.map((tab) => <button className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => selectTab(tab)} type="button">{tab}</button>)}</nav>
     <div className="sku-editor-layout"><div className="sku-editor-main"><section className="identity-section" id="basic-information"><div className="identity-image"><div>{form.imageUrl ? <img src={form.imageUrl} alt={form.chineseName || 'SKU 商品图'} /> : <span className="image-placeholder"><ImageSquare size={36} />尚未上传图片</span>}<button aria-label="查看商品图片" disabled={!form.imageUrl} type="button"><MagnifyingGlassPlus size={16} /></button></div><button onClick={() => imageInputRef.current?.click()} type="button"><Camera size={17} />上传图片</button><input ref={imageInputRef} accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) return setError('图片不能超过 2MB'); const reader = new FileReader(); reader.onload = () => setValue('imageUrl', reader.result); reader.readAsDataURL(file) }} type="file" /></div><div className="identity-content"><header><div><div className="sku-title"><h2>{form.skuCode || '待填写 SKU 编码'}</h2>{codeAvailable === true ? <span><CheckCircle size={15} weight="fill" />SKU 编码可用</span> : null}</div><h3>{form.chineseName || '请输入零件中文名称'}</h3><p>品牌　<b>{form.brand || '—'}</b><i />零件大类　<b>{form.category || '—'}</b><i />零件小类　<b>{form.subcategory || '—'}</b></p></div><div className="identity-meta"><span>信息完整度 <b>{completion}%</b><i><em style={{ width: `${completion}%` }} /></i></span><dl><div><dt>数据来源</dt><dd>{form.dataSource || '人工录入'}</dd></div><div><dt>状态</dt><dd>{form.lifecycleStatus}</dd></div></dl></div></header><div className="editor-fields">
@@ -161,8 +168,9 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       <TextField codeInput error={codeFieldErrors.manufacturerPartNumber} label="制造商零件号" value={form.manufacturerPartNumber} onChange={(value) => setCodeValue('manufacturerPartNumber', value)} required />
       <TextField codeInput error={codeFieldErrors.primaryOe} label="主 OE 号" value={form.primaryOe} onChange={(value) => setCodeValue('primaryOe', value)} required />
       <SelectField label="计量单位" value={form.unit} onChange={(value) => setValue('unit', value)} options={['件', '套', '盒', '支']} required />
-      <SelectField label="生命周期状态" value={form.lifecycleStatus} onChange={(value) => setValue('lifecycleStatus', value)} options={['草稿', '待复核', '在售', '停产']} required status />
+      <TextField label="生命周期状态" value={form.lifecycleStatus} readOnly required />
       <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />
+      <SelectField label="数据来源" value={form.dataSource} onChange={(value) => setValue('dataSource', value)} options={['人工录入', 'EPC 导入', '供应商资料', '历史系统']} required />
       <TextField label="最后更新" value={formatDate(form.updatedAt)} readOnly />
       <TextField label="更新者" value={form.updatedBy || '张伟'} readOnly />
     </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
