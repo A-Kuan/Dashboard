@@ -1,11 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { CaretDown, Check, MagnifyingGlass, X } from '@phosphor-icons/react'
+import { CaretDown, Check, ImageSquare, MagnifyingGlass, X } from '@phosphor-icons/react'
 import { ALL_DICTIONARY_VALUE } from '../services/dictionaryService'
 
 export function StatusBadge({ status }) {
   const low = status === '低库存'
   const draft = status === '草稿' || status === '待复核'
   return <span className={`status-badge${low ? ' low' : ''}${draft ? ' draft' : ''}`}><span className="status-dot" />{status}</span>
+}
+
+export function PartThumbnail({ src, alt = '', className = '', showLabel = false }) {
+  if (src) return <img className={className} src={src} alt={alt} />
+  return <span className={`part-image-placeholder ${className}`.trim()} aria-label={alt ? `${alt}：暂无图片` : '暂无图片'} role="img"><ImageSquare aria-hidden="true" size={showLabel ? 25 : 16} /><small>{showLabel ? '暂无图片' : null}</small></span>
 }
 
 export function DictionarySelect({ dictionaryCode, dictionaries, fallbackLabel, value, onChange, disabled = false, allowAll = true, showLabel = true, className = '' }) {

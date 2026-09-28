@@ -108,7 +108,7 @@ export function createSkuRepository(pool) {
       const { rows } = await pool.query('SELECT EXISTS(SELECT 1 FROM sku WHERE sku_code = $1 AND ($2::text IS NULL OR id <> $2)) AS exists', [code, exceptId])
       return rows[0].exists
     },
-    async create(input, actor = '张伟') {
+    async create(input, actor = '系统操作员') {
       return withTransaction(pool, async (client) => {
         const id = randomUUID()
         const { rows } = await client.query(`INSERT INTO sku
@@ -126,7 +126,7 @@ export function createSkuRepository(pool) {
         return mapSku(rows[0], children.oeRelations, children.fitments, children.changeHistory)
       })
     },
-    async update(id, input, actor = '张伟', action = '保存草稿') {
+    async update(id, input, actor = '系统操作员', action = '保存草稿') {
       return withTransaction(pool, async (client) => {
         const currentResult = await client.query('SELECT id, version FROM sku WHERE id = $1 OR sku_code = $1 LIMIT 1 FOR UPDATE', [id])
         const current = currentResult.rows[0]

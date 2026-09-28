@@ -1,5 +1,4 @@
-import { Bell, CaretDown, Command, MagnifyingGlass, X } from '@phosphor-icons/react'
-import { assetPath } from '../utils/assetPath'
+import { Bell, CaretDown, Command, MagnifyingGlass, UserCircle, X } from '@phosphor-icons/react'
 
 export function AppHeader({ onSearchFocus, searchValue = '', activeNav = '零件库', currentSpace = '零件库' }) {
   return (
@@ -13,8 +12,8 @@ export function AppHeader({ onSearchFocus, searchValue = '', activeNav = '零件
       </button>
       <div className="header-actions">
         <button className="current-space" type="button">当前：{currentSpace} <CaretDown size={13} weight="bold" /></button>
-        <button className="notification-button" aria-label="通知" type="button"><Bell size={22} /><span className="notification-count">3</span></button>
-        <div className="user-profile"><img src={assetPath('assets/user-avatar.png')} alt="张伟" /><span><strong>张伟</strong><small>采购中心 · 运营</small></span></div>
+        <button className="notification-button" aria-label="通知模块尚未接入" disabled title="通知模块尚未接入" type="button"><Bell size={22} /></button>
+        <div className="user-profile"><span className="user-avatar-placeholder"><UserCircle aria-hidden="true" size={29} /></span><span><strong>系统操作员</strong><small>身份认证待接入</small></span></div>
       </div>
     </header>
   )

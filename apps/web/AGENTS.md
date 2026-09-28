@@ -14,9 +14,10 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Reproduce the selected 1680×945 desktop design at full fidelity before adding new visual ideas.
 - Extract repeated structures such as the application header, section header, tabs, filters, data table, badges, cards, and detail tabs into reusable components.
 - Keep spacing, typography, colors, borders, radii, and interaction states consistent through shared design tokens.
-- When production data or APIs are unavailable, use realistic auto-parts test data matching the visual reference.
+- When production data or APIs are unavailable, realistic auto-parts test data may be used only in test fixtures and visual QA; never surface it as persisted or fallback business data in the running application.
 - Selection values such as brand, part category, and SKU status must come from shared configurable dictionaries; do not add page-local hardcoded option arrays.
 - Dictionary-backed filters should use the shared searchable picker, and SKU management must retain a visible page-level entry for dictionary configuration.
 - Dictionary item values are system-generated immutable codes. Preserve existing values for compatibility; users may edit only the display label and other non-identifier properties.
 - OE and replacement relations do not ask for a separate brand; brand belongs to the SKU master record. Preserve any historical relation-brand values in persisted records for compatibility.
+- Never substitute demo content for missing persisted values. Use an explicit empty-state image or `—`; generic system-operator text is allowed only until identity integration is available.
 - SKU create/edit screens should use the horizontal section-tab navigation selected in the 2026-09-27 visual direction. Keep the editor single-page and combine it with a persistent EPC evidence pane for source comparison and publish checks; do not replace it with a wizard or global sidebar.

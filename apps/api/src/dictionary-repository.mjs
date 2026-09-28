@@ -55,10 +55,10 @@ export function createDictionaryRepository(pool, defaults) {
       if (!rows[0]) return write(clone(normalizedDefaults), '系统初始化', true)
       return { ...rows[0].payload, version: rows[0].version, updatedBy: rows[0].updated_by, updatedAt: rows[0].updated_at }
     },
-    save(payload, actor = '张伟') {
+    save(payload, actor = '系统操作员') {
       return write(payload, actor, false)
     },
-    reset(actor = '张伟') {
+    reset(actor = '系统操作员') {
       return write(clone(normalizedDefaults), actor, false)
     },
   }

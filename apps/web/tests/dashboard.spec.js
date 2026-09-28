@@ -107,6 +107,19 @@ test('loads persisted SKU data and captures the default state', async ({ page })
   await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
 })
 
+test('shows honest empty states instead of demo defaults', async ({ page }) => {
+  Object.assign(page.__apiRecords[0], { imageUrl: '', dataSource: '', sourceEvidence: null, updatedBy: '' })
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
+  await expect(page.locator('img[src*="selected-part.png"]')).toHaveCount(0)
+  await expect(page.getByRole('img', { name: /暂无图片/ })).toHaveCount(2)
+  await expect(page.locator('.part-summary-card .chips span').last()).toHaveText('—')
+  await expect(page.locator('.detail-facts').getByText('—', { exact: true })).toBeVisible()
+  await expect(page.locator('.user-profile')).toContainText('系统操作员')
+  await expect(page.locator('.notification-count')).toHaveCount(0)
+  await page.screenshot({ path: 'qa-artifacts/implementation-empty-values.png', fullPage: false })
+})
+
 const visualStates = [
   ['expanded', '02-focus-expanded'], ['oe', '03-oe-sku-results'], ['vin', '04-vin-fitment-results'],
   ['empty', '05-no-results-correction'], ['loading', '06-loading'], ['error', '07-service-error-retry'],

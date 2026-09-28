@@ -9,8 +9,8 @@ function createRepository() {
     list: async () => items,
     get: async (id) => items.find((item) => item.id === id || item.skuCode === id) || null,
     codeExists: async (code, exceptId) => items.some((item) => item.skuCode === code && item.id !== exceptId),
-    create: async (input) => { const item = { id: 'sku-1', ...input, version: 1, changeHistory: [{ version: 1, action: '创建草稿' }] }; items.push(item); return item },
-    update: async (id, input, _actor, action = '保存草稿') => {
+    create: async (input, actor) => { const item = { id: 'sku-1', ...input, updatedBy: actor, version: 1, changeHistory: [{ version: 1, action: '创建草稿', changedBy: actor }] }; items.push(item); return item },
+    update: async (id, input, actor, action = '保存草稿') => {
       const index = items.findIndex((item) => item.id === id)
       if (items[index].version !== input.version) {
         const error = new Error(`该 SKU 已被其他操作更新（当前版本 v${items[index].version}），请刷新后再编辑`)
@@ -19,7 +19,7 @@ function createRepository() {
         throw error
       }
       const version = items[index].version + 1
-      items[index] = { ...items[index], ...input, version, changeHistory: [{ version, action }, ...items[index].changeHistory] }
+      items[index] = { ...items[index], ...input, updatedBy: actor, version, changeHistory: [{ version, action, changedBy: actor }, ...items[index].changeHistory] }
       return items[index]
     },
   }
@@ -46,11 +46,13 @@ test('creates, lists, reads and updates a SKU', async () => {
   const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })
   assert.equal(created.statusCode, 201)
   assert.equal(created.json().skuCode, 'TEST-001')
+  assert.equal(created.json().updatedBy, '系统操作员')
   assert.equal((await app.inject('/api/v1/skus')).json().items.length, 1)
   assert.equal((await app.inject('/api/v1/skus/sku-1')).json().chineseName, '测试零件')
   const updated = await app.inject({ method: 'PUT', url: '/api/v1/skus/sku-1', payload: { ...input, version: 1, chineseName: '测试零件二' } })
   assert.equal(updated.json().chineseName, '测试零件二')
   assert.equal(updated.json().version, 2)
+  assert.equal(updated.json().updatedBy, '系统操作员')
   await app.close()
 })
 

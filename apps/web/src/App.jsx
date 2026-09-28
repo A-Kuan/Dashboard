@@ -15,7 +15,7 @@ import { assetPath } from './utils/assetPath'
 function toSkuRow(item, dictionaries) {
   return {
     id: item.id,
-    image: item.imageUrl || assetPath('assets/parts/selected-part.png'),
+    image: item.imageUrl || '',
     sku: item.skuCode,
     oe: item.primaryOe,
     name: item.chineseName,
@@ -27,7 +27,7 @@ function toSkuRow(item, dictionaries) {
     stock: '—',
     purchasePrice: '—',
     salePrice: '—',
-    source: item.dataSource || '人工录入',
+    source: item.dataSource || '—',
     status: dictionaryItemLabel(dictionaries, 'sku_status', item.lifecycleStatus),
     statusValue: item.lifecycleStatus,
   }

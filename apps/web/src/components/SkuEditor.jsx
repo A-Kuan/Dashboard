@@ -5,7 +5,6 @@ import {
 } from '@phosphor-icons/react'
 import { DictionarySelect } from './Common'
 import { createSku, discontinueSku, getSku, publishSku, updateSku, validateSkuCode } from '../services/skuService'
-import { assetPath } from '../utils/assetPath'
 import { dictionaryItemLabel } from '../services/dictionaryService'
 
 const editorTabs = ['基本信息', 'OE 与替代', '适配车型']
@@ -13,7 +12,7 @@ const blankForm = {
   skuCode: '', chineseName: '', brand: '', category: '', subcategory: '',
   manufacturerPartNumber: '', primaryOe: '', unit: '', lifecycleStatus: '草稿', barcode: '',
   imageUrl: '', dataSource: '', sourceEvidence: null, conflictResolution: null,
-  createdAt: '', updatedAt: '', updatedBy: '张伟', version: null,
+  createdAt: '', updatedAt: '', updatedBy: '', version: null,
 }
 
 const codeFieldHint = '仅支持英文字母、数字、空格及 - . _ / # ( ) +'
@@ -103,7 +102,7 @@ function EvidencePanel({ form, oeRows, fitmentRows, onZoom }) {
   if (!evidence) return <aside className="evidence-panel evidence-empty"><header className="evidence-title"><div><h2>来源证据</h2></div></header><div className="evidence-empty-state"><ImageSquare size={38} /><h3>尚未关联 EPC 来源</h3><p>人工录入可先建档；接入 EPC 后，原始图组、OE 编号、车型和参考价会在这里显示。</p></div><PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} /></aside>
 
   const comparisons = evidence.comparisons || []
-  return <aside className="evidence-panel"><header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：{evidence.syncedAt || '—'}</small></header><section className="source-record"><h3>{evidence.title || 'EPC 原始记录'}</h3><div className="source-record-main"><div className="epc-editor-image"><img src={evidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 图组" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></div><dl><div><dt>OE 号</dt><dd>{evidence.oe || form.primaryOe}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>图组</dt><dd>{evidence.group || '—'}</dd></div><div><dt>位置</dt><dd>{evidence.position || '—'}</dd></div><div><dt>适配车型</dt><dd>{evidence.fitment || '—'}</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>{evidence.referencePrice || '—'}</dd></div></dl></div></section>{comparisons.length ? <section className="field-comparison"><h3>字段对比结果</h3>{comparisons.map((item) => <div className={item.passed ? 'comparison-row' : 'comparison-row warning-row'} key={item.label}>{item.passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{item.label}</b><strong className={item.passed ? '' : 'warning'}>{item.result}</strong><span>{item.note}</span></div>)}</section> : null}<PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} /></aside>
+  return <aside className="evidence-panel"><header className="evidence-title"><div><h2>EPC 来源证据</h2><span><SealCheck size={15} weight="fill" />可信来源</span></div><small>最后同步：{evidence.syncedAt || '—'}</small></header><section className="source-record"><h3>{evidence.title || 'EPC 原始记录'}</h3><div className="source-record-main"><div className="epc-editor-image">{evidence.diagramUrl ? <><img src={evidence.diagramUrl} alt="EPC 图组" /><button aria-label="放大 EPC 图" onClick={onZoom} type="button"><MagnifyingGlassPlus size={17} /></button></> : <div className="epc-diagram-empty"><ImageSquare size={31} /><span>暂无 EPC 图组</span></div>}</div><dl><div><dt>OE 号</dt><dd>{evidence.oe || form.primaryOe}</dd></div><div><dt>原始名称</dt><dd>{evidence.originalName || '—'}</dd></div><div><dt>图组</dt><dd>{evidence.group || '—'}</dd></div><div><dt>位置</dt><dd>{evidence.position || '—'}</dd></div><div><dt>适配车型</dt><dd>{evidence.fitment || '—'}</dd></div><div className="reference-price"><dt>OEM 参考价（仅作来源参考）</dt><dd>{evidence.referencePrice || '—'}</dd></div></dl></div></section>{comparisons.length ? <section className="field-comparison"><h3>字段对比结果</h3>{comparisons.map((item) => <div className={item.passed ? 'comparison-row' : 'comparison-row warning-row'} key={item.label}>{item.passed ? <CheckCircle size={17} weight="fill" /> : <Warning size={17} weight="fill" />}<b>{item.label}</b><strong className={item.passed ? '' : 'warning'}>{item.result}</strong><span>{item.note}</span></div>)}</section> : null}<PublishCheck form={form} oeRows={oeRows} fitmentRows={fitmentRows} /></aside>
 }
 
 export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', skuId, onBack, onSaved }) {
@@ -203,8 +202,8 @@ export function SkuEditor({ dictionaries, dictionariesLoading, mode = 'edit', sk
       <TextField label="条形码 / GTIN" value={form.barcode} onChange={(value) => setValue('barcode', value)} />
       <EditorField label="数据来源" required><DictionarySelect allowAll={false} showLabel={false} className="form-dictionary" dictionaryCode="data_source" dictionaries={dictionaries} fallbackLabel="数据来源" value={form.dataSource} onChange={(value) => setValue('dataSource', value)} disabled={dictionariesLoading} /></EditorField>
       <TextField label="最后更新" value={formatDate(form.updatedAt)} readOnly />
-      <TextField label="更新者" value={form.updatedBy || '张伟'} readOnly />
-    </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} primaryOe={form.primaryOe} skuBrand={form.brand} dataSource={form.dataSource} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} dataSource={form.dataSource} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
-    {zoomOpen && form.sourceEvidence ? <div className="epc-zoom-backdrop" onMouseDown={() => setZoomOpen(false)}><section onMouseDown={(event) => event.stopPropagation()}><header><div><ImageSquare size={19} /><b>{form.sourceEvidence.title || 'EPC 来源图'}</b></div><button aria-label="关闭 EPC 大图" onClick={() => setZoomOpen(false)} type="button"><X size={19} /></button></header><img src={form.sourceEvidence.diagramUrl || assetPath('assets/parts/epc-diagram.png')} alt="EPC 大图" /></section></div> : null}
+      <TextField label="更新者" value={form.updatedBy || '保存后生成'} readOnly />
+    </div></div></section><OeRelations rows={oeRows} setRows={setOeRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} primaryOe={form.primaryOe} dataSource={form.dataSource} /><FitmentTable rows={fitmentRows} setRows={setFitmentRows} dictionaries={dictionaries} dictionariesLoading={dictionariesLoading} dataSource={form.dataSource} /></div><EvidencePanel form={form} oeRows={oeRows} fitmentRows={fitmentRows} onZoom={() => setZoomOpen(true)} /></div>
+    {zoomOpen && form.sourceEvidence?.diagramUrl ? <div className="epc-zoom-backdrop" onMouseDown={() => setZoomOpen(false)}><section onMouseDown={(event) => event.stopPropagation()}><header><div><ImageSquare size={19} /><b>{form.sourceEvidence.title || 'EPC 来源图'}</b></div><button aria-label="关闭 EPC 大图" onClick={() => setZoomOpen(false)} type="button"><X size={19} /></button></header><img src={form.sourceEvidence.diagramUrl} alt="EPC 大图" /></section></div> : null}
   </main>
 }
