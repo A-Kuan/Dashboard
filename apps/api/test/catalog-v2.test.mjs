@@ -21,7 +21,11 @@ function createCatalogRepository() {
     async list({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
       const term = String(query).toLowerCase()
       const filtered = items.filter((item) => (!status || item.lifecycleStatus === status) && (!term || JSON.stringify(item).toLowerCase().includes(term)))
-      return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize) }
+      return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: { draft: filtered.filter((item) => item.lifecycleStatus === 'draft').length, verified: filtered.filter((item) => item.lifecycleStatus === 'verified').length } }
+    },
+    async findDuplicates(identifier, exceptId) {
+      const normalized = String(identifier).toUpperCase().replace(/[\s._/#+()\-]/g, '')
+      return items.filter((item) => item.id !== exceptId && item.identifiers.some((entry) => entry.normalizedValue === normalized)).map((item) => ({ skuId: item.id, skuCode: item.identity.skuCode, nameZh: item.identity.nameZh }))
     },
     async get(id) { return find(id) },
     async create(input, actor) {
@@ -128,5 +132,19 @@ test('catalog v2 rejects stale updates with the current version', async () => {
   assert.equal(stale.statusCode, 409)
   assert.equal(stale.json().error, 'CATALOG_VERSION_CONFLICT')
   assert.equal(stale.json().details.currentVersion, 2)
+  await app.close()
+})
+
+test('catalog v2 detects normalized duplicate identifiers without blocking legitimate drafts', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const first = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {
+    identity: { nameZh: '前刹车片' }, identifiers: [{ rawValue: '95B 698 151 H', isPrimary: true }],
+  } })).json()
+  const duplicates = await app.inject('/api/v2/catalog/duplicates?identifier=95B-698-151-H')
+  assert.equal(duplicates.statusCode, 200)
+  assert.equal(duplicates.json().items[0].skuId, first.id)
+  const exceptCurrent = await app.inject(`/api/v2/catalog/duplicates?identifier=95B698151H&exceptId=${first.id}`)
+  assert.deepEqual(exceptCurrent.json().items, [])
+  assert.equal((await app.inject('/api/v2/catalog/duplicates')).statusCode, 400)
   await app.close()
 })

@@ -38,7 +38,7 @@ export function mapCatalogSku(item) {
     code: identity.skuCode || '保存后自动生成',
     name: identity.nameZh || '未命名零件',
     englishName: identity.nameEn || '',
-    primaryOe: primary?.rawValue || '—',
+    primaryOe: primary?.rawValue || item.primaryIdentifier || '—',
     brand: identity.brandLabel || identity.brandCode || '待补充',
     category: identity.categoryLabel || identity.categoryCode || '待补充',
     unit: identity.unitLabel || '件',
@@ -68,10 +68,26 @@ export function mapCatalogSku(item) {
   }
 }
 
-export async function listCatalogSkus() {
-  const result = await request('/api/v2/catalog/skus?pageSize=100')
-  const details = await Promise.all(result.items.map((item) => request(`/api/v2/catalog/skus/${item.id}`)))
-  return { records: details.map(mapCatalogSku), total: result.total }
+export async function listCatalogSkus({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (query.trim()) params.set('q', query.trim())
+  if (status && status !== 'all') params.set('status', status)
+  const result = await request(`/api/v2/catalog/skus?${params}`)
+  return { ...result, records: result.items.map((item) => ({ ...mapCatalogSku(item), aggregate: null })) }
+}
+
+export async function getCatalogSku(id) {
+  return mapCatalogSku(await request(`/api/v2/catalog/skus/${encodeURIComponent(id)}`))
+}
+
+export async function findDuplicateIdentifiers(identifier, exceptId = '') {
+  const params = new URLSearchParams({ identifier })
+  if (exceptId) params.set('exceptId', exceptId)
+  return (await request(`/api/v2/catalog/duplicates?${params}`)).items
+}
+
+export async function getCatalogDictionaries() {
+  return (await request('/api/v1/dictionaries')).dictionaries || {}
 }
 
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }

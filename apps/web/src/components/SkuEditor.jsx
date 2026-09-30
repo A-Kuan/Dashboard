@@ -15,7 +15,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import '../sku-editor.css'
-import { saveCatalogDraft, verifyCatalogSku } from '../services/catalogApi'
+import { findDuplicateIdentifiers, saveCatalogDraft, verifyCatalogSku } from '../services/catalogApi'
 
 const sourceLabels = {
   epc: 'EPC / VIN',
@@ -73,13 +73,22 @@ function Field({ label, required, hint, children }) {
   return <label className="editor-field"><span>{label}{required ? <em>*</em> : null}</span>{children}{hint ? <small>{hint}</small> : null}</label>
 }
 
-export function SkuEditor({ source = 'manual', record, onBack, onNotify, onSaved }) {
+function dictionaryItems(dictionaries, code, fallback, currentValue = '') {
+  const configured = (dictionaries?.[code]?.items || []).filter((item) => item.enabled !== false && item.value !== '__all__')
+  const items = [...configured]
+  fallback.forEach((value) => { if (!items.some((item) => item.value === value)) items.push({ value, label: value }) })
+  if (currentValue && !items.some((item) => item.value === currentValue)) return [{ value: currentValue, label: currentValue }, ...items]
+  return items
+}
+
+export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack, onNotify, onSaved }) {
   const [step, setStep] = useState('identity')
   const [draft, setDraft] = useState(() => makeInitialDraft(source, record))
   const [savedAt, setSavedAt] = useState('')
   const [verified, setVerified] = useState(false)
   const [saving, setSaving] = useState(false)
   const [persistedRecord, setPersistedRecord] = useState(() => record?.dataOrigin === 'live' ? record : null)
+  const [duplicateMatches, setDuplicateMatches] = useState([])
 
   const setField = (field, value) => {
     setVerified(false)
@@ -97,6 +106,9 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify, onSaved
   const passedCount = checks.filter((item) => item.passed).length
   const completeness = Math.round((passedCount / checks.length) * 100)
   const currentIndex = steps.findIndex((item) => item.id === step)
+  const brandOptions = dictionaryItems(dictionaries, 'sku_brand', ['Porsche OE', 'Audi OE', 'MANN-FILTER', 'LEMFÖRDER'], draft.brand)
+  const categoryOptions = dictionaryItems(dictionaries, 'part_category', ['制动系统 / 制动盘', '制动系统 / 制动片', '保养件 / 机油滤芯', '底盘 / 控制臂'], draft.category)
+  const unitOptions = dictionaryItems(dictionaries, 'unit', ['件', '套', '盒', '支'], draft.unit)
 
   const addIdentifier = () => setDraft((current) => ({ ...current, identifiers: [...current.identifiers, { id: `relation-${Date.now()}`, type: '品牌号', value: '', relation: '制造商号' }] }))
   const updateIdentifier = (id, field, value) => setDraft((current) => ({ ...current, identifiers: current.identifiers.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
@@ -105,6 +117,15 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify, onSaved
   const addFitment = () => setDraft((current) => ({ ...current, fitments: [...current.fitments, { id: `fitment-${Date.now()}`, vehicle: '', years: '', condition: '' }] }))
   const updateFitment = (id, field, value) => setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
   const removeFitment = (id) => setDraft((current) => ({ ...current, fitments: current.fitments.filter((item) => item.id !== id) }))
+
+  const checkPrimaryDuplicate = async () => {
+    if (!draft.primaryOe.trim()) return setDuplicateMatches([])
+    try {
+      setDuplicateMatches(await findDuplicateIdentifiers(draft.primaryOe, persistedRecord?.id || ''))
+    } catch {
+      setDuplicateMatches([])
+    }
+  }
 
   const persistDraft = async () => {
     setSaving(true)
@@ -186,17 +207,18 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify, onSaved
               </article>
               <div className="sku-form-grid">
                 <Field label="SKU 编码" hint="正式保存后生成唯一编码"><input disabled value={draft.code} /></Field>
-                <Field label="计量单位" required><select value={draft.unit} onChange={(event) => setField('unit', event.target.value)}><option>件</option><option>套</option><option>只</option><option>组</option></select></Field>
+                <Field label="计量单位" required><select value={draft.unit} onChange={(event) => setField('unit', event.target.value)}>{unitOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></Field>
                 <Field label="中文标准名称" required><input value={draft.name} onChange={(event) => setField('name', event.target.value)} placeholder="例如：前制动盘" /></Field>
                 <Field label="英文名称"><input value={draft.englishName} onChange={(event) => setField('englishName', event.target.value)} placeholder="Original or standard English name" /></Field>
-                <Field label="品牌" required><select value={draft.brand} onChange={(event) => setField('brand', event.target.value)}><option value="">请选择品牌</option><option>Porsche OE</option><option>Audi OE</option><option>MANN-FILTER</option><option>LEMFÖRDER</option></select></Field>
-                <Field label="零件分类" required><select value={draft.category} onChange={(event) => setField('category', event.target.value)}><option value="">请选择分类</option><option>制动系统 / 制动盘</option><option>制动系统 / 制动片</option><option>保养件 / 机油滤芯</option><option>底盘 / 控制臂</option></select></Field>
+                <Field label="品牌" required><select value={draft.brand} onChange={(event) => setField('brand', event.target.value)}><option value="">请选择品牌</option>{brandOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></Field>
+                <Field label="零件分类" required><select value={draft.category} onChange={(event) => setField('category', event.target.value)}><option value="">请选择分类</option>{categoryOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></Field>
               </div>
             </> : null}
 
             {step === 'numbers' ? <>
               <div className="sku-form-heading"><div><h2>编号与替代关系</h2><p>保留原始格式，同时明确替代方向。</p></div><button className="outline-add" type="button" onClick={addIdentifier}><Plus size={17} weight="bold" />添加编号</button></div>
-              <div className="primary-oe-block"><span><LinkSimple size={20} weight="bold" /></span><Field label="主 OE 编号" required hint="搜索会自动忽略空格和常用分隔符"><input className="oe-input" value={draft.primaryOe} onChange={(event) => setField('primaryOe', event.target.value)} placeholder="例如：9Y0 615 301 M" /></Field></div>
+              <div className="primary-oe-block"><span><LinkSimple size={20} weight="bold" /></span><Field label="主 OE 编号" required hint="搜索会自动忽略空格和常用分隔符"><input className="oe-input" value={draft.primaryOe} onBlur={checkPrimaryDuplicate} onChange={(event) => { setDuplicateMatches([]); setField('primaryOe', event.target.value) }} placeholder="例如：9Y0 615 301 M" /></Field></div>
+              {duplicateMatches.length ? <div className="editor-warning-note"><WarningCircle size={18} weight="fill" /><span><strong>发现 {duplicateMatches.length} 条相同编号资料。</strong> 请先核对是否为同一零件、品牌件或替代关系；系统不会自动合并。</span></div> : null}
               <div className="relation-table"><div className="relation-head"><span>编号类型</span><span>OE / 品牌号</span><span>关系</span><span /></div>{draft.identifiers.map((item) => <div className="relation-edit-row" key={item.id}><select value={item.type} onChange={(event) => updateIdentifier(item.id, 'type', event.target.value)}><option>历史 OE</option><option>品牌号</option><option>条形码</option><option>内部号</option></select><input value={item.value} onChange={(event) => updateIdentifier(item.id, 'value', event.target.value)} placeholder="输入编号" /><select value={item.relation} onChange={(event) => updateIdentifier(item.id, 'relation', event.target.value)}><option>被替代</option><option>替代旧号</option><option>可互换</option><option>制造商号</option><option>仅供参考</option></select><button aria-label="删除编号" type="button" onClick={() => removeIdentifier(item.id)}><Trash size={17} /></button></div>)}{!draft.identifiers.length ? <div className="editor-empty-row">暂无其他编号，主 OE 可以单独保存。</div> : null}</div>
               <div className="editor-info-note"><Info size={18} weight="fill" /><span><strong>替代关系具有方向。</strong>“A 被 B 替代”不会自动被当作双向通用。</span></div>
             </> : null}

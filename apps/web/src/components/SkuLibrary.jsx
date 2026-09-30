@@ -23,7 +23,7 @@ import { skuRecords, skuStatusFilters } from '../data/skuMockData'
 import { assetPath } from '../utils/assetPath'
 import { WorkbenchSidebar } from './WorkbenchSidebar'
 import { SkuEditor } from './SkuEditor'
-import { listCatalogSkus } from '../services/catalogApi'
+import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
 const sources = [
@@ -34,6 +34,12 @@ const sources = [
 ]
 
 const changeActionLabels = { create_draft: '创建资料草稿', update_draft: '更新资料草稿', verify: '资料核验通过' }
+const pageSize = 30
+const emptyRecord = {
+  id: 'empty', code: '—', name: '暂无匹配资料', englishName: '', primaryOe: '—', brand: '—', category: '—', status: 'draft', statusLabel: '无结果',
+  fitmentCount: 0, completeness: 0, source: '—', updated: '—', identifiers: [], fitments: [], evidence: { system: '—', catalog: '—', figure: '—', originalName: '—', syncedAt: '—', confidence: '待核验' },
+  inventory: { available: '—', locked: '—', inbound: '—' }, price: { oemReference: '—', purchase: '—', sale: '—' }, changes: [], dataOrigin: 'empty', version: 0,
+}
 
 function changeTime(value) {
   if (!value) return '—'
@@ -51,46 +57,80 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [allRecords, setAllRecords] = useState(skuRecords)
   const [totalRecords, setTotalRecords] = useState(skuRecords.length)
   const [dataMode, setDataMode] = useState('loading')
+  const [page, setPage] = useState(1)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [statusCounts, setStatusCounts] = useState({})
+  const [dictionaries, setDictionaries] = useState({})
 
   const loadCatalog = useCallback(async () => {
     setDataMode('loading')
     try {
-      const result = await listCatalogSkus()
+      const result = await listCatalogSkus({ query: debouncedQuery, status, page, pageSize })
       if (result.records.length) {
         setAllRecords(result.records)
         setTotalRecords(result.total)
+        setStatusCounts(result.statusCounts || {})
         setSelectedId((current) => result.records.some((item) => item.id === current) ? current : result.records[0].id)
         setDataMode('live')
-      } else {
+      } else if (!debouncedQuery && status === 'all' && page === 1) {
         setAllRecords(skuRecords)
         setTotalRecords(0)
+        setStatusCounts({})
+        setSelectedId(skuRecords[0].id)
         setDataMode('demo-empty')
+      } else {
+        setAllRecords([])
+        setTotalRecords(0)
+        setStatusCounts(result.statusCounts || {})
+        setSelectedId('empty')
+        setDataMode('live')
       }
     } catch {
       setAllRecords(skuRecords)
       setTotalRecords(skuRecords.length)
       setDataMode('demo-offline')
     }
-  }, [])
+  }, [debouncedQuery, page, status])
 
   useEffect(() => { loadCatalog() }, [loadCatalog])
+  useEffect(() => {
+    if (query.trim() === debouncedQuery) return undefined
+    const timeout = window.setTimeout(() => { setPage(1); setDebouncedQuery(query.trim()) }, 260)
+    return () => window.clearTimeout(timeout)
+  }, [debouncedQuery, query])
+  useEffect(() => { getCatalogDictionaries().then(setDictionaries).catch(() => setDictionaries({})) }, [])
+  useEffect(() => {
+    if (dataMode !== 'live' || selectedId === 'empty') return
+    const summary = allRecords.find((item) => item.id === selectedId)
+    if (!summary || summary.aggregate) return
+    let active = true
+    getCatalogSku(selectedId).then((detail) => {
+      if (!active) return
+      setAllRecords((current) => current.map((item) => item.id === detail.id ? detail : item))
+    }).catch(() => { if (active) notify('详情加载失败，请稍后重试') })
+    return () => { active = false }
+  }, [allRecords, dataMode, selectedId])
 
   const records = useMemo(() => {
+    if (dataMode === 'live' || dataMode === 'loading') return allRecords
     const keyword = query.trim().toLowerCase()
     return allRecords.filter((item) => {
       const statusMatches = status === 'all' || item.status === status
       const keywordMatches = !keyword || [item.code, item.name, item.englishName, item.primaryOe, item.brand, item.category, item.source].join(' ').toLowerCase().includes(keyword)
       return statusMatches && keywordMatches
     })
-  }, [allRecords, query, status])
+  }, [allRecords, dataMode, query, status])
 
-  const selected = allRecords.find((item) => item.id === selectedId) || records[0] || allRecords[0]
+  const selected = allRecords.find((item) => item.id === selectedId) || records[0] || allRecords[0] || emptyRecord
   const statusFilters = useMemo(() => skuStatusFilters.map((item) => ({
     ...item,
-    count: item.id === 'all' ? allRecords.length : allRecords.filter((record) => record.status === item.id).length,
-  })), [allRecords])
-  const verifiedCount = allRecords.filter((item) => item.status === 'verified').length
-  const verifiedPercent = allRecords.length ? Math.round((verifiedCount / allRecords.length) * 100) : 0
+    count: dataMode === 'live'
+      ? item.id === 'all' ? Object.values(statusCounts).reduce((sum, count) => sum + count, 0) : statusCounts[item.id] || 0
+      : item.id === 'all' ? allRecords.length : allRecords.filter((record) => record.status === item.id).length,
+  })), [allRecords, dataMode, statusCounts])
+  const overallCount = dataMode === 'live' ? Object.values(statusCounts).reduce((sum, count) => sum + count, 0) : allRecords.length
+  const verifiedCount = dataMode === 'live' ? statusCounts.verified || 0 : allRecords.filter((item) => item.status === 'verified').length
+  const verifiedPercent = overallCount ? Math.round((verifiedCount / overallCount) * 100) : 0
 
   const notify = (message) => {
     setToast(message)
@@ -98,6 +138,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   }
 
   const handleSaved = (saved) => {
+    const previous = allRecords.find((item) => item.id === saved.id)
     setAllRecords((current) => {
       const exists = current.some((item) => item.id === saved.id)
       return exists ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current.filter((item) => item.dataOrigin === 'live')]
@@ -105,13 +146,34 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     setSelectedId(saved.id)
     setDataMode('live')
     setTotalRecords((current) => current + (allRecords.some((item) => item.id === saved.id) ? 0 : 1))
+    setStatusCounts((current) => {
+      const next = { ...current }
+      if (previous?.status && previous.status !== saved.status) next[previous.status] = Math.max(0, (next[previous.status] || 0) - 1)
+      if (!previous || previous.status !== saved.status) next[saved.status] = (next[saved.status] || 0) + 1
+      return next
+    })
+  }
+
+  const openSelectedEditor = async () => {
+    if (selected.dataOrigin === 'empty') return
+    let record = selected
+    if (selected.dataOrigin === 'live' && !selected.aggregate) {
+      try {
+        record = await getCatalogSku(selected.id)
+        setAllRecords((current) => current.map((item) => item.id === record.id ? record : item))
+      } catch {
+        notify('完整资料加载失败，暂时不能编辑')
+        return
+      }
+    }
+    setEditorContext({ source: 'epc', record })
   }
 
   if (editorContext) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuEditor source={editorContext.source} record={editorContext.record} onBack={() => setEditorContext(null)} onNotify={notify} onSaved={handleSaved} />
+        <SkuEditor source={editorContext.source} record={editorContext.record} dictionaries={dictionaries} onBack={() => setEditorContext(null)} onNotify={notify} onSaved={handleSaved} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )
@@ -142,7 +204,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
           <section className="sku-summarybar">
             <div className="sku-filter-tabs">
-              {statusFilters.map((item) => <button type="button" className={status === item.id ? 'active' : ''} key={item.id} onClick={() => setStatus(item.id)}><span>{item.label}</span><b>{item.count}</b></button>)}
+              {statusFilters.map((item) => <button type="button" className={status === item.id ? 'active' : ''} key={item.id} onClick={() => { setPage(1); setStatus(item.id) }}><span>{item.label}</span><b>{item.count}</b></button>)}
             </div>
             <div className="sku-summary-note"><SealCheck size={18} weight="fill" /><span><strong>{verifiedPercent}%</strong> 已完成来源核验</span><i /> <span><strong>{Math.max(0, allRecords.length - verifiedCount)}</strong> 条待处理</span></div>
           </section>
@@ -171,7 +233,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                 </table>
                 {!records.length ? <div className="sku-empty"><MagnifyingGlass size={34} /><strong>没有找到匹配的 SKU</strong><span>尝试更换关键词或状态筛选</span></div> : null}
               </div>
-              <footer className="sku-list-footer"><span>{dataMode === 'live' ? `共 ${totalRecords} 条 SKU` : dataMode === 'demo-empty' ? '真实资料库为空，当前为演示数据' : dataMode === 'demo-offline' ? 'API 未连接，当前为演示数据' : '正在读取资料库'}</span><div><button type="button" disabled>上一页</button><b>1</b><button type="button" disabled>下一页</button></div></footer>
+              <footer className="sku-list-footer"><span>{dataMode === 'live' ? `共 ${totalRecords} 条 SKU · 第 ${page} 页` : dataMode === 'demo-empty' ? '真实资料库为空，当前为演示数据' : dataMode === 'demo-offline' ? 'API 未连接，当前为演示数据' : '正在读取资料库'}</span><div><button type="button" disabled={dataMode !== 'live' || page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button><b>{page}</b><button type="button" disabled={dataMode !== 'live' || page * pageSize >= totalRecords} onClick={() => setPage((current) => current + 1)}>下一页</button></div></footer>
             </article>
 
             <aside className="sku-inspector">
@@ -197,7 +259,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                 </> : null}
                 {detailTab === 'history' ? <section className="inspector-section history-list"><div className="inspector-section-title"><h3>最近变更</h3><span>版本 {selected.version || 1}</span></div>{selected.dataOrigin === 'live' ? selected.changes.map((change) => <div key={change.id || `${change.version}-${change.action}`}><CheckCircle size={19} weight="fill" /><span><strong>{changeActionLabels[change.action] || change.action}</strong><small>{change.changedBy || '系统操作员'} · {changeTime(change.changedAt)}</small></span></div>) : <><div><CheckCircle size={19} weight="fill" /><span><strong>来源核验通过</strong><small>演示记录</small></span></div><div><ClockCounterClockwise size={19} /><span><strong>更新适配条件</strong><small>演示记录</small></span></div><div><Stack size={19} /><span><strong>同步 EPC 原始记录</strong><small>演示记录</small></span></div></>}{selected.dataOrigin === 'live' && !selected.changes.length ? <div><ClockCounterClockwise size={19} /><span><strong>暂无变更记录</strong><small>保存后将在此显示</small></span></div> : null}</section> : null}
               </div>
-              <footer className="sku-inspector-actions"><button type="button" onClick={() => notify('已打开完整资料预览')}>查看完整资料</button><button type="button" onClick={() => setEditorContext({ source: 'epc', record: selected })}>编辑 SKU</button></footer>
+              <footer className="sku-inspector-actions"><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={() => notify('当前右侧已展示完整身份资料')}>查看完整资料</button><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={openSelectedEditor}>编辑 SKU</button></footer>
             </aside>
           </section>
         </div>

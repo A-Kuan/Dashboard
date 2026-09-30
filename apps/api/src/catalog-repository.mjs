@@ -10,6 +10,10 @@ function generatedSkuCode() {
   return `SKU-${compactDate()}-${randomUUID().slice(0, 6).toUpperCase()}`
 }
 
+function normalizeSearchIdentifier(value) {
+  return String(value || '').trim().toUpperCase().replace(/[\s._/#+()\-]/g, '')
+}
+
 function identityFromRow(row) {
   return {
     skuCode: row.sku_code,
@@ -180,20 +184,29 @@ export function createCatalogRepository(pool) {
       const safePage = Math.max(1, Number(page) || 1)
       const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 30))
       const term = String(query || '').trim().toLowerCase()
-      const clauses = []
+      const baseClauses = []
       const values = []
       if (term) {
         values.push(`%${term}%`)
-        clauses.push(`(lower(concat_ws(' ',s.sku_code,s.canonical_name_zh,s.canonical_name_en,s.brand_label,s.category_label)) LIKE $${values.length}
-          OR EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=s.id AND lower(i.normalized_value) LIKE $${values.length})
-          OR EXISTS (SELECT 1 FROM catalog_fitment f WHERE f.sku_id=s.id AND lower(f.vehicle_label) LIKE $${values.length}))`)
+        const textParameter = values.length
+        values.push(`%${normalizeSearchIdentifier(term)}%`)
+        const identifierParameter = values.length
+        baseClauses.push(`(lower(concat_ws(' ',s.sku_code,s.canonical_name_zh,s.canonical_name_en,s.brand_label,s.category_label)) LIKE $${textParameter}
+          OR EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.normalized_value LIKE $${identifierParameter})
+          OR EXISTS (SELECT 1 FROM catalog_fitment f WHERE f.sku_id=s.id AND lower(f.vehicle_label) LIKE $${textParameter}))`)
       }
+      const facetWhere = baseClauses.length ? `WHERE ${baseClauses.join(' AND ')}` : ''
+      const facetValues = [...values]
+      const clauses = [...baseClauses]
       if (status) {
         values.push(status)
         clauses.push(`s.lifecycle_status=$${values.length}`)
       }
       const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-      const count = await pool.query(`SELECT count(*)::int AS total FROM catalog_sku s ${where}`, values)
+      const [count, facets] = await Promise.all([
+        pool.query(`SELECT count(*)::int AS total FROM catalog_sku s ${where}`, values),
+        pool.query(`SELECT lifecycle_status, count(*)::int AS count FROM catalog_sku s ${facetWhere} GROUP BY lifecycle_status`, facetValues),
+      ])
       values.push(safeSize, (safePage - 1) * safeSize)
       const { rows } = await pool.query(`SELECT s.*,
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
@@ -203,7 +216,21 @@ export function createCatalogRepository(pool) {
       return {
         items: rows.map((row) => ({ ...mapSku(row), primaryIdentifier: row.primary_identifier || '', fitmentCount: row.fitment_count, sourceSystem: row.source_system || '' })),
         total: count.rows[0].total, page: safePage, pageSize: safeSize,
+        statusCounts: Object.fromEntries(facets.rows.map((row) => [row.lifecycle_status, row.count])),
       }
+    },
+
+    async findDuplicates(identifier, exceptId = null) {
+      const normalized = normalizeSearchIdentifier(identifier)
+      if (!normalized) return []
+      const { rows } = await pool.query(`SELECT s.id,s.sku_code,s.canonical_name_zh,s.lifecycle_status,i.raw_value,i.identifier_type,i.is_primary
+        FROM catalog_part_identifier i JOIN catalog_sku s ON s.id=i.sku_id
+        WHERE i.normalized_value=$1 AND ($2::text IS NULL OR s.id<>$2)
+        ORDER BY i.is_primary DESC,s.updated_at DESC LIMIT 20`, [normalized, exceptId])
+      return rows.map((row) => ({
+        skuId: row.id, skuCode: row.sku_code, nameZh: row.canonical_name_zh, lifecycleStatus: row.lifecycle_status,
+        rawValue: row.raw_value, identifierType: row.identifier_type, isPrimary: row.is_primary,
+      }))
     },
 
     get(id) {

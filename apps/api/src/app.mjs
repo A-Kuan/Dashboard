@@ -114,6 +114,12 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     return catalogRepository.list({ query: request.query?.q, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
   })
+  app.get('/api/v2/catalog/duplicates', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const identifier = String(request.query?.identifier || '').trim()
+    if (!identifier) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: 'identifier 不能为空' })
+    return { items: await catalogRepository.findDuplicates(identifier, request.query?.exceptId || null) }
+  })
   app.get('/api/v2/catalog/skus/:id', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     const item = await catalogRepository.get(request.params.id)

@@ -25,7 +25,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 ### SKU 资料
 
-- `GET /api/v2/catalog/skus?q=&status=&page=&pageSize=`：分页检索。
+- `GET /api/v2/catalog/skus?q=&status=&page=&pageSize=`：服务端分页检索；响应包含 `statusCounts`，编号搜索会忽略空格和常用分隔符。
+- `GET /api/v2/catalog/duplicates?identifier=&exceptId=`：按规范化编号检查潜在重复资料，用于保存前预警，不自动合并或阻止合法的品牌件/替代件。
 - `GET /api/v2/catalog/skus/:id`：读取完整聚合资料和变更记录。
 - `POST /api/v2/catalog/skus`：创建草稿；允许空草稿，未传编码时由服务端生成。
 - `PATCH /api/v2/catalog/skus/:id`：保存完整或局部资料，必须提交 `expectedVersion`。
@@ -69,3 +70,5 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 ```
 
 编号同时保存原始值与规范化值；前端展示原始值，搜索和去重使用规范化值。来源证据通过 `clientKey` 在同一次保存中关联编号与适配记录。
+
+列表接口只返回表格需要的摘要字段，详情由前端在选中行后按需加载，避免资料量增加后出现每页几十次详情请求。品牌、分类和计量单位继续使用共享字典接口 `/api/v1/dictionaries`，新工作台不在组件中固化业务选项。
