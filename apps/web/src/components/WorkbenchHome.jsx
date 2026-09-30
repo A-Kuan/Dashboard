@@ -9,50 +9,16 @@ import {
   Clock,
   Cube,
   FileText,
-  GearSix,
-  House,
   MagnifyingGlass,
-  Package,
   Robot,
   ShoppingCart,
-  Storefront,
   Tag,
   User,
   UsersThree,
-  Wrench,
-  X,
 } from '@phosphor-icons/react'
 import { assetPath } from '../utils/assetPath'
+import { WorkbenchSidebar } from './WorkbenchSidebar'
 import '../workbench.css'
-
-const navGroups = [
-  {
-    items: [
-      { label: '工作台', icon: House, active: true },
-      { label: 'SKU 资料库', icon: Cube },
-      { label: '车型库', icon: CarProfile },
-      { label: '客户管理', icon: User },
-      { label: '报价管理', icon: ClipboardText },
-      { label: '采购管理', icon: ShoppingCart },
-      { label: '订单管理', icon: FileText },
-      { label: '供应商管理', icon: Storefront },
-      { label: '数据报表', icon: ChartBar },
-    ],
-  },
-  {
-    title: '工具',
-    items: [
-      { label: '多家比价', icon: Wrench },
-      { label: 'VIN 解析', icon: X },
-      { label: 'OE 查询', icon: Tag },
-      { label: '图纸资料', icon: FileText },
-    ],
-  },
-  {
-    title: 'AI',
-    items: [{ label: 'Pi 助手', icon: Robot }],
-  },
-]
 
 const stats = [
   { label: '待处理询价', value: '12', note: '较昨日', delta: '▲ 3', tone: 'blue', icon: ClipboardText },
@@ -94,7 +60,7 @@ const vehicles = [
   { model: 'Q5', brand: '奥迪 Q5', image: 'vehicle-q5.png' },
 ]
 
-export function WorkbenchHome() {
+export function WorkbenchHome({ onNavigate }) {
   const [query, setQuery] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
   const [doneTodos, setDoneTodos] = useState([])
@@ -124,33 +90,9 @@ export function WorkbenchHome() {
     return businessRows.filter((row) => Object.values(row).join(' ').toLowerCase().includes(value))
   }, [query])
 
-  const navigate = (item) => {
-    if (!item.active) setToast(`${item.label}将在后续业务阶段接入`)
-  }
-
   return (
     <div className="workbench-home">
-      <aside className="workbench-sidebar">
-        <img className="workbench-logo" src={assetPath('assets/workbench/logo-transparent.png')} alt="虎山行 Auto Parts" />
-        <div className="workbench-nav-scroll">
-          {navGroups.map((group, groupIndex) => (
-            <div className={`workbench-nav-group group-${groupIndex}`} key={group.title || 'main'}>
-              {group.title ? <span className="workbench-nav-title">{group.title}</span> : null}
-              {group.items.map((item) => {
-                const Icon = item.icon
-                return (
-                  <button className={`workbench-nav-item ${item.active ? 'active' : ''}`} key={item.label} onClick={() => navigate(item)} type="button">
-                    <Icon size={20} weight={item.active ? 'fill' : 'bold'} />
-                    <span>{item.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          ))}
-        </div>
-        <button className="workbench-settings" type="button" onClick={() => setToast('设置将在后续阶段接入')}><GearSix size={20} weight="bold" />设置</button>
-        <p className="workbench-slogan">更好的配件<br />让每一程更安心</p>
-      </aside>
+      <WorkbenchSidebar active="home" onNavigate={onNavigate} onUnavailable={(label) => setToast(`${label}将在后续业务阶段接入`)} />
 
       <main className="workbench-main">
         <header className="workbench-hero">
