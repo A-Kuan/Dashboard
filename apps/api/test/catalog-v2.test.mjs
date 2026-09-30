@@ -1,0 +1,132 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { buildApp } from '../src/app.mjs'
+
+function createCatalogRepository() {
+  const items = []
+  const intakes = []
+  let nextId = 1
+  const changes = new Map()
+  function find(id) {
+    return items.find((item) => item.id === id || item.identity.skuCode === id) || null
+  }
+  function conflict(currentVersion) {
+    const error = new Error(`资料已被其他操作更新（当前版本 v${currentVersion}），请刷新后再编辑`)
+    error.statusCode = 409
+    error.errorCode = 'CATALOG_VERSION_CONFLICT'
+    error.details = { currentVersion }
+    return error
+  }
+  return {
+    async list({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
+      const term = String(query).toLowerCase()
+      const filtered = items.filter((item) => (!status || item.lifecycleStatus === status) && (!term || JSON.stringify(item).toLowerCase().includes(term)))
+      return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize) }
+    },
+    async get(id) { return find(id) },
+    async create(input, actor) {
+      const item = { id: `catalog-${nextId++}`, ...structuredClone(input), identity: { ...input.identity, skuCode: input.identity.skuCode || `SKU-AUTO-${nextId}` }, version: 1, createdBy: actor, updatedBy: actor }
+      items.push(item)
+      changes.set(item.id, [{ version: 1, action: 'create_draft', changedBy: actor }])
+      return item
+    },
+    async update(id, input, expectedVersion, actor) {
+      const item = find(id)
+      if (item.version !== expectedVersion) throw conflict(item.version)
+      Object.assign(item, structuredClone(input), { version: item.version + 1, updatedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: 'update_draft', changedBy: actor })
+      return item
+    },
+    async verify(id, expectedVersion, actor) {
+      const item = find(id)
+      if (item.version !== expectedVersion) throw conflict(item.version)
+      Object.assign(item, { version: item.version + 1, lifecycleStatus: 'verified', verificationLevel: 'verified', completenessScore: 100, updatedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: 'verify', changedBy: actor })
+      return item
+    },
+    async changes(id) { return find(id) ? changes.get(find(id).id) : null },
+    async createIntake(input, actor) {
+      const intake = { id: `intake-${intakes.length + 1}`, ...structuredClone(input), state: 'received', version: 1, createdBy: actor }
+      intakes.push(intake)
+      return intake
+    },
+    async getIntake(id) { return intakes.find((item) => item.id === id) || null },
+  }
+}
+
+test('catalog v2 accepts incomplete drafts without touching the legacy SKU contract', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '前刹车片' } } })
+  assert.equal(created.statusCode, 201)
+  assert.match(created.json().identity.skuCode, /^SKU-AUTO-/)
+  assert.equal(created.json().completenessScore, 20)
+  assert.equal(created.json().lifecycleStatus, 'draft')
+  assert.equal((await app.inject('/api/v2/catalog/skus?q=刹车')).json().total, 1)
+  await app.close()
+})
+
+test('catalog v2 captures source intake and preserves raw source context', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const response = await app.inject({
+    method: 'POST', url: '/api/v2/catalog/intakes',
+    payload: { sourceType: 'vin_epc', sourceContext: { vin: 'WP1ZZZ95ZHLB12345' }, rawPayload: { figure: '601-05' } },
+  })
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().sourceContext.vin, 'WP1ZZZ95ZHLB12345')
+  assert.equal((await app.inject('/api/v2/catalog/intakes/intake-1')).json().rawPayload.figure, '601-05')
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v2/catalog/intakes', payload: { sourceType: 'unknown' } })).statusCode, 400)
+  await app.close()
+})
+
+test('catalog v2 requires traceable complete data before verification', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const draft = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '前刹车片' } } })).json()
+  const rejected = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 1 } })
+  assert.equal(rejected.statusCode, 422)
+  assert.equal(rejected.json().error, 'SKU_NOT_VERIFIABLE')
+  assert.deepEqual(rejected.json().details.issues, ['classification', 'primaryIdentifier', 'fitment', 'evidence'])
+
+  const completed = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: {
+    expectedVersion: 1,
+    identity: { ...draft.identity, brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'epc-1', sourceType: 'vin_epc', sourceSystem: 'Porsche EPC', sourceRecordId: '601-05-01', catalogPath: '前桥/制动器' }],
+    identifiers: [{ clientKey: 'oe-1', type: 'oe', rawValue: '95B 698 151 H', isPrimary: true, evidenceKey: 'epc-1' }],
+    fitments: [{ vehicleLabel: 'Porsche Macan (95B)', years: '2014-2018', engineCodes: ['CYP'], evidenceKey: 'epc-1' }],
+  } })
+  assert.equal(completed.statusCode, 200)
+  assert.equal(completed.json().completenessScore, 100)
+  assert.equal(completed.json().identifiers[0].normalizedValue, '95B698151H')
+  assert.match(completed.json().evidence[0].immutableHash, /^[a-f0-9]{64}$/)
+  const verified = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 2 } })
+  assert.equal(verified.statusCode, 200)
+  assert.equal(verified.json().lifecycleStatus, 'verified')
+  assert.equal((await app.inject(`/api/v2/catalog/skus/${draft.id}/changes`)).json().items[0].action, 'verify')
+  await app.close()
+})
+
+test('catalog v2 rejects broken provenance links and duplicate identifiers', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const brokenEvidence = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {
+    identifiers: [{ rawValue: '95B698151H', evidenceKey: 'missing' }],
+  } })
+  assert.equal(brokenEvidence.statusCode, 400)
+  assert.match(brokenEvidence.json().message, /不存在的来源证据/)
+  const duplicate = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {
+    identifiers: [{ type: 'oe', rawValue: '95B 698 151 H' }, { type: 'oe', rawValue: '95B-698-151-H' }],
+  } })
+  assert.equal(duplicate.statusCode, 400)
+  assert.match(duplicate.json().message, /重复/)
+  await app.close()
+})
+
+test('catalog v2 rejects stale updates with the current version', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const draft = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {} })).json()
+  const saved = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 1, identity: { nameZh: '第一次保存' } } })
+  assert.equal(saved.json().identity.skuCode, draft.identity.skuCode)
+  const stale = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 1, identity: { nameZh: '覆盖保存' } } })
+  assert.equal(stale.statusCode, 409)
+  assert.equal(stale.json().error, 'CATALOG_VERSION_CONFLICT')
+  assert.equal(stale.json().details.currentVersion, 2)
+  await app.close()
+})

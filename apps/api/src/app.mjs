@@ -1,8 +1,9 @@
 import Fastify from 'fastify'
 import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './validation.mjs'
 import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validation.mjs'
+import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, validateCatalogVerifiable } from './catalog-validation.mjs'
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
@@ -99,10 +100,60 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     return dictionaryRepository.reset(request.headers['x-operator-name'] || '系统操作员')
   })
 
+  app.post('/api/v2/catalog/intakes', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    return reply.code(201).send(await catalogRepository.createIntake(normalizeIntakeInput(request.body), request.headers['x-operator-name'] || '系统操作员'))
+  })
+  app.get('/api/v2/catalog/intakes/:id', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const intake = await catalogRepository.getIntake(request.params.id)
+    if (!intake) return reply.code(404).send({ error: 'CATALOG_INTAKE_NOT_FOUND', message: '导入批次不存在' })
+    return intake
+  })
+  app.get('/api/v2/catalog/skus', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    return catalogRepository.list({ query: request.query?.q, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/catalog/skus/:id', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const item = await catalogRepository.get(request.params.id)
+    if (!item) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
+    return item
+  })
+  app.post('/api/v2/catalog/skus', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    return reply.code(201).send(await catalogRepository.create(normalizeCatalogInput(request.body), request.headers['x-operator-name'] || '系统操作员'))
+  })
+  app.patch('/api/v2/catalog/skus/:id', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const expectedVersion = requireCatalogVersion(request.body)
+    const existing = await catalogRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
+    const input = normalizeCatalogInput(request.body, existing)
+    return catalogRepository.update(existing.id, input, expectedVersion, request.headers['x-operator-name'] || '系统操作员')
+  })
+  app.post('/api/v2/catalog/skus/:id/verify', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const expectedVersion = requireCatalogVersion(request.body)
+    const existing = await catalogRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
+    validateCatalogVerifiable(normalizeCatalogInput({}, existing))
+    return catalogRepository.verify(existing.id, expectedVersion, request.headers['x-operator-name'] || '系统操作员')
+  })
+  app.get('/api/v2/catalog/skus/:id/changes', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const changes = await catalogRepository.changes(request.params.id)
+    if (!changes) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
+    return { items: changes }
+  })
+
   app.setErrorHandler((error, _request, reply) => {
     if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在' })
+    if (error.code === '23503') return reply.code(400).send({ error: 'INVALID_REFERENCE', message: '关联的数据不存在或已经失效' })
     const status = error.statusCode && error.statusCode < 500 ? error.statusCode : 500
-    return reply.code(status).send({ error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message })
+    const payload = { error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message }
+    if (status < 500 && error.details) payload.details = error.details
+    return reply.code(status).send(payload)
   })
   return app
 }
