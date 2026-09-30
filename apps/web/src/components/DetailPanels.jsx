@@ -1,8 +1,9 @@
-import { CaretLeft, CaretRight, CheckCircle, Database, PencilSimple } from '@phosphor-icons/react'
+import { ArrowSquareOut, CaretLeft, CaretRight, CheckCircle, Copy, Database, PencilSimple } from '@phosphor-icons/react'
 import { CloseButton, MiniTable, PartThumbnail, StatusBadge } from './Common'
 import { dictionaryItemLabel } from '../services/dictionaryService'
 
 const detailTabs = ['基本信息', '适配信息', '库存分布', '采购与价格', 'OEM 参考', '变更记录']
+const detailTabLabels = { '基本信息': '概览', '适配信息': '适配', '库存分布': '库存', '采购与价格': '价格', 'OEM 参考': '来源', '变更记录': '记录' }
 
 function formatDate(value) {
   if (!value) return '—'
@@ -45,7 +46,7 @@ export function DetailPanels({ item, dictionaries, activeTab, onTabChange, onClo
       <div className="part-title"><div className="part-title-line"><h2>{item.skuCode}</h2><StatusBadge status={item.lifecycleStatus} /></div><p>{item.chineseName}</p><div className="chips"><span>{brandLabel}</span><span>{categoryLabel}</span><span>{item.dataSource || '—'}</span></div><small>最后更新：{formatDate(item.updatedAt)}　更新者：{item.updatedBy || '—'}</small></div>
       <div className="sku-detail-actions"><div className="sku-detail-step"><button aria-label="上一个 SKU" disabled={!hasPrevious} onClick={onPrevious} type="button"><CaretLeft size={19} />上一个</button><button aria-label="下一个 SKU" disabled={!hasNext} onClick={onNext} type="button">下一个<CaretRight size={19} /></button></div><button className="primary-button" onClick={onEdit} type="button"><PencilSimple size={19} />编辑</button><CloseButton onClick={onClose} /></div>
     </header>
-    <div className="detail-tabs" role="tablist">{detailTabs.map((tab) => <button aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => onTabChange(tab)} role="tab" type="button">{tab}</button>)}</div>
+    <div className="detail-tabs" role="tablist">{detailTabs.map((tab) => <button aria-label={tab} aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => onTabChange(tab)} role="tab" type="button">{detailTabLabels[tab]}</button>)}</div>
     <div className="sku-detail-scroll">{showOverview ? <div className="sku-detail-overview" role="tabpanel">
       <div className="sku-detail-main-column">
         <section className="sku-detail-section"><header><h3>主数据</h3><button onClick={onEdit} type="button"><PencilSimple size={17} />编辑</button></header><dl className="detail-facts"><div><dt>SKU 编码</dt><dd>{item.skuCode}</dd></div><div><dt>中文名称</dt><dd>{item.chineseName}</dd></div><div><dt>品牌</dt><dd>{brandLabel}</dd></div><div><dt>零件大类</dt><dd>{categoryLabel}</dd></div><div><dt>主 OE 号</dt><dd>{item.primaryOe || '—'}</dd></div><div><dt>制造商零件号</dt><dd>{item.manufacturerPartNumber || '—'}</dd></div><div><dt>计量单位</dt><dd>{unitLabel}</dd></div><div><dt>数据来源</dt><dd>{item.dataSource || '—'}</dd></div><div><dt>创建时间</dt><dd>{formatDate(item.createdAt)}</dd></div><div><dt>生命周期</dt><dd><StatusBadge status={item.lifecycleStatus} /></dd></div></dl></section>
@@ -56,5 +57,6 @@ export function DetailPanels({ item, dictionaries, activeTab, onTabChange, onClo
         <section className="sku-detail-section"><header><h3>配置与使用情况</h3></header><dl className="sku-readiness"><ReadinessRow label="适配数据" ready={Boolean(item.fitments?.length)} value={item.fitments?.length ? `${item.fitments.length} 个适配车型` : '待维护'} /><ReadinessRow label="商品图片" ready={Boolean(item.imageUrl)} value={item.imageUrl ? '已上传' : '待上传'} /><ReadinessRow label="数据来源" ready={Boolean(item.dataSource)} value={item.dataSource || '待维护'} /><ReadinessRow label="OEM 参考" ready={Boolean(item.sourceEvidence)} value={item.sourceEvidence ? '已关联' : '未关联'} /></dl></section>
       </aside>
     </div> : <TabContent activeTab={activeTab} item={item} />}</div>
+    <footer className="sku-inspector-footer"><button className="primary-button" onClick={onEdit} type="button"><ArrowSquareOut size={18} />打开编辑页</button><button onClick={() => { void navigator.clipboard?.writeText(item.skuCode).catch(() => {}) }} type="button"><Copy size={18} />复制 SKU</button></footer>
   </section>
 }

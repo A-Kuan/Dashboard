@@ -195,15 +195,15 @@ test('loads persisted SKU data and captures the default state', async ({ page })
   await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
 })
 
-test('keeps a readable SKU list and detail workspace visible together at 1920 by 1080', async ({ page }) => {
+test('keeps a readable SKU table and persistent inspector visible together at 1920 by 1080', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 })
   const seed = structuredClone(page.__apiRecords[0])
-  page.__apiRecords.splice(0, page.__apiRecords.length, ...Array.from({ length: 12 }, (_, index) => ({
+  page.__apiRecords.splice(0, page.__apiRecords.length, ...Array.from({ length: 24 }, (_, index) => ({
     ...structuredClone(seed),
     id: `sku-layout-${index + 1}`,
     skuCode: `${seed.skuCode}-${String(index + 1).padStart(2, '0')}`,
     chineseName: index % 2 === 0 ? '行李厢内饰板（黑色）' : '前制动片',
-    updatedAt: `2026-09-${String(27 - index).padStart(2, '0')}T06:32:00.000Z`,
+    updatedAt: `2026-09-${String(Math.max(1, 27 - index)).padStart(2, '0')}T06:32:00.000Z`,
   })))
   await page.reload()
 
@@ -211,13 +211,15 @@ test('keeps a readable SKU list and detail workspace visible together at 1920 by
   const detailPane = page.locator('.sku-detail-workspace')
   await expect(masterPane).toBeVisible()
   await expect(detailPane).toBeVisible()
-  await expect(masterPane).toContainText('12')
+  await expect(page.getByRole('button', { name: '表格模式' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('columnheader', { name: /SKU编码/ })).toBeVisible()
+  await expect(masterPane).toContainText('24')
   await expect(detailPane.getByRole('heading', { level: 2 })).toContainText('95B-867-288-OM8-01')
 
   const metrics = await page.evaluate(() => {
     const master = document.querySelector('.sku-master-scroll')
     const detail = document.querySelector('.sku-detail-scroll')
-    const rowText = document.querySelector('.sku-master-primary strong')
+    const rowText = document.querySelector('.sku-table tbody .sku-col')
     const detailText = document.querySelector('.sku-detail-workspace')
     return {
       documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
@@ -233,14 +235,18 @@ test('keeps a readable SKU list and detail workspace visible together at 1920 by
   expect(metrics.rowFontSize).toBeGreaterThanOrEqual(16)
   expect(metrics.detailFontSize).toBeGreaterThanOrEqual(15)
 
-  await page.getByRole('button', { name: '表格模式' }).click()
-  await expect(page.getByRole('columnheader', { name: /SKU编码/ })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-master-detail-1920.png', fullPage: false })
+
+  await detailPane.getByRole('button', { name: '关闭' }).click()
+  await expect(page.getByRole('button', { name: '显示当前 SKU 详情' })).toBeVisible()
+  await page.getByRole('button', { name: '显示当前 SKU 详情' }).click()
+  await expect(detailPane).toBeVisible()
+
   await page.getByRole('button', { name: '列表模式' }).click()
   await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('前制动片')
-  await expect(page.getByRole('table', { name: 'SKU 结果列表' }).getByRole('row')).toHaveCount(6)
+  await expect(page.getByRole('table', { name: 'SKU 结果列表' }).getByRole('row')).toHaveCount(12)
   await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('')
 
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-master-detail-1920.png', fullPage: false })
 })
 
 test('shows honest empty states instead of demo defaults', async ({ page }) => {
