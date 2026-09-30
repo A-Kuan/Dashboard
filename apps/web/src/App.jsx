@@ -54,7 +54,7 @@ export function App() {
   const [sortMode, setSortMode] = useState('最近更新')
   const [detailTab, setDetailTab] = useState('基本信息')
   const [resultQuery, setResultQuery] = useState('')
-  const [resultView, setResultView] = useState('list')
+  const [resultView, setResultView] = useState('table')
   const [detailVisible, setDetailVisible] = useState(true)
   const [masterWidth, setMasterWidth] = useState(440)
   const resizeState = useRef(null)
@@ -218,11 +218,9 @@ export function App() {
           <div className="page-actions"><button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={18} /> 新建 SKU</button><button className="more-button" aria-label="更多操作" aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((current) => !current)} type="button"><DotsThree size={21} weight="bold" /></button>{actionMenuOpen ? <><button className="page-action-scrim" aria-label="关闭更多操作" onClick={() => setActionMenuOpen(false)} type="button" /><div className="page-action-menu" role="menu"><button disabled={dictionariesLoading} onClick={() => window.location.assign(assetPath('dictionaries'))} role="menuitem" type="button"><GearSix size={17} /><span><b>字典管理</b><small>集中维护 SKU 与适配业务字典</small></span></button></div></> : null}</div>
         </section>
 
-        <div className="summary-tabs" role="tablist">
+        <div className="sku-filter-strip"><div className="summary-tabs" role="tablist">
           {summaryTabs.map(({ label, count, disabled }) => <button aria-disabled={disabled || undefined} className={summaryTab === label ? 'active' : ''} disabled={disabled} key={label} onClick={() => setSummaryTab(label)} role="tab" title={disabled ? `${label}需要相应业务模块接入后开放` : undefined} type="button">{label} <strong>{count}</strong></button>)}
-        </div>
-
-        <div className="filters-row">
+        </div><div className="filters-row">
           <div className="filters-left">
             <DictionarySelect dictionaryCode="sku_brand" dictionaries={dictionaries} fallbackLabel="品牌" value={brand} onChange={setBrand} disabled={dictionariesLoading} />
             <DictionarySelect dictionaryCode="part_category" dictionaries={dictionaries} fallbackLabel="零件大类" value={category} onChange={setCategory} disabled={dictionariesLoading} />
@@ -235,13 +233,13 @@ export function App() {
             {moreFiltersOpen ? <div className="filter-popover" role="dialog" aria-label="更多筛选"><label><span>数据来源</span><select aria-label="数据来源筛选" value={dataSource} onChange={(event) => setDataSource(event.target.value)}><option value={ALL_DICTIONARY_VALUE}>全部来源</option>{dataSources.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>适配车型</span><select aria-label="适配车型筛选" value={fitmentFilter} onChange={(event) => setFitmentFilter(event.target.value)}>{['全部', '已配置', '未配置'].map((item) => <option key={item}>{item}</option>)}</select></label><footer><button onClick={() => { setDataSource(ALL_DICTIONARY_VALUE); setFitmentFilter('全部') }} type="button">清除附加筛选</button><button onClick={() => setMoreFiltersOpen(false)} type="button">完成</button></footer></div> : null}
             {sortMenuOpen ? <div className="sort-popover" role="menu" aria-label="排序方式">{['最近更新', 'SKU 编码', '中文名称', '状态'].map((item) => <button aria-checked={sortMode === item} className={sortMode === item ? 'active' : ''} key={item} onClick={() => { setSortMode(item); setSortMenuOpen(false) }} role="menuitemradio" type="button">{item}</button>)}</div> : null}
           </div>
-        </div>
+        </div></div>
 
         {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}
         {!recordsLoading && recordsError ? <div className="sku-data-state error"><Warning size={23} weight="fill" /><b>无法读取 SKU 数据</b><span>{recordsError}</span><button className="secondary-button" onClick={() => window.location.reload()} type="button">重新加载</button></div> : null}
-        {!recordsLoading && !recordsError && filteredRows.length ? <div className={`sku-browser-workspace ${resultView === 'table' ? 'table-view' : 'list-view'}${detailVisible && selectedRecord ? '' : ' detail-collapsed'}`} style={{ '--sku-master-width': resultView === 'table' ? 'min(1080px, 62vw)' : `${masterWidth}px` }}>
+        {!recordsLoading && !recordsError && filteredRows.length ? <div className={`sku-browser-workspace ${resultView === 'table' ? 'table-view' : 'list-view'}${detailVisible && selectedRecord ? '' : ' detail-collapsed'}`} style={{ '--sku-master-width': `${masterWidth}px` }}>
           <section className="sku-master-pane" aria-label="SKU 结果">
-            <header className="sku-master-toolbar"><div className="sku-master-title"><h2>SKU 列表</h2><span>{visibleRows.length.toLocaleString('zh-CN')}</span></div><div className="sku-view-switch" role="group" aria-label="SKU 展示模式"><button aria-pressed={resultView === 'list'} className={resultView === 'list' ? 'active' : ''} onClick={() => setResultView('list')} type="button"><ListBullets size={18} />列表模式</button><button aria-pressed={resultView === 'table'} className={resultView === 'table' ? 'active' : ''} onClick={() => setResultView('table')} type="button"><TableIcon size={18} />表格模式</button></div></header>
+            <header className="sku-master-toolbar"><div className="sku-master-title"><h2>{resultView === 'table' ? 'SKU 数据表' : 'SKU 列表'}</h2><span>共 {visibleRows.length.toLocaleString('zh-CN')} 条</span></div><div className="sku-view-switch" role="group" aria-label="SKU 展示模式"><button aria-label="列表模式" aria-pressed={resultView === 'list'} className={resultView === 'list' ? 'active' : ''} onClick={() => setResultView('list')} title="列表模式" type="button"><ListBullets size={19} /></button><button aria-label="表格模式" aria-pressed={resultView === 'table'} className={resultView === 'table' ? 'active' : ''} onClick={() => setResultView('table')} title="表格模式" type="button"><TableIcon size={19} /></button></div></header>
             <div className="sku-result-search"><MagnifyingGlass size={19} /><input aria-label="在 SKU 结果中搜索" onChange={(event) => setResultQuery(event.target.value)} placeholder="在结果中搜索 SKU、名称、OE 号…" value={resultQuery} /><span>{sortMode}</span></div>
             <div className="sku-master-scroll">{visibleRows.length ? resultView === 'list' ? <SkuMasterList rows={visibleRows} selectedId={selectedId} onSelect={selectSku} /> : <SkuTable rows={visibleRows} selectedId={selectedId} onSelect={selectSku} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} /> : <div className="sku-master-empty"><Package size={32} /><b>结果中没有匹配的 SKU</b><button onClick={() => setResultQuery('')} type="button">清除搜索</button></div>}</div>
             <footer className="sku-master-footer"><span>已显示 <b>{visibleRows.length}</b> 条</span><span>{selectedIndex >= 0 ? `当前第 ${selectedIndex + 1} 条` : '未选择'}</span></footer>

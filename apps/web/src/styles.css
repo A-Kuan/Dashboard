@@ -226,6 +226,11 @@ button { color: inherit; }
 .sku-management-workspace .sort-button { min-width: 132px; }
 .sku-management-workspace .filter-popover label, .sku-management-workspace .filter-popover footer button, .sku-management-workspace .sort-popover button { font-size: 14px; }
 .sku-management-workspace .sort-popover button { height: 38px; }
+.sku-filter-strip { min-height: 52px; flex: 0 0 auto; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 18px; border-bottom: 1px solid #dfe7f1; }
+.sku-filter-strip .summary-tabs { border-bottom: 0; }
+.sku-filter-strip .filters-row { min-width: 0; height: 48px; margin: 0; }
+.sku-filter-strip .filters-left { gap: 7px; }
+.sku-filter-strip .filters-right { margin-left: auto; }
 .app-shell:has(.sku-management-workspace) .global-search > span:nth-child(2), .app-shell:has(.sku-management-workspace) .current-space { font-size: 14px; }
 .app-shell:has(.sku-management-workspace) .user-profile small { color: #64738c; font-size: 13px; }
 
@@ -335,6 +340,73 @@ button { color: inherit; }
 .sku-browser-workspace.table-view .sku-table thead { position: sticky; top: 0; z-index: 2; }
 .sku-browser-workspace.table-view .sku-table thead th, .sku-browser-workspace.table-view .sku-table .sku-col .row-link, .sku-browser-workspace.table-view .status-badge { font-size: 14px; }
 
+/* Option 2: table-first workspace with a persistent right inspector. */
+.sku-browser-workspace.table-view { grid-template-columns: minmax(0, 1fr) 10px 480px; }
+.sku-browser-workspace.table-view.detail-collapsed { grid-template-columns: minmax(0, 1fr) 52px; }
+.sku-browser-workspace.table-view .sku-master-pane { grid-template-rows: 50px 48px minmax(0, 1fr) 44px; }
+.sku-browser-workspace.table-view .sku-master-toolbar { min-height: 50px; padding: 6px 12px 6px 16px; }
+.sku-browser-workspace.table-view .sku-master-title h2 { font-size: 17px; }
+.sku-browser-workspace.table-view .sku-master-title span { font-size: 15px; }
+.sku-browser-workspace.table-view .sku-view-switch { gap: 6px; }
+.sku-browser-workspace.table-view .sku-view-switch button { width: 38px; height: 36px; padding: 0; justify-content: center; }
+.sku-browser-workspace.table-view .sku-result-search { height: 48px; margin: 0; padding: 0 15px; background: #fbfcfe; }
+.sku-browser-workspace.table-view .sku-master-scroll { border-top: 1px solid #dfe7f1; }
+.sku-browser-workspace.table-view .sku-master-pane .sku-table-shell { min-width: 1240px; min-height: 100%; height: auto; }
+.sku-browser-workspace.table-view .sku-table { min-width: 1240px; color: #263c5c; font-size: 15px; }
+.sku-browser-workspace.table-view .sku-table th,
+.sku-browser-workspace.table-view .sku-table td { height: 48px; padding-right: 11px; padding-left: 11px; }
+.sku-browser-workspace.table-view .sku-table thead th,
+.sku-browser-workspace.table-view .sku-table .sku-col .row-link,
+.sku-browser-workspace.table-view .status-badge { font-size: 15px; }
+.sku-browser-workspace.table-view .sku-table th { color: #334965; background: #f7f9fc; font-weight: 700; }
+.sku-browser-workspace.table-view .sku-table td { font-size: 16px; font-weight: 540; }
+.sku-browser-workspace.table-view .sku-table .stock-col,
+.sku-browser-workspace.table-view .sku-table .price-col,
+.sku-browser-workspace.table-view .sku-table .action-col { display: none; }
+.sku-browser-workspace.table-view .sku-table .check-col { width: 50px; }
+.sku-browser-workspace.table-view .sku-table .image-col { width: 72px; }
+.sku-browser-workspace.table-view .sku-table .sku-col { width: 156px; }
+.sku-browser-workspace.table-view .sku-table .oe-col { width: 145px; }
+.sku-browser-workspace.table-view .sku-table .name-col { width: 180px; }
+.sku-browser-workspace.table-view .sku-table .category-col { width: 138px; }
+.sku-browser-workspace.table-view .sku-table .brand-col { width: 138px; }
+.sku-browser-workspace.table-view .sku-table .vehicle-col { width: 164px; }
+.sku-browser-workspace.table-view .sku-table .source-col { width: 120px; }
+.sku-browser-workspace.table-view .sku-table .status-col { width: 112px; }
+.sku-browser-workspace.table-view .sku-pane-resizer { width: 10px; cursor: default; }
+.sku-browser-workspace.table-view .sku-pane-resizer span { width: 3px; height: 38px; background: #c0cad8; }
+
+.sku-browser-workspace.table-view .sku-detail-workspace { grid-template-rows: auto 50px minmax(0, 1fr) 64px; background: #f5f8fc; }
+.sku-browser-workspace.table-view .sku-detail-identity { min-height: 130px; padding: 13px 14px; grid-template-columns: 96px minmax(0, 1fr) 122px; gap: 13px; align-items: start; }
+.sku-browser-workspace.table-view .sku-detail-identity .part-preview { width: 96px; height: 82px; }
+.sku-browser-workspace.table-view .sku-detail-identity .part-title h2 { font-size: 21px; }
+.sku-browser-workspace.table-view .sku-detail-identity .part-title p { margin: 4px 0 7px; font-size: 18px; }
+.sku-browser-workspace.table-view .sku-detail-identity .chips { gap: 6px; }
+.sku-browser-workspace.table-view .sku-detail-identity .chips span { min-height: 26px; padding: 2px 7px; font-size: 14px; }
+.sku-browser-workspace.table-view .sku-detail-identity .part-title > small { margin-top: 6px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.sku-browser-workspace.table-view .sku-detail-actions { grid-template-columns: 72px 40px; align-content: start; }
+.sku-browser-workspace.table-view .sku-detail-step { display: none; }
+.sku-browser-workspace.table-view .sku-detail-actions > .primary-button { width: 72px; height: 40px; padding: 0; grid-column: 1; display: inline-flex; }
+.sku-browser-workspace.table-view .sku-detail-actions > .icon-button { width: 40px; height: 40px; }
+.sku-browser-workspace.table-view .sku-detail-workspace > .detail-tabs { height: 50px; padding: 0 5px; }
+.sku-browser-workspace.table-view .sku-detail-workspace > .detail-tabs button { min-width: 0; flex: 1; padding: 0 3px; font-size: 15px; }
+.sku-browser-workspace.table-view .sku-detail-overview { padding: 9px; grid-template-columns: 1fr; gap: 9px; }
+.sku-browser-workspace.table-view .sku-detail-main-column,
+.sku-browser-workspace.table-view .sku-detail-side-column { gap: 9px; }
+.sku-browser-workspace.table-view .sku-detail-section > header { min-height: 46px; padding: 0 12px; }
+.sku-browser-workspace.table-view .sku-detail-section > header h3 { font-size: 17px; }
+.sku-browser-workspace.table-view .sku-detail-workspace .detail-facts { padding: 4px 12px 12px; grid-template-columns: 1fr; font-size: 15px; }
+.sku-browser-workspace.table-view .sku-detail-workspace .detail-facts div { min-height: 39px; grid-template-columns: 132px minmax(0, 1fr); }
+.sku-browser-workspace.table-view .sku-source-section img,
+.sku-browser-workspace.table-view .sku-source-section .source-image-empty { height: 190px; }
+.sku-browser-workspace.table-view .sku-detail-workspace .mini-table { min-width: 620px; font-size: 15px; }
+.sku-browser-workspace.table-view .sku-detail-section { overflow-x: auto; }
+.sku-browser-workspace.table-view .sku-inspector-footer { min-height: 64px; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, .8fr); gap: 9px; border-top: 1px solid #d7e1ee; background: #fff; }
+.sku-inspector-footer { display: none; }
+.sku-inspector-footer button { min-width: 0; height: 43px; padding: 0 11px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: #2b4263; border: 1px solid #cfdbea; border-radius: 5px; background: #fff; font-size: 15px; font-weight: 650; cursor: pointer; white-space: nowrap; }
+.sku-inspector-footer .primary-button { color: #fff; border-color: var(--blue); background: var(--blue); }
+.sku-browser-workspace.table-view.detail-collapsed .reopen-detail { width: 52px; height: 100%; margin: 0; padding: 15px 0; border-width: 0 0 0 1px; border-radius: 0; writing-mode: vertical-rl; }
+
 @media (max-width: 1500px) {
   .sku-management-workspace { padding-right: 16px; padding-left: 16px; }
   .sku-browser-workspace { --sku-master-width: 390px !important; }
@@ -343,6 +415,11 @@ button { color: inherit; }
   .sku-detail-identity .part-preview { width: 112px; height: 98px; }
   .sku-detail-identity .part-title h2 { font-size: 23px; }
   .sku-detail-identity .part-title p { font-size: 19px; }
+  .sku-filter-strip { grid-template-columns: 1fr; gap: 0; }
+  .sku-filter-strip .summary-tabs { overflow-x: auto; }
+  .sku-browser-workspace.table-view { grid-template-columns: minmax(0, 1fr) 10px 420px; }
+  .sku-browser-workspace.table-view .sku-detail-identity { grid-template-columns: 82px minmax(0, 1fr) 122px; }
+  .sku-browser-workspace.table-view .sku-detail-identity .part-preview { width: 82px; height: 76px; }
 }
 
 @media (min-width: 1800px) and (min-height: 1000px) {
