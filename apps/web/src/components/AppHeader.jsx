@@ -8,7 +8,7 @@ export function AppHeader({ onSearchFocus, searchValue = '', activeNav = '零件
       <nav className="global-nav" aria-label="主导航">
         {['零件库', '车型库', '采购', '库存', '销售'].map((item) => {
           const enabled = item === '零件库' || item === '车型库'
-          return <button aria-disabled={!enabled || undefined} className={item === activeNav ? 'nav-item active' : 'nav-item'} disabled={!enabled} key={item} onClick={() => { if (item === '零件库') window.location.assign(assetPath('')); if (item === '车型库') window.location.assign(assetPath('vehicles')) }} title={enabled ? undefined : `${item}模块尚未开放`}>{item}</button>
+          return <button aria-disabled={!enabled || undefined} className={item === activeNav ? 'nav-item active' : 'nav-item'} disabled={!enabled} key={item} onClick={() => { if (item === '零件库') window.location.assign(assetPath('skus')); if (item === '车型库') window.location.assign(assetPath('vehicles')) }} title={enabled ? undefined : `${item}模块尚未开放`}>{item}</button>
         })}
       </nav>
       <button className="global-search" onClick={onSearchFocus} type="button">

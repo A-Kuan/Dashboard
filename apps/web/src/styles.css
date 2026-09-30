@@ -541,11 +541,6 @@ button { color: inherit; }
 .dictionary-table-row .dictionary-switch em { grid-column: auto; font-size: 10px; text-align: left; }
 .dictionary-table-row .delete-dictionary-item { justify-self: center; }
 
-@media (min-width: 1800px) and (min-height: 1000px) {
-  html, body { min-width: 0; }
-  #root > .app-shell { width: 87.5%; zoom: 1.142857; }
-}
-
 /* Shared command-center states: 02–07 */
 .search-backdrop { justify-content: flex-start; background: rgba(244,248,253,.22); padding-top: 52px; backdrop-filter: blur(.65px); }
 .command-panel { width: 620px; margin-left: calc(50% - 312px); color: #1a2946; border-color: #d3dbe7; border-radius: 7px; box-shadow: 0 18px 44px rgba(26,42,73,.18); }
