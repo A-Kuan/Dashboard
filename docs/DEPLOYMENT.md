@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-f364123`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-8ba701f`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -67,10 +67,10 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260930-f364123
+├── current -> releases/20260930-8ba701f
 └── releases/
-    ├── 20260928-5b53ec9/  # 上一前端版，可回滚
-    └── 20260930-f364123/
+    ├── 20260930-f364123/  # 上一前端版，可回滚
+    └── 20260930-8ba701f/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -129,6 +129,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260928-5b53ec9` 前端发布后已在线验证：新建车型调整为来源优先流程，支持从 VIN、EPC 数据或已有车型模板开始建档，并在写入前确认差异、常用配件和保养套餐。该版本只切换前端静态文件，未迁移数据库、未重启 API，也未自动写入示例车型；线上已有 5 条 SKU 保持不变，浏览器控制台无报错。
 
 `20260930-f364123` 前端发布后已在线验证方案 3 的 SKU 主从工作区：1920×1080 下 SKU 列表与详情持续并排显示且各自滚动，页面本身无纵向溢出；SKU 编码和详情正文均为 16px，列表/表格切换和多图片拖入能力保留。线上首页、静态资源及 API 均返回 200，浏览器控制台无错误。发布前后数据库及 API 均为 17 条用户 SKU，本次未运行迁移、未修改业务数据，上一前端版 `20260928-5b53ec9` 保留用于回滚。
+
+`20260930-8ba701f` 前端修复版发布后已在线验证：SKU 详情中的计量单位通过共享字典显示为“片”等名称，不再泄漏 `UNIT_` 编码。线上 17 条 SKU 保持不变，页面无纵向溢出，浏览器控制台无错误；上一版 `20260930-f364123` 保留用于回滚。
 
 ## 回滚
 
