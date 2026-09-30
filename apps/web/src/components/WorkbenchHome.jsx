@@ -60,7 +60,7 @@ const vehicles = [
   { model: 'Q5', brand: '奥迪 Q5', image: 'vehicle-q5.png' },
 ]
 
-export function WorkbenchHome({ onNavigate }) {
+export function WorkbenchHome({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [query, setQuery] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
   const [doneTodos, setDoneTodos] = useState([])
@@ -91,8 +91,8 @@ export function WorkbenchHome({ onNavigate }) {
   }, [query])
 
   return (
-    <div className="workbench-home">
-      <WorkbenchSidebar active="home" onNavigate={onNavigate} onUnavailable={(label) => setToast(`${label}将在后续业务阶段接入`)} />
+    <div className={`workbench-home ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <WorkbenchSidebar active="home" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => setToast(`${label}将在后续业务阶段接入`)} />
 
       <main className="workbench-main">
         <header className="workbench-hero">

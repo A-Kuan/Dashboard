@@ -31,7 +31,7 @@ const sources = [
   { id: 'manual', title: '手工建立空白 SKU', note: '用于暂无外部来源的自有商品', icon: ClipboardText },
 ]
 
-export function SkuLibrary({ onNavigate }) {
+export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [selectedId, setSelectedId] = useState(skuRecords[0].id)
@@ -56,8 +56,8 @@ export function SkuLibrary({ onNavigate }) {
   }
 
   return (
-    <div className="workbench-home sku-workspace">
-      <WorkbenchSidebar active="sku" onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
+    <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
       <main className="sku-main">
         <header className="sku-topbar">
           <div className="sku-titleblock">

@@ -60,6 +60,26 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
 })
 
+test('collapses the navigation into a persistent icon rail', async ({ page }) => {
+  const collapseButton = page.getByRole('button', { name: '收起导航' })
+  await expect(collapseButton).toBeVisible()
+  await collapseButton.click()
+
+  await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
+  await expect(page.getByRole('button', { name: '展开导航' })).toBeVisible()
+  await expect.poll(async () => Math.round((await page.locator('.workbench-main').boundingBox()).x)).toBe(72)
+  await page.screenshot({ path: 'qa-artifacts/implementation-sidebar-collapsed-1680.png', fullPage: false })
+
+  await page.reload()
+  await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await expect(page).toHaveURL(/#\/sku$/)
+  await expect.poll(async () => Math.round((await page.locator('.sku-main').boundingBox()).x)).toBe(72)
+
+  await page.getByRole('button', { name: '展开导航' }).click()
+  await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
+})
+
 test('does not expose retired frontend business routes', async ({ page }) => {
   for (const route of ['skus', 'vehicles', 'dictionaries']) {
     await page.goto(`./${route}`)

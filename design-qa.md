@@ -4,6 +4,8 @@
 - Implementation: `apps/web/qa-artifacts/implementation-sku-library-default-1680.png`
 - Comparison board: `apps/web/qa-artifacts/sku-extension-design-comparison.png`
 - Focused state: `apps/web/qa-artifacts/implementation-sku-source-modal-1680.png`
+- Collapsed navigation: `apps/web/qa-artifacts/implementation-sidebar-collapsed-1680.png`
+- Collapse comparison: `apps/web/qa-artifacts/sidebar-collapse-design-comparison.png`
 - Source pixels: 1672 × 941
 - Implementation pixels: 1680 × 945 at CSS viewport 1680 × 945, device scale factor 1
 - Normalization: both sides scaled to 1672 × 941 on a 3344 × 941 side-by-side comparison board
@@ -39,6 +41,14 @@ This is an extension comparison rather than a pixel clone: the source is the hom
 
 No actionable P0, P1 or P2 visual differences remain for an existing-product extension. The large empty lower list area is expected with only five mock records and will fill naturally with paginated production data.
 
+### Collapsible navigation pass
+
+- The 72px collapsed rail preserves every icon, the lime active state, group separators and the original navigation order.
+- The boundary control clearly reverses direction between collapse and expand; both states retain accessible names and collapsed items expose native labels.
+- The content area gains the released width. Pointer activation uses a 220ms interruptible FLIP transition for spatial continuity; keyboard activation and reduced-motion mode change state immediately.
+- Refreshing and moving between Home and SKU preserve the selected rail state.
+- No actionable P0, P1 or P2 issues remain in the collapsed view.
+
 ## Browser verification
 
 - Search by part name and result selection: passed.
@@ -47,7 +57,8 @@ No actionable P0, P1 or P2 visual differences remain for an existing-product ext
 - Home/SKU navigation and hash route: passed.
 - Existing home search, command center and todo interactions: passed.
 - Console and page errors: none in the final run.
-- Automated browser tests: 4 passed.
+- Sidebar collapse, persistence, cross-page navigation and restore: passed.
+- Automated browser tests: 5 passed.
 
 ## Follow-up polish
 

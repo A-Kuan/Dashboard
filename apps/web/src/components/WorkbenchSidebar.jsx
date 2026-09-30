@@ -1,5 +1,6 @@
 import {
   CarProfile,
+  CaretLeft,
   ChartBar,
   ClipboardText,
   Cube,
@@ -45,15 +46,19 @@ const navGroups = [
   },
 ]
 
-export function WorkbenchSidebar({ active = 'home', onNavigate, onUnavailable }) {
+export function WorkbenchSidebar({ active = 'home', collapsed = false, onToggle, onNavigate, onUnavailable }) {
   const navigate = (item) => {
     if (item.id === 'home' || item.id === 'sku') onNavigate?.(item.id)
     else onUnavailable?.(item.label)
   }
 
   return (
-    <aside className="workbench-sidebar">
-      <img className="workbench-logo" src={assetPath('assets/workbench/logo-transparent.png')} alt="虎山行 Auto Parts" />
+    <>
+      <aside className="workbench-sidebar" aria-label="主导航">
+      <div className="workbench-brand">
+        <img className="workbench-logo workbench-logo-full" src={assetPath('assets/workbench/logo-transparent.png')} alt="虎山行 Auto Parts" />
+        <img className="workbench-logo workbench-logo-compact" src={assetPath('assets/workbench/logo-transparent.png')} alt="" />
+      </div>
       <div className="workbench-nav-scroll">
         {navGroups.map((group, groupIndex) => (
           <div className={`workbench-nav-group group-${groupIndex}`} key={group.title || 'main'}>
@@ -62,7 +67,7 @@ export function WorkbenchSidebar({ active = 'home', onNavigate, onUnavailable })
               const Icon = item.icon
               const isActive = item.id === active
               return (
-                <button className={`workbench-nav-item ${isActive ? 'active' : ''}`} key={item.id} onClick={() => navigate(item)} type="button">
+                <button aria-label={item.label} className={`workbench-nav-item ${isActive ? 'active' : ''}`} key={item.id} onClick={() => navigate(item)} title={collapsed ? item.label : undefined} type="button">
                   <Icon size={20} weight={isActive ? 'fill' : 'bold'} />
                   <span>{item.label}</span>
                 </button>
@@ -71,8 +76,10 @@ export function WorkbenchSidebar({ active = 'home', onNavigate, onUnavailable })
           </div>
         ))}
       </div>
-      <button className="workbench-settings" type="button" onClick={() => onUnavailable?.('设置')}><GearSix size={20} weight="bold" />设置</button>
+      <button aria-label="设置" className="workbench-settings" title={collapsed ? '设置' : undefined} type="button" onClick={() => onUnavailable?.('设置')}><GearSix size={20} weight="bold" /><span>设置</span></button>
       <p className="workbench-slogan">更好的配件<br />让每一程更安心</p>
-    </aside>
+      </aside>
+      <button aria-expanded={!collapsed} aria-label={collapsed ? '展开导航' : '收起导航'} className="workbench-sidebar-toggle" onClick={onToggle} title={collapsed ? '展开导航' : '收起导航'} type="button"><CaretLeft size={16} weight="bold" /></button>
+    </>
   )
 }
