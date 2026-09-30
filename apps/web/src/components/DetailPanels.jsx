@@ -35,6 +35,7 @@ export function DetailPanels({ item, dictionaries, activeTab, onTabChange, onClo
   const showOverview = activeTab === '基本信息'
   const brandLabel = dictionaryItemLabel(dictionaries, 'sku_brand', item.brand)
   const categoryLabel = dictionaryItemLabel(dictionaries, 'part_category', item.category)
+  const unitLabel = dictionaryItemLabel(dictionaries, 'unit', item.unit)
   const oeRows = (item.oeRelations || []).map((row) => [row.type || '—', row.oeNumber || '—', row.relation || '—', row.source || '—', row.confidence || '—'])
   const fitmentRows = (item.fitments || []).map((row) => [row.vehicle, row.years || '—', row.engine || '—', row.body || '—'])
   const sourceImage = item.sourceEvidence?.diagramUrl || item.imageUrl
@@ -47,7 +48,7 @@ export function DetailPanels({ item, dictionaries, activeTab, onTabChange, onClo
     <div className="detail-tabs" role="tablist">{detailTabs.map((tab) => <button aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => onTabChange(tab)} role="tab" type="button">{tab}</button>)}</div>
     <div className="sku-detail-scroll">{showOverview ? <div className="sku-detail-overview" role="tabpanel">
       <div className="sku-detail-main-column">
-        <section className="sku-detail-section"><header><h3>主数据</h3><button onClick={onEdit} type="button"><PencilSimple size={17} />编辑</button></header><dl className="detail-facts"><div><dt>SKU 编码</dt><dd>{item.skuCode}</dd></div><div><dt>中文名称</dt><dd>{item.chineseName}</dd></div><div><dt>品牌</dt><dd>{brandLabel}</dd></div><div><dt>零件大类</dt><dd>{categoryLabel}</dd></div><div><dt>主 OE 号</dt><dd>{item.primaryOe || '—'}</dd></div><div><dt>制造商零件号</dt><dd>{item.manufacturerPartNumber || '—'}</dd></div><div><dt>计量单位</dt><dd>{item.unit || '—'}</dd></div><div><dt>数据来源</dt><dd>{item.dataSource || '—'}</dd></div><div><dt>创建时间</dt><dd>{formatDate(item.createdAt)}</dd></div><div><dt>生命周期</dt><dd><StatusBadge status={item.lifecycleStatus} /></dd></div></dl></section>
+        <section className="sku-detail-section"><header><h3>主数据</h3><button onClick={onEdit} type="button"><PencilSimple size={17} />编辑</button></header><dl className="detail-facts"><div><dt>SKU 编码</dt><dd>{item.skuCode}</dd></div><div><dt>中文名称</dt><dd>{item.chineseName}</dd></div><div><dt>品牌</dt><dd>{brandLabel}</dd></div><div><dt>零件大类</dt><dd>{categoryLabel}</dd></div><div><dt>主 OE 号</dt><dd>{item.primaryOe || '—'}</dd></div><div><dt>制造商零件号</dt><dd>{item.manufacturerPartNumber || '—'}</dd></div><div><dt>计量单位</dt><dd>{unitLabel}</dd></div><div><dt>数据来源</dt><dd>{item.dataSource || '—'}</dd></div><div><dt>创建时间</dt><dd>{formatDate(item.createdAt)}</dd></div><div><dt>生命周期</dt><dd><StatusBadge status={item.lifecycleStatus} /></dd></div></dl></section>
         <section className="sku-detail-section"><header><h3>OE 与适配</h3><button onClick={onEdit} type="button"><PencilSimple size={17} />维护</button></header><h4>OE 关系</h4><MiniTable columns={['类型', 'OE / 替代号', '关系', '来源', '可信度']} rows={oeRows} />{oeRows.length ? null : <div className="detail-data-empty compact"><span>尚未维护 OE 或替代关系</span></div>}<h4>适配车型</h4><MiniTable columns={['车型', '年款', '发动机', '车身形式']} rows={fitmentRows} />{fitmentRows.length ? null : <div className="detail-data-empty compact"><span>尚未维护适配车型</span></div>}</section>
       </div>
       <aside className="sku-detail-side-column">

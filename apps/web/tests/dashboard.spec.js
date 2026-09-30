@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 const fixtureSku = {
   id: 'sku-fixture-1', skuCode: '95B-867-288-OM8', chineseName: '行李厢内饰板（黑色）',
   brand: 'SKU_BRAND_PORSCHE_FACTORY', category: '车身及内饰', subcategory: '内饰件',
-  manufacturerPartNumber: '95B 867 288 OM8', primaryOe: '95B 867 288 OM8', unit: '件',
+  manufacturerPartNumber: '95B 867 288 OM8', primaryOe: '95B 867 288 OM8', unit: 'UNIT_PIECE',
   lifecycleStatus: '草稿', barcode: '6921734567890', imageUrl: '/assets/parts/selected-part.png',
   dataSource: 'Porsche EPC', createdBy: '张伟', updatedBy: '张伟',
   createdAt: '2026-09-27T06:00:00.000Z', updatedAt: '2026-09-27T06:32:00.000Z', fitmentCount: 2, version: 1,
@@ -64,7 +64,7 @@ async function installMockDictionaryApi(page) {
     dictionaries: {
       sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'SKU_BRAND_PORSCHE_FACTORY', label: '保时捷原厂', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
       part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
-      unit: { label: '计量单位', items: [{ value: '件', label: '件', sort: 0, enabled: true }, { value: '套', label: '套', sort: 10, enabled: true }, { value: '盒', label: '盒', sort: 20, enabled: true }, { value: '支', label: '支', sort: 30, enabled: true }] },
+      unit: { label: '计量单位', items: [{ value: 'UNIT_PIECE', label: '件', sort: 0, enabled: true }, { value: '套', label: '套', sort: 10, enabled: true }, { value: '盒', label: '盒', sort: 20, enabled: true }, { value: '支', label: '支', sort: 30, enabled: true }] },
       data_source: { label: '数据来源', items: [{ value: '人工录入', label: '人工录入', sort: 0, enabled: true }, { value: 'EPC 导入', label: 'EPC 导入', sort: 10, enabled: true }, { value: '供应商资料', label: '供应商资料', sort: 20, enabled: true }, { value: '历史系统', label: '历史系统', sort: 30, enabled: true }] },
       oe_type: { label: 'OE 类型', items: [{ value: '主 OE', label: '主 OE', sort: 0, enabled: true }, { value: '替代号', label: '替代号', sort: 10, enabled: true }, { value: '历史号', label: '历史号', sort: 20, enabled: true }] },
       oe_relation: { label: 'OE 替代关系', items: [{ value: '直接替代', label: '直接替代', sort: 0, enabled: true }, { value: '可互换', label: '可互换', sort: 10, enabled: true }] },
@@ -190,6 +190,8 @@ test('loads persisted SKU data and captures the default state', async ({ page })
   await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toHaveClass(/selected/)
   await expect(page.getByText('保时捷原厂').first()).toBeVisible()
   await expect(page.locator('body')).not.toContainText('SKU_BRAND_PORSCHE_FACTORY')
+  await expect(page.locator('.detail-facts')).toContainText('件')
+  await expect(page.locator('body')).not.toContainText('UNIT_PIECE')
   await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
 })
 
