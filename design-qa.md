@@ -6,6 +6,10 @@
 - Focused state: `apps/web/qa-artifacts/implementation-sku-source-modal-1680.png`
 - Collapsed navigation: `apps/web/qa-artifacts/implementation-sidebar-collapsed-1680.png`
 - Collapse comparison: `apps/web/qa-artifacts/sidebar-collapse-design-comparison.png`
+- SKU editor default: `apps/web/qa-artifacts/implementation-sku-editor-identity-1680.png`
+- SKU editor verified: `apps/web/qa-artifacts/implementation-sku-editor-verified-1680.png`
+- SKU editor incomplete: `apps/web/qa-artifacts/implementation-sku-editor-incomplete-1680.png`
+- SKU editor comparison: `apps/web/qa-artifacts/sku-editor-design-comparison.png`
 - Source pixels: 1672 × 941
 - Implementation pixels: 1680 × 945 at CSS viewport 1680 × 945, device scale factor 1
 - Normalization: both sides scaled to 1672 × 941 on a 3344 × 941 side-by-side comparison board
@@ -49,6 +53,15 @@ No actionable P0, P1 or P2 visual differences remain for an existing-product ext
 - Refreshing and moving between Home and SKU preserve the selected rail state.
 - No actionable P0, P1 or P2 issues remain in the collapsed view.
 
+### Source-first editor pass
+
+- New and existing SKU records use one editor with four stable stages: source/identity, number relationships, fitment and release checks.
+- The form preserves the workbench shell, cold-gray/white surface hierarchy, fluorescent-lime primary action and high-contrast type. Field values remain 15–18px; helper copy is subordinate without replacing labels.
+- EPC/VIN starts with read-only provenance and complete mock data. Manual creation starts empty, uses a warm warning surface and lists five actionable validation issues.
+- The right validation panel updates from form state; clicking an issue returns to its owning stage. Successful verification and blocked verification are both represented.
+- P2 fixed during the pass: the manual source originally looked verified and the toast overlapped the footer action. The source now has a warning treatment and the toast sits above the footer.
+- No actionable P0, P1 or P2 issues remain in the editor views.
+
 ## Browser verification
 
 - Search by part name and result selection: passed.
@@ -58,7 +71,8 @@ No actionable P0, P1 or P2 visual differences remain for an existing-product ext
 - Existing home search, command center and todo interactions: passed.
 - Console and page errors: none in the final run.
 - Sidebar collapse, persistence, cross-page navigation and restore: passed.
-- Automated browser tests: 5 passed.
+- Source selection, new draft, number/fitment navigation, mock save, successful verification, missing-field recovery and existing-record editing: passed.
+- Automated browser tests: 7 passed.
 
 ## Follow-up polish
 

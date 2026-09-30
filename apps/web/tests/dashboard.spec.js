@@ -60,6 +60,47 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
 })
 
+test('completes the source-first SKU draft and verification prototype', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+
+  await expect(page.getByText('新建 SKU', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
+  await expect(page.getByText('发布前检查')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-identity-1680.png', fullPage: false })
+
+  await page.getByRole('button', { name: '2 编号关系' }).click()
+  await expect(page.getByLabel('主 OE 编号')).toHaveValue('9Y0 615 301 M')
+  await page.getByRole('button', { name: '3 适配车型' }).click()
+  await expect(page.getByLabel('车型 / 平台')).toHaveValue('Cayenne (9YA)')
+
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText(/草稿已保存在当前原型中/)).toBeVisible()
+  await page.getByRole('button', { name: '4 发布检查' }).click()
+  await page.getByRole('button', { name: '完成核验' }).click()
+  await expect(page.getByRole('heading', { name: '模拟核验已通过' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-verified-1680.png', fullPage: false })
+
+  await page.getByRole('button', { name: '返回 SKU 资料库' }).click()
+  await page.getByRole('button', { name: '编辑 SKU' }).click()
+  await expect(page.getByText('编辑 SKU', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '前制动片套装' })).toBeVisible()
+})
+
+test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /手工建立空白 SKU/ }).click()
+
+  await expect(page.getByText('0%', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '4 发布检查' }).click()
+  await page.getByRole('button', { name: '完成核验' }).click()
+  await expect(page.getByRole('heading', { name: '来源与基本身份' })).toBeVisible()
+  await expect(page.getByText('还有 5 项需要补充')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-incomplete-1680.png', fullPage: false })
+})
+
 test('collapses the navigation into a persistent icon rail', async ({ page }) => {
   const collapseButton = page.getByRole('button', { name: '收起导航' })
   await expect(collapseButton).toBeVisible()

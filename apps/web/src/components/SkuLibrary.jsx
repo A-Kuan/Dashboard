@@ -22,6 +22,7 @@ import {
 import { skuRecords, skuStatusFilters } from '../data/skuMockData'
 import { assetPath } from '../utils/assetPath'
 import { WorkbenchSidebar } from './WorkbenchSidebar'
+import { SkuEditor } from './SkuEditor'
 import '../sku-library.css'
 
 const sources = [
@@ -37,6 +38,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [selectedId, setSelectedId] = useState(skuRecords[0].id)
   const [detailTab, setDetailTab] = useState('identity')
   const [sourceOpen, setSourceOpen] = useState(false)
+  const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
 
   const records = useMemo(() => {
@@ -53,6 +55,16 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const notify = (message) => {
     setToast(message)
     window.setTimeout(() => setToast(''), 2200)
+  }
+
+  if (editorContext) {
+    return (
+      <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
+        <SkuEditor source={editorContext.source} record={editorContext.record} onBack={() => setEditorContext(null)} onNotify={notify} />
+        {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
+      </div>
+    )
   }
 
   return (
@@ -135,13 +147,13 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                 </> : null}
                 {detailTab === 'history' ? <section className="inspector-section history-list"><div className="inspector-section-title"><h3>最近变更</h3><span>版本 12</span></div><div><CheckCircle size={19} weight="fill" /><span><strong>来源核验通过</strong><small>系统操作员 · 今天 10:28</small></span></div><div><ClockCounterClockwise size={19} /><span><strong>更新 2 条适配条件</strong><small>系统操作员 · 昨天 17:42</small></span></div><div><Stack size={19} /><span><strong>同步 EPC 原始记录</strong><small>数据任务 · 09-28 09:16</small></span></div></section> : null}
               </div>
-              <footer className="sku-inspector-actions"><button type="button" onClick={() => notify('已打开完整资料预览')}>查看完整资料</button><button type="button" onClick={() => notify('编辑能力将在下一开发阶段接入')}>编辑 SKU</button></footer>
+              <footer className="sku-inspector-actions"><button type="button" onClick={() => notify('已打开完整资料预览')}>查看完整资料</button><button type="button" onClick={() => setEditorContext({ source: 'epc', record: selected })}>编辑 SKU</button></footer>
             </aside>
           </section>
         </div>
       </main>
 
-      {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); notify(`${source.title}将在下一开发阶段接入`) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>当前为视觉与交互原型，不会写入真实数据库。</footer></div></div> : null}
+      {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); setEditorContext({ source: source.id }) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>当前为视觉与交互原型，不会写入真实数据库。</footer></div></div> : null}
       {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
     </div>
   )
