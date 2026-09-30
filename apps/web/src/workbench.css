@@ -1,4 +1,8 @@
 :root {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: #0d1118;
+  background: #eef3f7;
+  font-synthesis: none;
   --wb-accent: #e6ff18;
   --wb-bg: #eef3f7;
   --wb-panel: rgba(255, 255, 255, .91);
@@ -6,6 +10,11 @@
   --wb-muted: #667185;
   --wb-line: #dfe6ec;
 }
+
+* { box-sizing: border-box; }
+html, body, #root { min-width: 1360px; min-height: 100%; margin: 0; }
+body { background: #eef3f7; -webkit-font-smoothing: antialiased; }
+button, input { color: inherit; }
 
 .workbench-home { min-width: 1360px; min-height: 100vh; color: var(--wb-ink); background: #ecf2f6; font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; font-size: 15px; }
 .workbench-home button, .workbench-home input { font: inherit; }

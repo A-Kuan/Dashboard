@@ -12,12 +12,6 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     allowedHosts: ["terminal.local"],
-    proxy: {
-      "/api": {
-        target: process.env.VITE_API_PROXY || "http://127.0.0.1:4183",
-        changeOrigin: true,
-      },
-    },
     warmup: {
       clientFiles: ["./src/main.jsx"],
     },

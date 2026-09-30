@@ -29,8 +29,8 @@ const navGroups = [
   {
     items: [
       { label: '工作台', icon: House, active: true },
-      { label: 'SKU 资料库', icon: Cube, path: 'skus' },
-      { label: '车型库', icon: CarProfile, path: 'vehicles' },
+      { label: 'SKU 资料库', icon: Cube },
+      { label: '车型库', icon: CarProfile },
       { label: '客户管理', icon: User },
       { label: '报价管理', icon: ClipboardText },
       { label: '采购管理', icon: ShoppingCart },
@@ -82,7 +82,7 @@ const quickActions = [
   { label: '新建报价', icon: FileText },
   { label: '多家比价', icon: ChartBar },
   { label: 'VIN 解析', icon: CarProfile },
-  { label: 'SKU 录入', icon: Cube, path: 'skus/new' },
+  { label: 'SKU 录入', icon: Cube },
   { label: '客户管理', icon: UsersThree },
 ]
 
@@ -125,8 +125,7 @@ export function WorkbenchHome() {
   }, [query])
 
   const navigate = (item) => {
-    if (item.path) window.location.assign(assetPath(item.path))
-    else if (!item.active) setToast(`${item.label}将在后续业务阶段接入`)
+    if (!item.active) setToast(`${item.label}将在后续业务阶段接入`)
   }
 
   return (
@@ -213,7 +212,7 @@ export function WorkbenchHome() {
           </section>
 
           <section className="workbench-bottom-grid">
-            <article className="workbench-card quick-card"><div className="workbench-card-heading"><h2>快捷操作</h2></div><div className="quick-actions">{quickActions.map((item) => { const Icon = item.icon; return <button key={item.label} type="button" onClick={() => item.path ? window.location.assign(assetPath(item.path)) : setToast(`${item.label}将在后续阶段接入`)}><span><Icon size={27} weight="bold" /></span><strong>{item.label}</strong></button> })}</div></article>
+            <article className="workbench-card quick-card"><div className="workbench-card-heading"><h2>快捷操作</h2></div><div className="quick-actions">{quickActions.map((item) => { const Icon = item.icon; return <button key={item.label} type="button" onClick={() => setToast(`${item.label}将在后续阶段接入`)}><span><Icon size={27} weight="bold" /></span><strong>{item.label}</strong></button> })}</div></article>
             <article className="workbench-card common-vehicles"><div className="workbench-card-heading"><h2>常用车型</h2><button type="button">管理 <ArrowRight size={14} /></button></div><div className="vehicle-tiles">{vehicles.map((vehicle) => <button key={vehicle.model} type="button" onClick={() => { setQuery(vehicle.model); setCommandOpen(true) }}><img src={assetPath(`assets/workbench/${vehicle.image}`)} alt={vehicle.model} /><strong>{vehicle.model}</strong><span>{vehicle.brand}</span></button>)}</div></article>
             <button className="quality-banner" type="button" onClick={() => setToast('品质配件专题将在后续阶段接入')}><img src={assetPath('assets/workbench/quality-banner.png')} alt="品质，是长期主义的答案" /></button>
           </section>

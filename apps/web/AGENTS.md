@@ -1,28 +1,11 @@
-# Prototype Instructions
+# 虎山行工作台前端规则
 
-Run the local server yourself and open the preview in the browser available to this environment. Do not give the user server-start instructions when you can run it.
+运行本地服务并在可用浏览器中打开预览；可以直接验证时，不要求用户自行启动。
 
-Before making substantial visual changes, use the Product Design plugin's `get-context` skill when the visual source is unclear or no longer matches the current goal. When the user gives durable prototype-specific design feedback, preferences, or decisions, record them in `AGENTS.md`.
+`apps/web` 是独立的虎山行个人工作台前端，不再承载旧 Dashboard 的 SKU、车型库、字典管理或旧业务路由。不要重新引入已删除的组件、服务层、样式或视觉资产；侧栏和快捷入口在新模块开发前保持为明确的未接入状态。
 
-When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
+用户提供的 `docs/references/workbench/home-reference.png` 是首页布局、图像、密度、间距、颜色、排版、可见内容和层级的视觉基准。桌面端优先复现 1672×941 参考图，正文保持清晰、高对比，不用缩小字体换取无滚动布局。
 
-Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
+可复用结构、字典和未来接口应从新工作台业务模型出发设计，不依赖旧前端实现。首页当前模拟数据只用于视觉与交互原型，不得写入服务器数据库，也不得伪装为真实库存、价格或订单。
 
-## Dashboard implementation rules
-
-- For the personal workbench home, the user-provided 1672×941 reference in `docs/references/workbench/home-reference.png` is the visual source of truth. Match its visible composition, imagery, density, spacing, typography, and module proportions before introducing any independent redesign.
-- Treat `deliverables/sku-command-center-visual-states/01-default-collapsed.png` as the source of truth for the first screen.
-- Reproduce the selected 1680×945 desktop design at full fidelity before adding new visual ideas.
-- Extract repeated structures such as the application header, section header, tabs, filters, data table, badges, cards, and detail tabs into reusable components.
-- Keep spacing, typography, colors, borders, radii, and interaction states consistent through shared design tokens.
-- When production data or APIs are unavailable, realistic auto-parts test data may be used only in test fixtures and visual QA; never surface it as persisted or fallback business data in the running application.
-- Selection values such as brand, part category, and SKU status must come from shared configurable dictionaries; do not add page-local hardcoded option arrays.
-- Dictionary-backed filters should use the shared searchable picker, and SKU management must retain a visible page-level entry for dictionary configuration.
-- Dictionary item values are system-generated immutable codes. Preserve existing values for compatibility; users may edit only the display label and other non-identifier properties.
-- Dictionary option lists must scroll independently when they exceed the editor height. After adding an option, keep the new row visible and focus its display-name field.
-- OE and replacement relations do not ask for a separate brand; brand belongs to the SKU master record. Preserve any historical relation-brand values in persisted records for compatibility.
-- Never substitute demo content for missing persisted values. Use an explicit empty-state image or `—`; generic system-operator text is allowed only until identity integration is available.
-- SKU images are an ordered collection of at most eight images. Preserve the first image as the backward-compatible `imageUrl` primary image while storing and editing the complete `imageUrls` collection.
-- SKU create/edit screens should use the horizontal section-tab navigation selected in the 2026-09-27 visual direction. Keep the editor single-page and combine it with a persistent EPC evidence pane for source comparison and publish checks; do not replace it with a wizard or global sidebar.
-- New vehicle creation uses the source-first template workflow selected on 2026-09-28: start from VIN lookup, EPC data, or an existing vehicle; make provenance and template differences visible; let operators exclude copied parts before creating the record. Keep editing existing vehicles in the established single-page tabbed editor.
-- The SKU management workspace uses the table-first persistent-inspector direction selected on 2026-09-30: keep the full, independently scrolling SKU table as the dominant surface beside an approximately 480px persistent detail inspector that can collapse without losing selection. A compact list remains available as a secondary view. Optimize this screen for astigmatism readability: body text should normally be 15–16px or larger, use crisp medium/semibold weights and strong contrast, and avoid faint microcopy, blurred text effects, translucency behind text, or low-contrast gray labels.
+保留 `.openai/hosting.json`、`worker/index.js`、`scripts/prepare-sites-build.mjs` 和 `tests/sites-worker.test.mjs`。交付前运行 `npm run build`、`npm run test:sites` 和工作台浏览器测试；服务器发布使用 `npm run build:server`。
