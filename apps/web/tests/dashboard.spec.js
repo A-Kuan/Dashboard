@@ -193,6 +193,54 @@ test('loads persisted SKU data and captures the default state', async ({ page })
   await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
 })
 
+test('keeps a readable SKU list and detail workspace visible together at 1920 by 1080', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const seed = structuredClone(page.__apiRecords[0])
+  page.__apiRecords.splice(0, page.__apiRecords.length, ...Array.from({ length: 12 }, (_, index) => ({
+    ...structuredClone(seed),
+    id: `sku-layout-${index + 1}`,
+    skuCode: `${seed.skuCode}-${String(index + 1).padStart(2, '0')}`,
+    chineseName: index % 2 === 0 ? '行李厢内饰板（黑色）' : '前制动片',
+    updatedAt: `2026-09-${String(27 - index).padStart(2, '0')}T06:32:00.000Z`,
+  })))
+  await page.reload()
+
+  const masterPane = page.locator('.sku-master-pane')
+  const detailPane = page.locator('.sku-detail-workspace')
+  await expect(masterPane).toBeVisible()
+  await expect(detailPane).toBeVisible()
+  await expect(masterPane).toContainText('12')
+  await expect(detailPane.getByRole('heading', { level: 2 })).toContainText('95B-867-288-OM8-01')
+
+  const metrics = await page.evaluate(() => {
+    const master = document.querySelector('.sku-master-scroll')
+    const detail = document.querySelector('.sku-detail-scroll')
+    const rowText = document.querySelector('.sku-master-primary strong')
+    const detailText = document.querySelector('.sku-detail-workspace')
+    return {
+      documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
+      masterScrollable: master.scrollHeight > master.clientHeight,
+      detailScrollable: detail.scrollHeight > detail.clientHeight,
+      rowFontSize: Number.parseFloat(getComputedStyle(rowText).fontSize),
+      detailFontSize: Number.parseFloat(getComputedStyle(detailText).fontSize),
+    }
+  })
+  expect(metrics.documentOverflow).toBeLessThanOrEqual(1)
+  expect(metrics.masterScrollable).toBe(true)
+  expect(metrics.detailScrollable).toBe(true)
+  expect(metrics.rowFontSize).toBeGreaterThanOrEqual(16)
+  expect(metrics.detailFontSize).toBeGreaterThanOrEqual(15)
+
+  await page.getByRole('button', { name: '表格模式' }).click()
+  await expect(page.getByRole('columnheader', { name: /SKU编码/ })).toBeVisible()
+  await page.getByRole('button', { name: '列表模式' }).click()
+  await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('前制动片')
+  await expect(page.getByRole('table', { name: 'SKU 结果列表' }).getByRole('row')).toHaveCount(6)
+  await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('')
+
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-master-detail-1920.png', fullPage: false })
+})
+
 test('shows honest empty states instead of demo defaults', async ({ page }) => {
   Object.assign(page.__apiRecords[0], { imageUrl: '', dataSource: '', sourceEvidence: null, updatedBy: '' })
   await page.reload()
@@ -374,6 +422,25 @@ test('uploads multiple SKU images and allows changing the primary image', async 
   await page.reload()
   await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
   await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(3)
+})
+
+test('adds an SKU image by dragging it into the preview', async ({ page }) => {
+  await page.goto('./skus/sku-fixture-1/edit')
+  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
+  const dataTransfer = await page.evaluateHandle(() => {
+    const content = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#075cf6"/></svg>'
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([content], 'dragged-part.svg', { type: 'image/svg+xml' }))
+    return transfer
+  })
+  const dropZone = page.getByLabel('SKU 图片拖拽上传区')
+  await dropZone.dispatchEvent('dragenter', { dataTransfer })
+  await expect(dropZone).toHaveClass(/is-dragging/)
+  await expect(page.getByText('松开即可添加图片')).toBeVisible()
+  await dropZone.dispatchEvent('drop', { dataTransfer })
+  await expect(dropZone).not.toHaveClass(/is-dragging/)
+  await expect(page.getByText('已添加 1 张图片，保存后生效')).toBeVisible()
+  await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(2)
 })
 
 test('publish stays disabled until required relationships are complete', async ({ page }) => {

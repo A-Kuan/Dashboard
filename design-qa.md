@@ -1,60 +1,42 @@
-# New Vehicle Flow Design QA
+# SKU 管理主从工作区设计验收
 
-- Source visual truth: `/Users/wenshihuang/.codex/generated_images/01a0e65d-512b-7c30-a470-80d5ff03b390/exec-bb3326c9-59e4-41ef-b93f-e5f5fc8978f9.png`
-- Implementation screenshot: `apps/web/qa-artifacts/implementation-new-vehicle-template.png`
-- Full-view comparison: `apps/web/qa-artifacts/new-vehicle-template-comparison.png`
-- Focused comparison: `apps/web/qa-artifacts/new-vehicle-template-focus-comparison.png`
-- State: new vehicle, VIN source recognized, Macan template loaded, one part deselected
-- Browser viewport: 1680 x 945 CSS px (16:9)
-- Device scale factor: 1
-- Source pixels: 1672 x 941
-- Implementation pixels: 1680 x 945
-- Density normalization: full views were normalized to 836 x 470 before the side-by-side comparison. The suggested-record region was cropped at matching coordinates for focused review.
+## 验收对象
 
-## Findings
+- 设计目标：`/Users/wenshihuang/.codex/generated_images/01a0de39-9245-79d2-a256-5f222224b987/exec-077ef339-2f74-4782-87fa-a7702fa1aeab.png`
+- 实现截图：`apps/web/qa-artifacts/implementation-sku-master-detail-1920.png`
+- 同屏对照：`apps/web/qa-artifacts/sku-master-detail-design-comparison.png`
+- 验收视口：1920 × 1080，设备像素比 1
+- 验收状态：列表模式、基本信息、第 2 条 SKU 选中
 
-No actionable P0, P1, or P2 differences remain.
+## 核心需求核对
 
-- Layout hierarchy: passed. Both views use the same source-first structure: compact heading, three source modes, recognition result on the left, suggested record on the right, and persistent confirmation actions at the bottom.
-- Typography and spacing: passed. The implementation keeps the existing Dashboard type stack and compact enterprise-data density while preserving the reference's navy hierarchy, pale surfaces, and restrained borders.
-- Information architecture: passed. Vehicle identity, template differences, and part-import preview remain separate review stages. Required production fields are grouped in a quieter second row rather than interrupting the main identity scan.
-- Product state fidelity: passed. The browser screenshot uses the existing vehicle fixture returned through the real vehicle service boundary. It does not add fabricated stock, pricing, packages, or part records to make the page resemble the reference.
-- Image fidelity: passed. Persisted vehicle imagery is shown without stretching. A missing persisted image produces an explicit empty state rather than a demo-image fallback.
-- Interaction and accessibility: passed. Source tabs, VIN recognition, EPC parsing, template copying, editable fields, row selection, save-only, and create-and-import actions have accessible names and keyboard-reachable controls.
+- [x] SKU 列表位于左侧，详情工作区持续显示在右侧，多 SKU 不再把详情压到页面底部。
+- [x] 左侧列表与右侧详情各自滚动，文档本身在 1920 × 1080 下没有纵向溢出。
+- [x] 支持列表 / 表格视图切换、结果内搜索、上一个 / 下一个 SKU 和键盘调整分栏宽度。
+- [x] 正文与核心数据保持 15–16px 及以上，标题 18–27px，使用明确字重和高对比色；未使用模糊、低对比度的微小文字。
+- [x] 品牌、零件大类、状态、OE、适配及来源信息继续使用现有真实字段和字典映射，不制造库存或价格数据。
+- [x] 选中态、空状态、数据来源、图片与 EPC 信息都保留明确反馈。
 
-## Comparison History
+## 浏览器验证
 
-### Pass 1 - P2
+- 1920 × 1080：文档纵向溢出 0px；左侧列表和右侧详情均存在独立滚动区域。
+- 字号：SKU 编码 16px；详情正文 15px；可见文本审查未发现低于 15px 的叶子文本。
+- 结果内搜索：12 条数据可过滤为 2 条并恢复。
+- 分栏键盘操作：宽度可由 440px 调整为 464px。
+- 列表 / 表格视图切换、详情标签切换、SKU 选择均正常。
+- 浏览器控制台错误：0。
 
-The initial identity section allowed required database metadata to wrap irregularly among the user-facing vehicle fields. This made the right panel denser and reduced the visual rhythm established by the selected reference.
+## 对照迭代记录
 
-Fix made:
+1. 首轮实现发现 1920 × 1080 下沿用了全局 `zoom: 1.142857`，导致文档额外产生 154px 纵向溢出，详情底部仍需滚动页面才能完整看到。
+2. 将缩放对 SKU 主从工作区定向恢复为 1，并把滚动职责下沉到列表和详情内部；再次测量后文档溢出为 0px。
+3. 同屏比较设计目标与实现，主从结构、持续可见详情、工具区、信息层级和高对比排版一致；实现保留了系统现有数据语义与交互能力。
 
-- Kept the eight reference-facing identity fields in one primary row.
-- Moved vehicle version code, brand, series, and VIN sample into a consistent secondary metadata row.
-- Preserved all backend-required values without hiding or inventing data.
+## 严重级别结论
 
-### Pass 2 - passed
-
-The post-fix full-view and focused comparisons align on the selected 16:9 composition, source/review split, card heights, table hierarchy, and footer action placement. The secondary metadata row is an intentional production requirement and does not create a remaining P2 mismatch.
-
-## Focused Region Review
-
-The focused comparison covers the suggested-record header, editable vehicle identity, and the beginning of the difference panel. These are the densest and most fidelity-sensitive parts of the screen. The implementation is intentionally sharper and slightly more compact than the generated reference, while preserving its scan order and emphasis.
-
-## Primary Interactions Tested
-
-- Enter a valid VIN and load a matching existing vehicle through the vehicle service.
-- Review recognized vehicle identity, source, part requirements, and service packages.
-- Deselect one part requirement and confirm the import count updates.
-- Create a new vehicle with the selected requirements and mapped package references.
-- Keep existing vehicle editing on the previous editor so this change only affects new creation.
-- Build the server bundle and run browser coverage for the full Dashboard and the new creation flow.
-
-## Intentional Product Differences
-
-- The selected reference contains 24 parts and 3 packages. The tested fixture contains 6 parts and 1 package, so the implementation displays the real returned counts.
-- Four extra metadata fields are visible because the current API requires them to create a valid vehicle record.
-- VIN recognition currently resolves against the existing vehicle service. A future external VIN/EPC provider can replace that lookup without changing the review and save flow.
+- P0：0
+- P1：0
+- P2：0
+- P3：0
 
 final result: passed

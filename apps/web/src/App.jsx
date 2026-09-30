@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CaretDown, DotsThree, Funnel, GearSix, Package, Plus, Warning } from '@phosphor-icons/react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CaretDown, DotsThree, Funnel, GearSix, ListBullets, MagnifyingGlass, Package, Plus, Table as TableIcon, Warning } from '@phosphor-icons/react'
 import { AppHeader } from './components/AppHeader'
 import { CommandCenter } from './components/CommandCenter'
 import { DictionarySelect } from './components/Common'
 import { DictionaryManagement } from './components/DictionarySettings'
 import { DetailPanels } from './components/DetailPanels'
 import { SkuTable } from './components/SkuTable'
+import { SkuMasterList } from './components/SkuMasterList'
 import { SkuEditor } from './components/SkuEditor'
 import { VehicleLibrary } from './components/VehicleLibrary'
 import { useDictionaries } from './hooks/useDictionaries'
@@ -31,6 +32,7 @@ function toSkuRow(item, dictionaries) {
     source: item.dataSource || '—',
     status: dictionaryItemLabel(dictionaries, 'sku_status', item.lifecycleStatus),
     statusValue: item.lifecycleStatus,
+    updatedAt: item.updatedAt,
   }
 }
 
@@ -51,6 +53,11 @@ export function App() {
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [sortMode, setSortMode] = useState('最近更新')
   const [detailTab, setDetailTab] = useState('基本信息')
+  const [resultQuery, setResultQuery] = useState('')
+  const [resultView, setResultView] = useState('list')
+  const [detailVisible, setDetailVisible] = useState(true)
+  const [masterWidth, setMasterWidth] = useState(440)
+  const resizeState = useRef(null)
   const initialCommand = useMemo(() => {
     const requested = new URLSearchParams(window.location.search).get('state')
     const presets = { expanded: '', oe: '95B 867 288', vin: 'WP1AA2A25PLB12345', empty: '95B 867 228 OM8', loading: '95B 867 288', error: '95B 867 288' }
@@ -132,10 +139,43 @@ export function App() {
     return 0
   }), [brand, category, dataSource, fitmentFilter, skuRows, sortMode, status, summaryTab])
 
+  const visibleRows = useMemo(() => {
+    const query = resultQuery.trim().toLowerCase()
+    if (!query) return filteredRows
+    return filteredRows.filter((row) => [row.sku, row.oe, row.name, row.category, row.brand, row.vehicle, row.source, row.status].join(' ').toLowerCase().includes(query))
+  }, [filteredRows, resultQuery])
+
   useEffect(() => {
     if (isDictionaryModule || isSkuEditor || recordsLoading) return
-    setSelectedId((current) => current && filteredRows.some((row) => row.id === current) ? current : filteredRows[0]?.id || null)
-  }, [filteredRows, isDictionaryModule, isSkuEditor, recordsLoading])
+    setSelectedId((current) => current && visibleRows.some((row) => row.id === current) ? current : visibleRows[0]?.id || null)
+  }, [isDictionaryModule, isSkuEditor, recordsLoading, visibleRows])
+
+  const selectSku = (id) => {
+    setSelectedId(id)
+    setDetailVisible(true)
+  }
+  const selectedIndex = visibleRows.findIndex((row) => row.id === selectedId)
+  const selectAdjacentSku = (offset) => {
+    const next = visibleRows[selectedIndex + offset]
+    if (next) selectSku(next.id)
+  }
+  const startResize = (event) => {
+    resizeState.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: masterWidth }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const resizeMaster = (event) => {
+    if (!resizeState.current || resizeState.current.pointerId !== event.pointerId) return
+    const nextWidth = resizeState.current.startWidth + event.clientX - resizeState.current.startX
+    setMasterWidth(Math.min(620, Math.max(360, nextWidth)))
+  }
+  const finishResize = (event) => {
+    if (resizeState.current?.pointerId === event.pointerId) resizeState.current = null
+  }
+  const resizeWithKeyboard = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    setMasterWidth((current) => Math.min(620, Math.max(360, current + (event.key === 'ArrowRight' ? 24 : -24))))
+  }
 
   const closeCommandCenter = () => { setCommandState('closed'); setSearchValue(''); setCommandRows([]) }
   const runCommandSearch = async (query = searchValue) => {
@@ -172,7 +212,7 @@ export function App() {
   return (
     <div className="app-shell">
       <AppHeader onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} />
-      <main className="workspace">
+      <main className="workspace sku-management-workspace">
         <section className="workspace-heading">
           <div><h1>SKU 管理</h1><p>管理汽车零部件SKU，打通 OE、EPC 与库存销售数据</p></div>
           <div className="page-actions"><button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={18} /> 新建 SKU</button><button className="more-button" aria-label="更多操作" aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((current) => !current)} type="button"><DotsThree size={21} weight="bold" /></button>{actionMenuOpen ? <><button className="page-action-scrim" aria-label="关闭更多操作" onClick={() => setActionMenuOpen(false)} type="button" /><div className="page-action-menu" role="menu"><button disabled={dictionariesLoading} onClick={() => window.location.assign(assetPath('dictionaries'))} role="menuitem" type="button"><GearSix size={17} /><span><b>字典管理</b><small>集中维护 SKU 与适配业务字典</small></span></button></div></> : null}</div>
@@ -199,7 +239,15 @@ export function App() {
 
         {recordsLoading ? <div className="sku-data-state"><span className="data-spinner" />正在读取 SKU 数据…</div> : null}
         {!recordsLoading && recordsError ? <div className="sku-data-state error"><Warning size={23} weight="fill" /><b>无法读取 SKU 数据</b><span>{recordsError}</span><button className="secondary-button" onClick={() => window.location.reload()} type="button">重新加载</button></div> : null}
-        {!recordsLoading && !recordsError && filteredRows.length ? <><SkuTable rows={filteredRows} selectedId={selectedId} onSelect={setSelectedId} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} />{selectedRecord ? <DetailPanels dictionaries={dictionaries} item={selectedRecord} activeTab={detailTab} onTabChange={setDetailTab} onClose={() => setSelectedId(null)} onEdit={() => window.location.assign(assetPath(`skus/${selectedRecord.id}/edit`))} /> : null}</> : null}
+        {!recordsLoading && !recordsError && filteredRows.length ? <div className={`sku-browser-workspace ${resultView === 'table' ? 'table-view' : 'list-view'}${detailVisible && selectedRecord ? '' : ' detail-collapsed'}`} style={{ '--sku-master-width': resultView === 'table' ? 'min(1080px, 62vw)' : `${masterWidth}px` }}>
+          <section className="sku-master-pane" aria-label="SKU 结果">
+            <header className="sku-master-toolbar"><div className="sku-master-title"><h2>SKU 列表</h2><span>{visibleRows.length.toLocaleString('zh-CN')}</span></div><div className="sku-view-switch" role="group" aria-label="SKU 展示模式"><button aria-pressed={resultView === 'list'} className={resultView === 'list' ? 'active' : ''} onClick={() => setResultView('list')} type="button"><ListBullets size={18} />列表模式</button><button aria-pressed={resultView === 'table'} className={resultView === 'table' ? 'active' : ''} onClick={() => setResultView('table')} type="button"><TableIcon size={18} />表格模式</button></div></header>
+            <div className="sku-result-search"><MagnifyingGlass size={19} /><input aria-label="在 SKU 结果中搜索" onChange={(event) => setResultQuery(event.target.value)} placeholder="在结果中搜索 SKU、名称、OE 号…" value={resultQuery} /><span>{sortMode}</span></div>
+            <div className="sku-master-scroll">{visibleRows.length ? resultView === 'list' ? <SkuMasterList rows={visibleRows} selectedId={selectedId} onSelect={selectSku} /> : <SkuTable rows={visibleRows} selectedId={selectedId} onSelect={selectSku} onOpen={(id) => window.location.assign(assetPath(`skus/${id}/edit`))} /> : <div className="sku-master-empty"><Package size={32} /><b>结果中没有匹配的 SKU</b><button onClick={() => setResultQuery('')} type="button">清除搜索</button></div>}</div>
+            <footer className="sku-master-footer"><span>已显示 <b>{visibleRows.length}</b> 条</span><span>{selectedIndex >= 0 ? `当前第 ${selectedIndex + 1} 条` : '未选择'}</span></footer>
+          </section>
+          {detailVisible && selectedRecord ? <><button aria-label="调整 SKU 列表宽度" aria-orientation="vertical" aria-valuemax={620} aria-valuemin={360} aria-valuenow={masterWidth} className="sku-pane-resizer" onKeyDown={resizeWithKeyboard} onPointerDown={startResize} onPointerMove={resizeMaster} onPointerUp={finishResize} role="separator" type="button"><span /></button><DetailPanels dictionaries={dictionaries} item={selectedRecord} activeTab={detailTab} onTabChange={setDetailTab} onClose={() => setDetailVisible(false)} onEdit={() => window.location.assign(assetPath(`skus/${selectedRecord.id}/edit`))} onPrevious={() => selectAdjacentSku(-1)} onNext={() => selectAdjacentSku(1)} hasPrevious={selectedIndex > 0} hasNext={selectedIndex >= 0 && selectedIndex < visibleRows.length - 1} /></> : selectedRecord ? <button className="reopen-detail" onClick={() => setDetailVisible(true)} type="button">显示当前 SKU 详情</button> : null}
+        </div> : null}
         {!recordsLoading && !recordsError && !filteredRows.length ? <div className="sku-data-state empty"><Package size={38} /><h2>{records.length ? '当前筛选没有结果' : '还没有 SKU'}</h2><p>{records.length ? '调整筛选条件后再试。' : '数据库已准备好，从第一条真实 SKU 开始建立零件主数据。'}</p>{records.length ? null : <button className="primary-button" onClick={() => window.location.assign(assetPath('skus/new'))} type="button"><Plus size={17} />新建第一个 SKU</button>}</div> : null}
       </main>
 
