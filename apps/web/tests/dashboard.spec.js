@@ -76,16 +76,22 @@ test('completes the source-first SKU draft and verification prototype', async ({
   await expect(page.getByLabel('车型 / 平台')).toHaveValue('Cayenne (9YA)')
 
   await page.getByRole('button', { name: '保存草稿' }).click()
-  await expect(page.getByText(/草稿已保存在当前原型中/)).toBeVisible()
+  await expect(page.getByText(/草稿已保存到 SKU 资料库/)).toBeVisible()
+  await page.getByRole('button', { name: '来源与身份' }).click()
+  await expect(page.getByLabel('SKU 编码')).not.toHaveValue('保存后自动生成')
   await page.getByRole('button', { name: '4 发布检查' }).click()
   await page.getByRole('button', { name: '完成核验' }).click()
-  await expect(page.getByRole('heading', { name: '模拟核验已通过' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '资料核验已通过' })).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-verified-1680.png', fullPage: false })
 
   await page.getByRole('button', { name: '返回 SKU 资料库' }).click()
+  await expect(page.getByText('真实资料', { exact: false }).first()).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'SKU 资料库' })).toBeVisible()
+  await expect(page.getByText('前制动盘', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '编辑 SKU' }).click()
   await expect(page.getByText('编辑 SKU', { exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '前制动片套装' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
 })
 
 test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {

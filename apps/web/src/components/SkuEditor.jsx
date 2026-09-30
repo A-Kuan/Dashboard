@@ -15,6 +15,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import '../sku-editor.css'
+import { saveCatalogDraft, verifyCatalogSku } from '../services/catalogApi'
 
 const sourceLabels = {
   epc: 'EPC / VIN',
@@ -45,9 +46,9 @@ function makeInitialDraft(source, record) {
       englishName: record.englishName,
       brand: record.brand,
       category: record.category,
-      unit: '件',
+      unit: record.unit || '件',
       primaryOe: record.primaryOe,
-      identifiers: record.identifiers.slice(1).map((item, index) => ({ id: `existing-${index}`, type: item.type, value: item.value, relation: item.relation })),
+      identifiers: record.identifiers.filter((item) => !item.isPrimary && item.type !== '主 OE').map((item, index) => ({ id: item.id || `existing-${index}`, type: item.type, value: item.value, relation: item.relation })),
       fitments: record.fitments.map((item, index) => ({ id: `fitment-${index}`, vehicle: item.vehicle, years: item.years, condition: item.condition })),
       evidence: { ...record.evidence, sourceSystem: record.evidence.system, position: record.evidence.figure, vin: record.evidence.catalog.includes('VIN:') ? record.evidence.catalog.replace('VIN: ', '') : '—' },
     }
@@ -72,11 +73,13 @@ function Field({ label, required, hint, children }) {
   return <label className="editor-field"><span>{label}{required ? <em>*</em> : null}</span>{children}{hint ? <small>{hint}</small> : null}</label>
 }
 
-export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
+export function SkuEditor({ source = 'manual', record, onBack, onNotify, onSaved }) {
   const [step, setStep] = useState('identity')
   const [draft, setDraft] = useState(() => makeInitialDraft(source, record))
   const [savedAt, setSavedAt] = useState('')
   const [verified, setVerified] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [persistedRecord, setPersistedRecord] = useState(() => record?.dataOrigin === 'live' ? record : null)
 
   const setField = (field, value) => {
     setVerified(false)
@@ -103,25 +106,54 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
   const updateFitment = (id, field, value) => setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
   const removeFitment = (id) => setDraft((current) => ({ ...current, fitments: current.fitments.filter((item) => item.id !== id) }))
 
-  const saveDraft = () => {
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    setSavedAt(now)
-    onNotify?.('草稿已保存在当前原型中，不会写入数据库')
+  const persistDraft = async () => {
+    setSaving(true)
+    try {
+      const saved = await saveCatalogDraft(draft, source, persistedRecord)
+      const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      setPersistedRecord(saved)
+      setDraft((current) => ({ ...current, code: saved.code }))
+      setSavedAt(now)
+      onSaved?.(saved)
+      return saved
+    } catch (error) {
+      onNotify?.(error.code === 'CATALOG_VERSION_CONFLICT' ? '资料已在别处更新，请返回列表后重新打开' : `保存失败：${error.message}`)
+      return null
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const saveDraft = async () => {
+    const saved = await persistDraft()
+    if (saved) onNotify?.('草稿已保存到 SKU 资料库')
   }
 
   const nextStep = () => {
     if (currentIndex < steps.length - 1) setStep(steps[currentIndex + 1].id)
   }
 
-  const verify = () => {
+  const verify = async () => {
     if (passedCount !== checks.length) {
       const firstIssue = checks.find((item) => !item.passed)
       setStep(firstIssue.step)
       onNotify?.(`还有 ${checks.length - passedCount} 项需要补充`)
       return
     }
-    setVerified(true)
-    onNotify?.('模拟核验已通过')
+    const saved = await persistDraft()
+    if (!saved) return
+    setSaving(true)
+    try {
+      const verifiedRecord = await verifyCatalogSku(saved)
+      setPersistedRecord(verifiedRecord)
+      setVerified(true)
+      onSaved?.(verifiedRecord)
+      onNotify?.('资料核验已通过并记录版本')
+    } catch (error) {
+      onNotify?.(`核验失败：${error.message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -132,7 +164,7 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
           <div><span>{record ? '编辑 SKU' : '新建 SKU'}</span><h1>{draft.name || '未命名零件'}</h1></div>
           <em>{sourceLabels[source] || '已有资料'}</em>
         </div>
-        <div className="sku-editor-save-state"><span>{savedAt ? `已保存 ${savedAt}` : '尚未保存'}</span><button type="button" onClick={saveDraft}><FloppyDisk size={19} weight="bold" />保存草稿</button></div>
+        <div className="sku-editor-save-state"><span>{saving ? '正在保存…' : savedAt ? `已保存 ${savedAt}` : '尚未保存'}</span><button type="button" disabled={saving} onClick={saveDraft}><FloppyDisk size={19} weight="bold" />{saving ? '保存中' : '保存草稿'}</button></div>
       </header>
 
       <div className="sku-editor-content">
@@ -147,7 +179,7 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
         <div className="sku-editor-layout">
           <section className="sku-form-panel">
             {step === 'identity' ? <>
-              <div className="sku-form-heading"><div><h2>来源与基本身份</h2><p>先确认原始证据，再整理成标准 SKU 信息。</p></div><span className="prototype-badge">模拟数据</span></div>
+              <div className="sku-form-heading"><div><h2>来源与基本身份</h2><p>先确认原始证据，再整理成标准 SKU 信息。</p></div><span className="prototype-badge">资料库草稿</span></div>
               <article className={`source-evidence-summary ${source === 'manual' ? 'manual' : ''}`}>
                 <header><span>{source === 'manual' ? <WarningCircle size={20} weight="fill" /> : <SealCheck size={20} weight="fill" />}</span><div><strong>{draft.evidence.sourceSystem}</strong><small>{source === 'manual' ? '暂无外部证据，发布前需要补充来源' : '来源信息只读，确保后续可以回溯'}</small></div></header>
                 <dl><div><dt>目录 / 图组</dt><dd>{draft.evidence.catalog}</dd></div><div><dt>图例位置</dt><dd>{draft.evidence.position || draft.evidence.figure}</dd></div><div><dt>原始名称</dt><dd>{draft.evidence.originalName}</dd></div><div><dt>VIN 上下文</dt><dd>{draft.evidence.vin || '—'}</dd></div></dl>
@@ -176,9 +208,9 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
 
             {step === 'review' ? <>
               <div className="sku-form-heading"><div><h2>发布检查</h2><p>核对关键信息并确认是否具备发布条件。</p></div></div>
-              {verified ? <div className="verification-success"><span><CheckCircle size={30} weight="fill" /></span><div><h3>模拟核验已通过</h3><p>身份、主 OE、适配车型和来源证据均满足当前规则。</p></div></div> : null}
+              {verified ? <div className="verification-success"><span><CheckCircle size={30} weight="fill" /></span><div><h3>资料核验已通过</h3><p>身份、主 OE、适配车型和来源证据均满足当前规则，核验版本已记录。</p></div></div> : null}
               <div className="review-summary"><article><span>标准名称</span><strong>{draft.name || '—'}</strong></article><article><span>主 OE</span><strong>{draft.primaryOe || '—'}</strong></article><article><span>品牌 / 分类</span><strong>{draft.brand || '—'}</strong><small>{draft.category || '—'}</small></article><article><span>适配车型</span><strong>{draft.fitments.length} 条</strong></article><article className="wide"><span>来源证据</span><strong>{draft.evidence.sourceSystem}</strong><small>{draft.evidence.catalog}</small></article></div>
-              <div className="publish-notice"><WarningCircle size={20} weight="fill" /><span>当前是前端交互原型。“完成核验”只改变当前页面状态，不会发布或写入真实资料。</span></div>
+              <div className="publish-notice"><WarningCircle size={20} weight="fill" /><span>“完成核验”会写入资料库并生成不可覆盖的版本记录；库存与价格仍属于后续业务模块。</span></div>
             </> : null}
           </section>
 
@@ -190,7 +222,7 @@ export function SkuEditor({ source = 'manual', record, onBack, onNotify }) {
         </div>
       </div>
 
-      <footer className="sku-editor-footer"><button type="button" onClick={onBack}>取消并返回</button><div><span>{savedAt ? `草稿保存于 ${savedAt}` : '所有数据仅保存在当前页面'}</span>{step !== 'review' ? <button className="editor-next" type="button" onClick={nextStep}>下一步：{steps[currentIndex + 1]?.label}<ArrowRight size={18} weight="bold" /></button> : <button className="editor-verify" type="button" onClick={verify}><SealCheck size={19} weight="fill" />{verified ? '重新核验' : '完成核验'}</button>}</div></footer>
+      <footer className="sku-editor-footer"><button type="button" onClick={onBack}>取消并返回</button><div><span>{saving ? '正在同步资料库' : savedAt ? `草稿保存于 ${savedAt}` : '尚未写入资料库'}</span>{step !== 'review' ? <button className="editor-next" type="button" onClick={nextStep}>下一步：{steps[currentIndex + 1]?.label}<ArrowRight size={18} weight="bold" /></button> : <button className="editor-verify" type="button" disabled={saving} onClick={verify}><SealCheck size={19} weight="fill" />{verified ? '已完成核验' : saving ? '核验中' : '完成核验'}</button>}</div></footer>
     </main>
   )
 }

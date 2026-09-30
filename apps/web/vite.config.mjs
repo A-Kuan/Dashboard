@@ -15,6 +15,9 @@ export default defineConfig({
     warmup: {
       clientFiles: ["./src/main.jsx"],
     },
+    proxy: {
+      "/api": "http://127.0.0.1:4183",
+    },
   },
   plugins: [react()],
 });
