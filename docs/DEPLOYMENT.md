@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-5f8e5b6`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-40b8bbb`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -67,11 +67,12 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260930-5f8e5b6
+├── current -> releases/20260930-40b8bbb
 └── releases/
     ├── 20260930-f364123/
     ├── 20260930-8ba701f/  # 上一前端版，可回滚
-    └── 20260930-5f8e5b6/
+    ├── 20260930-5f8e5b6/  # 上一前端版，可回滚
+    └── 20260930-40b8bbb/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -134,6 +135,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260930-8ba701f` 前端修复版发布后已在线验证：SKU 详情中的计量单位通过共享字典显示为“片”等名称，不再泄漏 `UNIT_` 编码。线上 17 条 SKU 保持不变，页面无纵向溢出，浏览器控制台无错误；上一版 `20260930-f364123` 保留用于回滚。
 
 `20260930-5f8e5b6` 前端发布后已在线验证方案 2 的表格优先 SKU 工作区：默认显示完整 SKU 表格，右侧约 480px 检查器常驻且可收起恢复；1920×1080 下表格和检查器各自滚动，页面本身无纵向溢出，数据行正文为 16px。首页、静态资源、Nginx 配置与 API 健康检查均正常，浏览器控制台无错误或警告；线上 17 条用户 SKU 完整保留，本次未运行数据库迁移、未重启 API，上一前端版 `20260930-8ba701f` 保留用于回滚。
+
+`20260930-40b8bbb` 前端发布后已在线验证虎山行汽配个人工作台：首页、构建资源、`/skus` 与 `/vehicles` 路由均返回 200，页面标题为“虎山行 · 汽配个人工作台”，API 健康检查正常；线上 17 条用户 SKU 完整保留。本次仅创建并原子切换前端静态 release，未运行数据库迁移、未重启 API 或 Nginx，上一版 `20260930-5f8e5b6` 保留用于回滚。
 
 ## 回滚
 
