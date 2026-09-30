@@ -128,7 +128,7 @@ test.beforeEach(async ({ page }) => {
   page.on('pageerror', (error) => errors.push(error.message))
   await installMockDictionaryApi(page)
   await installMockSkuApi(page)
-  await page.goto('./')
+  await page.goto('./skus')
   await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
   await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0))
   page.__consoleErrors = errors
@@ -269,11 +269,32 @@ const visualStates = [
 
 for (const [state, filename] of visualStates) {
   test(`renders ${state} command-center state without invented records`, async ({ page }) => {
-    await page.goto(`./?state=${state}`)
+    await page.goto(`./skus?state=${state}`)
     await expect(page.getByLabel('命令中枢搜索')).toHaveClass(new RegExp(`command-panel-${state}`))
     await page.screenshot({ path: `qa-artifacts/implementation-${filename}.png`, fullPage: false })
   })
 }
+
+test('workbench home exposes the primary search, command center and todo interaction', async ({ page }) => {
+  await page.goto('./')
+  await expect(page.getByRole('heading', { name: '下午好，虎山行' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '业务跟进' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '我的待办' })).toBeVisible()
+  await expect(page.getByText('Pi 助手', { exact: true }).last()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-workbench-home-1680.png', fullPage: false })
+  await page.getByLabel('工作台搜索').fill('Q7')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '命令中心' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: '命令中心' })).toContainText('Audi Q7 (4M)')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '命令中心' })).toHaveCount(0)
+  const firstTodo = page.getByRole('button', { name: /确认采购单/ })
+  await firstTodo.click()
+  await expect(firstTodo).toHaveClass(/done/)
+  await page.goto('./qa-workbench-compare.html')
+  await expect(page.frameLocator('iframe').getByRole('heading', { name: '下午好，虎山行' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/workbench-home-design-comparison.png', fullPage: false })
+})
 
 test('creates a SKU through the persisted form flow', async ({ page }) => {
   await page.getByRole('button', { name: '新建 SKU' }).click()

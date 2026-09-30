@@ -543,7 +543,7 @@ button { color: inherit; }
 
 @media (min-width: 1800px) and (min-height: 1000px) {
   html, body { min-width: 0; }
-  #root { zoom: 1.142857; }
+  #root > .app-shell { width: 87.5%; zoom: 1.142857; }
 }
 
 /* Shared command-center states: 02–07 */

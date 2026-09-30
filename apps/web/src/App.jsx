@@ -9,6 +9,7 @@ import { SkuTable } from './components/SkuTable'
 import { SkuMasterList } from './components/SkuMasterList'
 import { SkuEditor } from './components/SkuEditor'
 import { VehicleLibrary } from './components/VehicleLibrary'
+import { WorkbenchHome } from './components/WorkbenchHome'
 import { useDictionaries } from './hooks/useDictionaries'
 import { ALL_DICTIONARY_VALUE, dictionaryItemLabel } from './services/dictionaryService'
 import { getSku, listSkus } from './services/skuService'
@@ -69,11 +70,15 @@ export function App() {
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const isDictionaryModule = window.location.pathname.replace(/\/+$/, '').endsWith('/dictionaries')
   const isVehicleLibrary = /\/vehicles(?:\/|$)/.test(window.location.pathname)
+  const relativePath = window.location.pathname.startsWith(import.meta.env.BASE_URL)
+    ? window.location.pathname.slice(import.meta.env.BASE_URL.length)
+    : window.location.pathname.replace(/^\/+/, '')
+  const isWorkbenchHome = relativePath.replace(/\/+$/, '') === ''
   const editorMatch = window.location.pathname.match(/\/skus\/(new|[^/]+\/edit)\/?$/)
   const isSkuEditor = Boolean(editorMatch)
 
   useEffect(() => {
-    if (isDictionaryModule || isSkuEditor || isVehicleLibrary) return
+    if (isWorkbenchHome || isDictionaryModule || isSkuEditor || isVehicleLibrary) return
     const controller = new AbortController()
     setRecordsLoading(true)
     listSkus({ signal: controller.signal }).then((items) => {
@@ -82,10 +87,10 @@ export function App() {
       setRecordsError('')
     }).catch((error) => { if (error.name !== 'AbortError') setRecordsError(error.message) }).finally(() => setRecordsLoading(false))
     return () => controller.abort()
-  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary])
+  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary, isWorkbenchHome])
 
   useEffect(() => {
-    if (!selectedId || isDictionaryModule || isSkuEditor || isVehicleLibrary) {
+    if (!selectedId || isWorkbenchHome || isDictionaryModule || isSkuEditor || isVehicleLibrary) {
       setSelectedRecord(null)
       return
     }
@@ -94,7 +99,7 @@ export function App() {
       if (error.name !== 'AbortError') setRecordsError(error.message)
     })
     return () => controller.abort()
-  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary, selectedId])
+  }, [isDictionaryModule, isSkuEditor, isVehicleLibrary, isWorkbenchHome, selectedId])
 
   useEffect(() => {
     const openCommandPanel = (event) => {
@@ -146,9 +151,9 @@ export function App() {
   }, [filteredRows, resultQuery])
 
   useEffect(() => {
-    if (isDictionaryModule || isSkuEditor || recordsLoading) return
+    if (isWorkbenchHome || isDictionaryModule || isSkuEditor || recordsLoading) return
     setSelectedId((current) => current && visibleRows.some((row) => row.id === current) ? current : visibleRows[0]?.id || null)
-  }, [isDictionaryModule, isSkuEditor, recordsLoading, visibleRows])
+  }, [isDictionaryModule, isSkuEditor, isWorkbenchHome, recordsLoading, visibleRows])
 
   const selectSku = (id) => {
     setSelectedId(id)
@@ -194,6 +199,8 @@ export function App() {
     }
   }
   const commandCenter = commandState !== 'closed' ? <CommandCenter rows={commandState === 'expanded' ? skuRows : commandRows} state={commandState} value={searchValue} onChange={setSearchValue} onClose={closeCommandCenter} onSubmit={(event) => { event.preventDefault(); runCommandSearch() }} onRetry={() => runCommandSearch(searchValue)} onNewSku={() => window.location.assign(assetPath('skus/new'))} onSelect={(id) => { setSelectedId(id); closeCommandCenter() }} /> : null
+
+  if (isWorkbenchHome) return <WorkbenchHome />
 
   if (isDictionaryModule) {
     return <div className="app-shell"><AppHeader activeNav="" currentSpace="字典管理" onSearchFocus={() => setCommandState('expanded')} searchValue={commandState === 'closed' ? '' : searchValue} /><DictionaryManagement dictionaries={dictionaries} onReset={resetDictionaries} onSave={saveDictionaries} />{commandCenter}</div>

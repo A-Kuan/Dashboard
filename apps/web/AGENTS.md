@@ -10,6 +10,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Dashboard implementation rules
 
+- For the personal workbench home, the user-provided 1672×941 reference in `docs/references/workbench/home-reference.png` is the visual source of truth. Match its visible composition, imagery, density, spacing, typography, and module proportions before introducing any independent redesign.
 - Treat `deliverables/sku-command-center-visual-states/01-default-collapsed.png` as the source of truth for the first screen.
 - Reproduce the selected 1680×945 desktop design at full fidelity before adding new visual ideas.
 - Extract repeated structures such as the application header, section header, tabs, filters, data table, badges, cards, and detail tabs into reusable components.
