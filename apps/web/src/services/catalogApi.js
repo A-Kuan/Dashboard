@@ -1,9 +1,18 @@
 const apiBase = (import.meta.env?.VITE_API_BASE || '').replace(/\/$/, '')
+const operatorRoleKey = 'hushanxing.catalog.role'
+
+export function getStoredCatalogRole() {
+  return window.localStorage.getItem(operatorRoleKey) || 'catalog_admin'
+}
+
+export function setStoredCatalogRole(role) {
+  window.localStorage.setItem(operatorRoleKey, role)
+}
 
 async function request(path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
-    headers: { 'content-type': 'application/json', 'x-operator-name': 'hushanxing-workbench', ...options.headers },
+    headers: { 'content-type': 'application/json', 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole(), ...options.headers },
   })
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
@@ -14,6 +23,10 @@ async function request(path, options = {}) {
     throw error
   }
   return body
+}
+
+export function getCatalogSession() {
+  return request('/api/v2/catalog/session')
 }
 
 function displayTime(value) {
@@ -107,6 +120,15 @@ export async function transitionCatalogSku(record, action, { note = '', assignee
     method: 'POST', body: JSON.stringify({ action, expectedVersion: record.version, note, assignee, dueAt: dueAt || null }),
   })
   return mapCatalogSku(result)
+}
+
+export function bulkTransitionCatalogSkus(records, action, { note = '', assignee = '', dueAt = '' } = {}) {
+  return request('/api/v2/catalog/skus/bulk-transition', {
+    method: 'POST', body: JSON.stringify({
+      action, note, assignee, dueAt: dueAt || null,
+      items: records.map((record) => ({ id: record.id, expectedVersion: record.version })),
+    }),
+  })
 }
 
 export async function findDuplicateIdentifiers(identifier, exceptId = '') {

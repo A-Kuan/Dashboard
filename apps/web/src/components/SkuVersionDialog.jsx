@@ -44,7 +44,7 @@ function comparisonRows(current, historical) {
   ].map(([label, currentValue, historyValue]) => ({ label, currentValue, historyValue, changed: currentValue !== historyValue }))
 }
 
-export function SkuVersionDialog({ record, initialChange, onClose, onRestored, onNotify }) {
+export function SkuVersionDialog({ record, initialChange, canRestore: permitted = true, onClose, onRestored, onNotify }) {
   const [selectedId, setSelectedId] = useState(initialChange?.id || record.changes?.[0]?.id)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -52,7 +52,7 @@ export function SkuVersionDialog({ record, initialChange, onClose, onRestored, o
   const selected = record.changes?.find((item) => item.id === selectedId) || initialChange || record.changes?.[0]
   const rows = useMemo(() => comparisonRows(record.aggregate || {}, selected?.snapshot || {}), [record, selected])
   const changedCount = rows.filter((row) => row.changed).length
-  const canRestore = Boolean(selected && selected.version < record.version)
+  const canRestore = Boolean(permitted && selected && selected.version < record.version)
 
   const restore = async () => {
     if (!reason.trim()) { setError('请填写恢复原因，便于后续审计'); return }
@@ -77,7 +77,7 @@ export function SkuVersionDialog({ record, initialChange, onClose, onRestored, o
         <aside><div><strong>变更时间线</strong><span>{record.changes?.length || 0} 个版本</span></div><nav>{(record.changes || []).map((change) => <button type="button" className={change.id === selected?.id ? 'active' : ''} key={change.id} onClick={() => { setSelectedId(change.id); setError('') }}><span>{change.action === 'restore_version' ? <ArrowCounterClockwise size={18} /> : change.version === record.version ? <CheckCircle size={18} /> : <ClockCounterClockwise size={18} />}</span><div><strong>v{change.version} · {actionLabels[change.action] || change.action}</strong><small>{change.changedBy || '系统操作员'} · {displayTime(change.changedAt)}</small></div></button>)}</nav></aside>
         <main><div className="sku-version-summary"><div><span>选择版本</span><strong>v{selected?.version || '—'}</strong></div><div><span>与当前不同</span><strong>{changedCount} 项</strong></div><p>恢复只复制业务资料内容，并生成新的草稿版本；审核状态不会回退。</p></div>
           <section className="sku-version-compare"><div className="sku-version-compare-head"><span>字段</span><span>当前 v{record.version}</span><span>历史 v{selected?.version || '—'}</span></div>{rows.map((row) => <div className={row.changed ? 'changed' : ''} key={row.label}><strong>{row.label}</strong><span>{row.currentValue}</span><span>{row.historyValue}</span></div>)}</section>
-          <div className="sku-version-restore"><label><span>恢复原因</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canRestore || busy} placeholder={canRestore ? '例如：撤销错误的 OE 与车型适配修改' : '当前版本无需恢复'} /></label>{error ? <p>{error}</p> : null}<div><button type="button" onClick={onClose}>取消</button><button className="primary" type="button" disabled={!canRestore || busy} onClick={restore}><ArrowCounterClockwise size={17} weight="bold" />{busy ? '正在恢复…' : `恢复 v${selected?.version || ''} 为新草稿`}</button></div></div>
+          <div className="sku-version-restore"><label><span>恢复原因</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canRestore || busy} placeholder={!permitted ? '当前角色没有版本恢复权限' : canRestore ? '例如：撤销错误的 OE 与车型适配修改' : '当前版本无需恢复'} /></label>{error ? <p>{error}</p> : null}<div><button type="button" onClick={onClose}>取消</button><button className="primary" type="button" disabled={!canRestore || busy} onClick={restore}><ArrowCounterClockwise size={17} weight="bold" />{busy ? '正在恢复…' : `恢复 v${selected?.version || ''} 为新草稿`}</button></div></div>
         </main>
       </div>
     </div>

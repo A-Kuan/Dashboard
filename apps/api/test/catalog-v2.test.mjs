@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildApp } from '../src/app.mjs'
+import { resolveCatalogActor } from '../src/catalog-access.mjs'
 
 function createCatalogRepository() {
   const items = []
@@ -99,6 +100,16 @@ function createCatalogRepository() {
     async getIntake(id) { return intakes.find((item) => item.id === id) || null },
   }
 }
+
+test('catalog production identity is fail-closed unless a trusted proxy is configured', () => {
+  const request = { headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'forged-admin' } }
+  const untrusted = resolveCatalogActor(request, { NODE_ENV: 'production' })
+  assert.equal(untrusted.role, 'catalog_viewer')
+  assert.equal(untrusted.name, '只读访客')
+  const trusted = resolveCatalogActor(request, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1' })
+  assert.equal(trusted.role, 'catalog_admin')
+  assert.equal(trusted.name, 'forged-admin')
+})
 
 function createCatalogImportRepository() {
   const jobs = []
@@ -239,6 +250,44 @@ test('catalog v2 exposes a quality queue and enforces audited lifecycle transiti
   assert.equal(metrics.statusCode, 200)
   assert.equal(metrics.json().days, 14)
   assert.equal(metrics.json().statusCounts.draft, 1)
+  await app.close()
+})
+
+test('catalog v2 exposes development roles and enforces write capabilities', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const session = await app.inject({ url: '/api/v2/catalog/session', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '录入员甲' } })
+  assert.equal(session.statusCode, 200)
+  assert.equal(session.json().role, 'catalog_editor')
+  assert.equal(session.json().name, '录入员甲')
+  assert.equal(session.json().capabilities.includes('catalog.edit'), true)
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { identity: { nameZh: '不应创建' } } })
+  assert.equal(denied.statusCode, 403)
+  assert.equal(denied.json().error, 'CATALOG_PERMISSION_DENIED')
+  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '录入员甲' }, payload: { identity: { nameZh: '允许创建' } } })
+  assert.equal(created.statusCode, 201)
+  assert.equal(created.json().createdBy, '录入员甲')
+  await app.close()
+})
+
+test('catalog v2 performs controlled bulk transitions with per-record results', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const makePayload = (name, oe) => ({
+    identity: { nameZh: name, brandCode: 'POR', categoryCode: 'BRAKE' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: oe }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: oe, isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: 'Cayenne (9YA)', years: '2018-2023', evidenceKey: 'source' }],
+  })
+  const first = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('批量资料一', 'BULK-001') })).json()
+  const second = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('批量资料二', 'BULK-002') })).json()
+  const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus/bulk-transition', payload: {
+    action: 'submit_review', assignee: '审核员甲', items: [{ id: first.id, expectedVersion: first.version }, { id: second.id, expectedVersion: second.version }],
+  } })
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().succeeded, 2)
+  assert.equal(response.json().failed, 0)
+  assert.equal((await app.inject(`/api/v2/catalog/skus/${first.id}`)).json().lifecycleStatus, 'review')
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus/bulk-transition', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { action: 'submit_review', items: [{ id: first.id, expectedVersion: 2 }] } })
+  assert.equal(denied.statusCode, 403)
   await app.close()
 })
 

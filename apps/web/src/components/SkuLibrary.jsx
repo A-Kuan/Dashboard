@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
-  CaretDown,
   Check,
   CheckCircle,
   ClipboardText,
@@ -27,6 +26,8 @@ import { SkuEditor } from './SkuEditor'
 import { SkuImportDialog } from './SkuImportDialog'
 import { SkuQualityQueue } from './SkuQualityQueue'
 import { SkuVersionDialog } from './SkuVersionDialog'
+import { CatalogOperatorMenu } from './CatalogOperatorMenu'
+import { SkuBulkActionDialog } from './SkuBulkActionDialog'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -63,6 +64,9 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [importOpen, setImportOpen] = useState(false)
   const [qualityOpen, setQualityOpen] = useState(false)
   const [versionDialogChange, setVersionDialogChange] = useState(null)
+  const [bulkAction, setBulkAction] = useState('')
+  const [selectedIds, setSelectedIds] = useState([])
+  const [catalogSession, setCatalogSession] = useState(null)
   const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
   const [allRecords, setAllRecords] = useState(skuRecords)
@@ -133,6 +137,8 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   }, [allRecords, dataMode, query, status])
 
   const selected = allRecords.find((item) => item.id === selectedId) || records[0] || allRecords[0] || emptyRecord
+  const selectedRecords = records.filter((record) => selectedIds.includes(record.id))
+  const hasCapability = (capability) => catalogSession?.capabilities?.includes(capability) ?? true
   const statusFilters = useMemo(() => skuStatusFilters.map((item) => ({
     ...item,
     count: dataMode === 'live'
@@ -166,7 +172,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   }
 
   const openSelectedEditor = async () => {
-    if (selected.dataOrigin === 'empty') return
+    if (selected.dataOrigin === 'empty' || !hasCapability('catalog.edit')) return
     let record = selected
     if (selected.dataOrigin === 'live' && !selected.aggregate) {
       try {
@@ -194,7 +200,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuQualityQueue onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
+        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )
@@ -212,7 +218,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
           <div className="sku-profile">
             <button type="button" aria-label="通知"><Bell size={23} weight="bold" /><i /></button>
             <img src={assetPath('assets/workbench/avatar.png')} alt="虎山行头像" />
-            <strong>虎山行</strong><CaretDown size={15} weight="bold" />
+            <CatalogOperatorMenu onSession={(next) => { setCatalogSession(next); setSelectedIds([]) }} />
           </div>
         </header>
 
@@ -220,8 +226,8 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
           <section className="sku-toolbar" aria-label="SKU 搜索和操作">
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
             <button className="sku-secondary-action" type="button" onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
-            <button className="sku-secondary-action" type="button" onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
-            <button className="sku-primary-action" type="button" onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
+            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.import')} onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
+            <button className="sku-primary-action" type="button" disabled={!hasCapability('catalog.edit')} onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
           </section>
 
           <section className="sku-summarybar">
@@ -233,16 +239,16 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
           <section className="sku-splitview">
             <article className="sku-list-panel">
-              <div className="sku-list-heading">
-                <div><h2>零件资料</h2><span>{dataMode === 'live' ? `当前显示 ${records.length} 条真实资料` : dataMode === 'loading' ? '正在连接资料库…' : `当前显示 ${records.length} 条演示资料`}</span></div>
-                <div><button type="button" onClick={() => notify('高级筛选将在字段字典接入后开放')}><Funnel size={17} weight="bold" />筛选</button><button type="button" onClick={() => notify('当前采用已确定的表格 + 详情视图')}><SlidersHorizontal size={17} weight="bold" />视图</button></div>
+              <div className={`sku-list-heading ${selectedRecords.length ? 'selection-active' : ''}`}>
+                {selectedRecords.length ? <div className="sku-bulk-bar"><strong>已选 {selectedRecords.length} 条</strong><button type="button" disabled={!hasCapability('catalog.submit') || selectedRecords.some((item) => item.status !== 'draft')} onClick={() => setBulkAction('submit_review')}>提交审核</button><button type="button" disabled={!hasCapability('catalog.assign') || selectedRecords.some((item) => item.status !== 'review')} onClick={() => setBulkAction('assign_review')}>分配审核人</button><button type="button" disabled={!hasCapability('catalog.lifecycle') || selectedRecords.some((item) => item.status !== 'verified')} onClick={() => setBulkAction('discontinue')}>停用资料</button><button type="button" onClick={() => setSelectedIds([])}>取消选择</button></div> : <><div><h2>零件资料</h2><span>{dataMode === 'live' ? `当前显示 ${records.length} 条真实资料` : dataMode === 'loading' ? '正在连接资料库…' : `当前显示 ${records.length} 条演示资料`}</span></div><div><button type="button" onClick={() => notify('高级筛选将在字段字典接入后开放')}><Funnel size={17} weight="bold" />筛选</button><button type="button" onClick={() => notify('当前采用已确定的表格 + 详情视图')}><SlidersHorizontal size={17} weight="bold" />视图</button></div></>}
               </div>
               <div className="sku-table-wrap">
                 <table className="sku-table">
-                  <thead><tr><th>SKU / 配件名称</th><th>主 OE</th><th>品牌 / 分类</th><th>适配</th><th>资料状态</th><th>更新时间</th></tr></thead>
+                  <thead><tr><th className="sku-select-cell"><input type="checkbox" aria-label="选择当前页全部 SKU" disabled={dataMode !== 'live' || !records.length} checked={Boolean(records.length) && selectedRecords.length === records.length} onChange={(event) => setSelectedIds(event.target.checked ? records.map((record) => record.id) : [])} /></th><th>SKU / 配件名称</th><th>主 OE</th><th>品牌 / 分类</th><th>适配</th><th>资料状态</th><th>更新时间</th></tr></thead>
                   <tbody>
                     {records.map((item) => (
                       <tr className={selected.id === item.id ? 'selected' : ''} key={item.id} onClick={() => setSelectedId(item.id)}>
+                        <td className="sku-select-cell"><input type="checkbox" aria-label={`选择 ${item.name}`} disabled={dataMode !== 'live'} checked={selectedIds.includes(item.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /></td>
                         <td><span className="sku-part-cell"><span className="sku-part-icon"><Cube size={24} weight="duotone" /></span><span><strong>{item.name}</strong><small>{item.code}</small></span></span></td>
                         <td><b className="sku-oe">{item.primaryOe}</b></td>
                         <td><strong>{item.brand}</strong><small>{item.category}</small></td>
@@ -281,7 +287,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                 </> : null}
                 {detailTab === 'history' ? <section className="inspector-section history-list"><div className="inspector-section-title"><h3>最近变更</h3><span>版本 {selected.version || 1}</span></div>{selected.dataOrigin === 'live' ? selected.changes.map((change) => <button type="button" key={change.id || `${change.version}-${change.action}`} onClick={() => setVersionDialogChange(change)}><CheckCircle size={19} weight="fill" /><span><strong>v{change.version} · {changeActionLabels[change.action] || change.action}</strong><small>{change.changedBy || '系统操作员'} · {changeTime(change.changedAt)}</small></span><ArrowRight size={15} /></button>) : <><div><CheckCircle size={19} weight="fill" /><span><strong>来源核验通过</strong><small>演示记录</small></span></div><div><ClockCounterClockwise size={19} /><span><strong>更新适配条件</strong><small>演示记录</small></span></div><div><Stack size={19} /><span><strong>同步 EPC 原始记录</strong><small>演示记录</small></span></div></>}{selected.dataOrigin === 'live' && !selected.changes.length ? <div><ClockCounterClockwise size={19} /><span><strong>暂无变更记录</strong><small>保存后将在此显示</small></span></div> : null}</section> : null}
               </div>
-              <footer className="sku-inspector-actions"><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={() => notify('当前右侧已展示完整身份资料')}>查看完整资料</button><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={openSelectedEditor}>编辑 SKU</button></footer>
+              <footer className="sku-inspector-actions"><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={() => notify('当前右侧已展示完整身份资料')}>查看完整资料</button><button type="button" disabled={selected.dataOrigin === 'empty' || !hasCapability('catalog.edit')} onClick={openSelectedEditor}>编辑 SKU</button></footer>
             </aside>
           </section>
         </div>
@@ -289,7 +295,8 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
       {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); setEditorContext({ source: source.id }) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>草稿将写入新资料库；核验前不会进入正式可用状态。</footer></div></div> : null}
       {importOpen ? <SkuImportDialog onClose={() => setImportOpen(false)} onCompleted={() => loadCatalog()} onNotify={notify} /> : null}
-      {versionDialogChange && selected.dataOrigin === 'live' ? <SkuVersionDialog record={selected} initialChange={versionDialogChange} onClose={() => setVersionDialogChange(null)} onRestored={handleSaved} onNotify={notify} /> : null}
+      {versionDialogChange && selected.dataOrigin === 'live' ? <SkuVersionDialog record={selected} initialChange={versionDialogChange} canRestore={hasCapability('catalog.restore')} onClose={() => setVersionDialogChange(null)} onRestored={handleSaved} onNotify={notify} /> : null}
+      {bulkAction ? <SkuBulkActionDialog records={selectedRecords} action={bulkAction} onClose={() => setBulkAction('')} onCompleted={() => { setSelectedIds([]); loadCatalog() }} onNotify={notify} /> : null}
       {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
     </div>
   )

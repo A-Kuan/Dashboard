@@ -2,11 +2,25 @@ import Fastify from 'fastify'
 import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './validation.mjs'
 import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validation.mjs'
 import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, validateCatalogVerifiable } from './catalog-validation.mjs'
+import { catalogRoles, requireCatalogCapability, resolveCatalogActor } from './catalog-access.mjs'
+
+const transitionCapabilities = {
+  submit_review: 'catalog.submit',
+  approve_review: 'catalog.review',
+  reject_review: 'catalog.review',
+  assign_review: 'catalog.assign',
+  discontinue: 'catalog.lifecycle',
+  reopen: 'catalog.lifecycle',
+}
 
 export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
+  app.get('/api/v2/catalog/session', async (request) => {
+    const actor = resolveCatalogActor(request)
+    return { ...actor, availableRoles: actor.development ? Object.values(catalogRoles) : [] }
+  })
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {
     const item = await repository.get(request.params.id)
@@ -102,7 +116,9 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
 
   app.post('/api/v2/catalog/intakes', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
-    return reply.code(201).send(await catalogRepository.createIntake(normalizeIntakeInput(request.body), request.headers['x-operator-name'] || '系统操作员'))
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    return reply.code(201).send(await catalogRepository.createIntake(normalizeIntakeInput(request.body), actor.name))
   })
   app.get('/api/v2/catalog/intakes/:id', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
@@ -136,19 +152,25 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/skus', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
-    return reply.code(201).send(await catalogRepository.create(normalizeCatalogInput(request.body), request.headers['x-operator-name'] || '系统操作员'))
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    return reply.code(201).send(await catalogRepository.create(normalizeCatalogInput(request.body), actor.name))
   })
   app.patch('/api/v2/catalog/skus/:id', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     const expectedVersion = requireCatalogVersion(request.body)
     const existing = await catalogRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     if (existing.lifecycleStatus === 'discontinued') return reply.code(409).send({ error: 'INVALID_STATUS_TRANSITION', message: '已停用资料需先恢复为草稿后才能编辑' })
     const input = normalizeCatalogInput(request.body, existing)
-    return catalogRepository.update(existing.id, input, expectedVersion, request.headers['x-operator-name'] || '系统操作员')
+    return catalogRepository.update(existing.id, input, expectedVersion, actor.name)
   })
   app.post('/api/v2/catalog/skus/:id/verify', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.review')
+    if (!actor) return
     const expectedVersion = requireCatalogVersion(request.body)
     const existing = await catalogRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
@@ -156,10 +178,14 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     validateCatalogVerifiable(normalizeCatalogInput({}, existing))
     const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
     if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
-    return catalogRepository.transition(existing.id, { action: 'approve_review', expectedVersion, note: request.body?.note }, request.headers['x-operator-name'] || '系统操作员')
+    return catalogRepository.transition(existing.id, { action: 'approve_review', expectedVersion, note: request.body?.note }, actor.name)
   })
   app.post('/api/v2/catalog/skus/:id/transition', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const capability = transitionCapabilities[request.body?.action]
+    if (!capability) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: '不支持的资料状态操作' })
+    const actor = requireCatalogCapability(request, reply, capability)
+    if (!actor) return
     const expectedVersion = requireCatalogVersion(request.body)
     const existing = await catalogRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
@@ -168,9 +194,42 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
       if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
     }
-    const item = await catalogRepository.transition(existing.id, { ...request.body, expectedVersion }, request.headers['x-operator-name'] || '系统操作员')
+    const item = await catalogRepository.transition(existing.id, { ...request.body, expectedVersion }, actor.name)
     if (!item) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     return item
+  })
+  app.post('/api/v2/catalog/skus/bulk-transition', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const action = String(request.body?.action || '').trim()
+    if (!['submit_review', 'assign_review', 'discontinue'].includes(action)) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: '该操作不支持批量执行' })
+    const actor = requireCatalogCapability(request, reply, transitionCapabilities[action])
+    if (!actor) return
+    if (!requireCatalogCapability(request, reply, 'catalog.bulk')) return
+    const items = Array.isArray(request.body?.items) ? request.body.items : []
+    if (!items.length || items.length > 100) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: '每次请选择 1 至 100 条资料' })
+    const results = []
+    const failures = []
+    for (const candidate of items) {
+      const id = String(candidate?.id || '').trim()
+      const expectedVersion = Number(candidate?.expectedVersion)
+      try {
+        if (!id || !Number.isInteger(expectedVersion) || expectedVersion < 1) throw Object.assign(new Error('资料 ID 或版本无效'), { errorCode: 'INVALID_CATALOG_INPUT' })
+        const existing = await catalogRepository.get(id)
+        if (!existing) throw Object.assign(new Error('SKU 资料不存在'), { errorCode: 'CATALOG_SKU_NOT_FOUND' })
+        if (action === 'submit_review') {
+          validateCatalogVerifiable(normalizeCatalogInput({}, existing))
+          const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
+          if (duplicateMatches.length) throw Object.assign(new Error('存在与其他 SKU 重复的零件编号'), { errorCode: 'SKU_QUALITY_BLOCKED' })
+        }
+        const item = await catalogRepository.transition(existing.id, {
+          action, expectedVersion, note: request.body?.note, assignee: request.body?.assignee, dueAt: request.body?.dueAt,
+        }, actor.name)
+        results.push({ id: item.id, version: item.version, lifecycleStatus: item.lifecycleStatus })
+      } catch (error) {
+        failures.push({ id, error: error.errorCode || 'CATALOG_BULK_ITEM_FAILED', message: error.message || '操作失败', details: error.details })
+      }
+    }
+    return { action, total: items.length, succeeded: results.length, failed: failures.length, results, failures }
   })
   app.get('/api/v2/catalog/skus/:id/changes', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
@@ -180,6 +239,8 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/skus/:id/restore', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.restore')
+    if (!actor) return
     const expectedVersion = requireCatalogVersion(request.body)
     const sourceVersion = Number(request.body?.sourceVersion)
     const reason = String(request.body?.reason || '').trim()
@@ -191,11 +252,13 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const source = changes.find((change) => change.version === sourceVersion)
     if (!source) return reply.code(404).send({ error: 'CATALOG_VERSION_NOT_FOUND', message: `找不到版本 v${sourceVersion}` })
     const input = normalizeCatalogInput(source.snapshot, existing)
-    return catalogRepository.restore(existing.id, input, expectedVersion, sourceVersion, reason, request.headers['x-operator-name'] || '系统操作员')
+    return catalogRepository.restore(existing.id, input, expectedVersion, sourceVersion, reason, actor.name)
   })
   app.post('/api/v2/catalog/imports', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
-    return reply.code(201).send(await catalogImportRepository.createPreview(request.body, request.headers['x-operator-name'] || '系统操作员'))
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    return reply.code(201).send(await catalogImportRepository.createPreview(request.body, actor.name))
   })
   app.get('/api/v2/catalog/imports', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
@@ -209,13 +272,17 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/imports/:id/commit', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
-    const job = await catalogImportRepository.commit(request.params.id, request.body, request.headers['x-operator-name'] || '系统操作员')
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const job = await catalogImportRepository.commit(request.params.id, request.body, actor.name)
     if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
     return job
   })
   app.post('/api/v2/catalog/imports/:id/retry', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
-    const job = await catalogImportRepository.retry(request.params.id, request.body, request.headers['x-operator-name'] || '系统操作员')
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const job = await catalogImportRepository.retry(request.params.id, request.body, actor.name)
     if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
     return job
   })

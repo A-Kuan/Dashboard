@@ -35,7 +35,7 @@ function shortTime(value) {
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
 }
 
-export function SkuQualityQueue({ onBack, onEdit, onSaved, onNotify }) {
+export function SkuQualityQueue({ capabilities = [], onBack, onEdit, onSaved, onNotify }) {
   const [surface, setSurface] = useState('queue')
   const [records, setRecords] = useState([])
   const [selectedId, setSelectedId] = useState('')
@@ -79,6 +79,7 @@ export function SkuQualityQueue({ onBack, onEdit, onSaved, onNotify }) {
   }, [selectedId])
 
   const visibleIssues = useMemo(() => selected?.qualityIssues || [], [selected])
+  const hasCapability = (capability) => capabilities.includes(capability)
 
   const runAction = async (nextAction) => {
     if (!selected) return
@@ -146,16 +147,16 @@ export function SkuQualityQueue({ onBack, onEdit, onSaved, onNotify }) {
               <div className="quality-review-scroll">
                 <section><div className="quality-section-title"><h3>自动质量检查</h3><span>{visibleIssues.length ? `${visibleIssues.length} 项待处理` : '全部通过'}</span></div><div className="quality-checks">{Object.entries(issueMeta).map(([code, meta]) => { const failed = visibleIssues.includes(code); return <div className={failed ? 'failed' : 'passed'} key={code}>{failed ? <WarningCircle size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}<span><strong>{failed ? meta.label : meta.passLabel}</strong><small>{failed ? '需要补充或人工确认' : '检查通过'}</small></span></div> })}</div></section>
                 <section><div className="quality-section-title"><h3>审核信息</h3></div><dl className="quality-review-info"><div><dt>当前审核人</dt><dd>{selected.reviewAssignee || '未分配'}</dd></div><div><dt>审核截止</dt><dd>{shortTime(selected.reviewDueAt)}</dd></div><div><dt>完整度</dt><dd>{selected.completeness}%</dd></div><div><dt>来源</dt><dd>{selected.source}</dd></div></dl></section>
-                <section><div className="quality-section-title"><h3>分配审核</h3></div><div className="quality-assignee"><UserCircle size={20} /><select aria-label="选择审核人" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>资料审核员</option><option>虎山行</option><option>采购负责人</option></select><button type="button" disabled={selected.status !== 'review' || busy} onClick={() => runAction('assign_review')}>保存分配</button></div></section>
+                <section><div className="quality-section-title"><h3>分配审核</h3></div><div className="quality-assignee"><UserCircle size={20} /><select aria-label="选择审核人" disabled={!hasCapability('catalog.assign')} value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>资料审核员</option><option>虎山行</option><option>采购负责人</option></select><button type="button" disabled={!hasCapability('catalog.assign') || selected.status !== 'review' || busy} onClick={() => runAction('assign_review')}>保存分配</button></div></section>
                 {action ? <section className="quality-decision"><div className="quality-section-title"><h3>{actionCopy[action].title}</h3><button type="button" onClick={() => { setAction(''); setNote(''); setError('') }}>取消</button></div><textarea autoFocus value={note} onChange={(event) => setNote(event.target.value)} placeholder={actionCopy[action].placeholder} /><button type="button" disabled={busy} onClick={() => runAction(action)}>{busy ? '正在提交…' : `确认${actionCopy[action].title}`}</button></section> : null}
                 {error ? <div className="quality-error"><WarningCircle size={18} weight="fill" />{error}</div> : null}
               </div>
               <footer>
-                <button type="button" onClick={() => onEdit?.(selected)}>编辑资料</button>
-                {selected.status === 'draft' ? <button className="primary" type="button" disabled={visibleIssues.length > 0 || busy} onClick={() => runAction('submit_review')}>提交审核</button> : null}
-                {selected.status === 'review' ? <><button className="danger" type="button" onClick={() => setAction('reject_review')}>退回修改</button><button className="primary" type="button" disabled={visibleIssues.length > 0 || busy} onClick={() => setAction('approve_review')}><SealCheck size={18} weight="fill" />通过审核</button></> : null}
-                {selected.status === 'verified' ? <button className="danger" type="button" onClick={() => setAction('discontinue')}>停用资料</button> : null}
-                {selected.status === 'discontinued' ? <button className="primary" type="button" onClick={() => setAction('reopen')}>恢复为草稿</button> : null}
+                <button type="button" disabled={!hasCapability('catalog.edit')} onClick={() => onEdit?.(selected)}>编辑资料</button>
+                {selected.status === 'draft' ? <button className="primary" type="button" disabled={!hasCapability('catalog.submit') || visibleIssues.length > 0 || busy} onClick={() => runAction('submit_review')}>提交审核</button> : null}
+                {selected.status === 'review' ? <><button className="danger" type="button" disabled={!hasCapability('catalog.review')} onClick={() => setAction('reject_review')}>退回修改</button><button className="primary" type="button" disabled={!hasCapability('catalog.review') || visibleIssues.length > 0 || busy} onClick={() => setAction('approve_review')}><SealCheck size={18} weight="fill" />通过审核</button></> : null}
+                {selected.status === 'verified' ? <button className="danger" type="button" disabled={!hasCapability('catalog.lifecycle')} onClick={() => setAction('discontinue')}>停用资料</button> : null}
+                {selected.status === 'discontinued' ? <button className="primary" type="button" disabled={!hasCapability('catalog.lifecycle')} onClick={() => setAction('reopen')}>恢复为草稿</button> : null}
               </footer>
             </> : <div className="quality-no-selection"><ShieldCheck size={42} weight="duotone" /><strong>选择一条资料开始审核</strong></div>}
           </aside>

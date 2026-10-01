@@ -158,6 +158,31 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
 })
 
+test('supports controlled bulk review submission with per-record results', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByLabel('选择 前制动盘').check()
+  await page.getByLabel('选择 后刹车片').check()
+  await page.getByRole('button', { name: '提交审核', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '批量提交审核' })
+  await expect(dialog).toContainText('已选择 2 条资料')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-bulk-review-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '提交审核 2 条' }).click()
+  await expect(dialog.getByRole('heading', { name: '批量操作已完成' })).toBeVisible()
+  await expect(dialog.getByText('成功 2 条，失败 0 条')).toBeVisible()
+  await dialog.getByRole('button', { name: '返回资料库' }).click()
+})
+
+test('switches development roles and disables unauthorized operations', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '当前资料权限' }).click()
+  await expect(page.getByText('开发环境可切换角色进行验收')).toBeVisible()
+  await page.getByRole('button', { name: /只读查看/ }).click()
+  await expect(page.getByRole('button', { name: '新建 SKU' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '批量导入' })).toBeDisabled()
+  await page.getByRole('button', { name: '当前资料权限' }).click()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-role-permissions-1680.png', fullPage: false })
+})
+
 test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()
