@@ -94,6 +94,26 @@ test('completes the source-first SKU draft and verification prototype', async ({
   await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
 })
 
+test('previews CSV conflicts and imports only explicitly selected rows', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await expect(dialog).toBeVisible()
+  const csv = '\uFEFF中文名称,品牌,分类,单位,主 OE,车型,年款范围,来源系统\n后刹车片,Porsche OE,制动系统 / 制动片,件,TEST-IMPORT-001,Macan (95B),2014-2018,Porsche PET\n重复前制动盘,Porsche OE,制动系统 / 制动盘,件,9Y0 615 301 M,Cayenne (9YA),2018-2023,Porsche PET\n无编号件,Porsche OE,制动系统 / 制动片,件,,,,供应商资料'
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'sku-import.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(page.getByText('总行数')).toBeVisible()
+  await expect(page.getByText('疑似重复', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('不可导入', { exact: true }).first()).toBeVisible()
+  await expect(page.getByLabel('选择第 3 行')).not.toBeChecked()
+  await expect(page.getByLabel('选择第 4 行')).toBeDisabled()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-preview-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '写入 1 条草稿' }).click()
+  await expect(page.getByRole('heading', { name: '导入批次已完成' })).toBeVisible()
+  await expect(page.getByText('成功写入 1 条，失败 0 条')).toBeVisible()
+  await page.getByRole('button', { name: '完成并返回资料库' }).click()
+  await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
+})
+
 test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()

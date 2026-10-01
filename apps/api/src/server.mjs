@@ -5,13 +5,16 @@ import { createVehicleRepository } from './vehicle-repository.mjs'
 import { createDictionaryRepository } from './dictionary-repository.mjs'
 import { defaultDictionaries } from './default-dictionaries.mjs'
 import { createCatalogRepository } from './catalog-repository.mjs'
+import { createCatalogImportRepository } from './catalog-import-repository.mjs'
 
 const pool = createPool()
+const catalogRepository = createCatalogRepository(pool)
 const app = buildApp({
   repository: createSkuRepository(pool),
   vehicleRepository: createVehicleRepository(pool),
   dictionaryRepository: createDictionaryRepository(pool, defaultDictionaries),
-  catalogRepository: createCatalogRepository(pool),
+  catalogRepository,
+  catalogImportRepository: createCatalogImportRepository(pool, catalogRepository),
 })
 const host = process.env.HOST || '127.0.0.1'
 const port = Number(process.env.PORT || 4183)

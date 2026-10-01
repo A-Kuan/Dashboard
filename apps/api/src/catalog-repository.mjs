@@ -233,6 +233,22 @@ export function createCatalogRepository(pool) {
       }))
     },
 
+    async findDuplicatesMany(identifiers = []) {
+      const normalized = [...new Set(identifiers.map(normalizeSearchIdentifier).filter(Boolean))]
+      if (!normalized.length) return {}
+      const { rows } = await pool.query(`SELECT s.id,s.sku_code,s.canonical_name_zh,s.lifecycle_status,i.raw_value,i.normalized_value,i.identifier_type,i.is_primary
+        FROM catalog_part_identifier i JOIN catalog_sku s ON s.id=i.sku_id
+        WHERE i.normalized_value=ANY($1::text[]) ORDER BY i.is_primary DESC,s.updated_at DESC`, [normalized])
+      return rows.reduce((result, row) => {
+        result[row.normalized_value] ||= []
+        result[row.normalized_value].push({
+          skuId: row.id, skuCode: row.sku_code, nameZh: row.canonical_name_zh, lifecycleStatus: row.lifecycle_status,
+          rawValue: row.raw_value, identifierType: row.identifier_type, isPrimary: row.is_primary,
+        })
+        return result
+      }, {})
+    },
+
     get(id) {
       return getWith(pool, id, true)
     },

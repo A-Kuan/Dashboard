@@ -90,6 +90,53 @@ export async function getCatalogDictionaries() {
   return (await request('/api/v1/dictionaries')).dictionaries || {}
 }
 
+const importHeaderAliases = {
+  nameZh: ['nameZh', '中文名称', '零件名称'], nameEn: ['nameEn', '英文名称'], brand: ['brand', '品牌'],
+  category: ['category', '分类', '零件分类'], unit: ['unit', '单位', '计量单位'], primaryOe: ['primaryOe', '主OE', '主 OE'],
+  vehicle: ['vehicle', '车型', '适配车型'], years: ['years', '年款', '年款范围'], condition: ['condition', '适配条件'],
+  sourceSystem: ['sourceSystem', '来源系统'], sourceRecordId: ['sourceRecordId', '来源记录', '来源记录ID'],
+}
+
+function parseCsvRows(text) {
+  const rows = []
+  let row = []
+  let value = ''
+  let quoted = false
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') { value += '"'; index += 1 } else if (character === '"') quoted = false
+      else value += character
+    } else if (character === '"') quoted = true
+    else if (character === ',') { row.push(value); value = '' }
+    else if (character === '\n') { row.push(value); rows.push(row); row = []; value = '' }
+    else if (character !== '\r') value += character
+  }
+  row.push(value)
+  if (row.some((cell) => cell.length) || rows.length === 0) rows.push(row)
+  return rows
+}
+
+export function parseCatalogCsv(text) {
+  const parsed = parseCsvRows(String(text || ''))
+  if (parsed.length < 2) throw new Error('CSV 至少需要表头和一行数据')
+  const headers = parsed[0].map((header) => String(header).replace(/^\uFEFF/, '').trim())
+  const columnMap = Object.fromEntries(Object.entries(importHeaderAliases).map(([field, aliases]) => [field, headers.findIndex((header) => aliases.includes(header))]))
+  if (columnMap.nameZh < 0 && columnMap.nameEn < 0) throw new Error('CSV 缺少“中文名称”或 nameZh 列')
+  if (columnMap.primaryOe < 0) throw new Error('CSV 缺少“主 OE”或 primaryOe 列')
+  return parsed.slice(1).filter((row) => row.some((cell) => String(cell).trim())).map((row) => Object.fromEntries(
+    Object.entries(columnMap).map(([field, index]) => [field, index >= 0 ? String(row[index] || '').trim() : '']),
+  ))
+}
+
+export function previewCatalogImport(sourceName, rows) {
+  return request('/api/v2/catalog/imports', { method: 'POST', body: JSON.stringify({ sourceName, rows }) })
+}
+
+export function commitCatalogImport(jobId, expectedVersion, rowIds) {
+  return request(`/api/v2/catalog/imports/${jobId}/commit`, { method: 'POST', body: JSON.stringify({ expectedVersion, rowIds }) })
+}
+
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }
 
 export function draftToCatalogPayload(draft, source) {

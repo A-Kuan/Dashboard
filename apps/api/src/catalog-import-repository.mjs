@@ -1,0 +1,169 @@
+import { randomUUID } from 'node:crypto'
+import { withTransaction } from './db.mjs'
+import { normalizeCatalogInput, normalizeIdentifierValue } from './catalog-validation.mjs'
+
+const maxRows = 500
+
+function text(value) {
+  return String(value ?? '').trim()
+}
+
+function normalizeRow(row, rowNumber, sourceName, intakeId) {
+  const raw = row && typeof row === 'object' && !Array.isArray(row) ? row : {}
+  const primaryOe = text(raw.primaryOe)
+  const hasFitment = Boolean(text(raw.vehicle))
+  const payload = normalizeCatalogInput({
+    identity: {
+      nameZh: text(raw.nameZh), nameEn: text(raw.nameEn), brandCode: text(raw.brand), brandLabel: text(raw.brand),
+      categoryCode: text(raw.category), categoryLabel: text(raw.category), unitCode: text(raw.unit) || 'piece', unitLabel: text(raw.unit) || '件',
+    },
+    evidence: [{
+      clientKey: 'source-0', intakeId, sourceType: 'import', sourceSystem: text(raw.sourceSystem) || '批量导入',
+      sourceRecordId: text(raw.sourceRecordId), catalogPath: sourceName, figurePosition: `第 ${rowNumber} 行`,
+      originalName: text(raw.originalName) || text(raw.nameZh), rawPayload: raw, confidence: 'pending',
+    }],
+    identifiers: primaryOe ? [{ clientKey: 'identifier-primary', type: 'oe', rawValue: primaryOe, isPrimary: true, evidenceKey: 'source-0' }] : [],
+    fitments: hasFitment ? [{
+      vehicleLabel: text(raw.vehicle), years: text(raw.years), includeConditions: text(raw.condition) ? { note: text(raw.condition) } : {},
+      evidenceKey: 'source-0', verificationStatus: 'pending',
+    }] : [],
+  })
+  const issues = []
+  if (!payload.identity.nameZh && !payload.identity.nameEn) issues.push({ code: 'MISSING_NAME', severity: 'error', message: '缺少零件名称' })
+  if (!primaryOe) issues.push({ code: 'MISSING_PRIMARY_OE', severity: 'error', message: '缺少主 OE 编号' })
+  if (!payload.identity.brandLabel) issues.push({ code: 'MISSING_BRAND', severity: 'warning', message: '品牌待补充' })
+  if (!payload.identity.categoryLabel) issues.push({ code: 'MISSING_CATEGORY', severity: 'warning', message: '分类待补充' })
+  if (!hasFitment) issues.push({ code: 'MISSING_FITMENT', severity: 'warning', message: '适配车型待补充' })
+  return { payload, issues, normalizedPrimaryOe: normalizeIdentifierValue(primaryOe) }
+}
+
+function mapRow(row) {
+  return {
+    id: row.id, rowNumber: row.row_number, state: row.state, payload: row.normalized_payload,
+    issues: row.issues || [], duplicateMatches: row.duplicate_matches || [], importedSkuId: row.imported_sku_id || '',
+    errorMessage: row.error_message || '',
+  }
+}
+
+function mapJob(row, rows = []) {
+  return {
+    id: row.id, intakeId: row.intake_id, sourceName: row.source_name, state: row.state, totalRows: row.total_rows,
+    readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows,
+    importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
+    createdAt: row.created_at, committedAt: row.committed_at, version: row.version, rows: rows.map(mapRow),
+  }
+}
+
+function invalid(message) {
+  const error = new Error(message)
+  error.statusCode = 400
+  error.errorCode = 'INVALID_IMPORT'
+  return error
+}
+
+export function createCatalogImportRepository(pool, catalogRepository) {
+  async function getJobWith(client, id) {
+    const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1', [id])).rows[0]
+    if (!job) return null
+    const rows = await client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id])
+    return mapJob(job, rows.rows)
+  }
+
+  return {
+    async createPreview(input, actor = '系统操作员') {
+      const sourceName = text(input?.sourceName)
+      const rows = Array.isArray(input?.rows) ? input.rows : []
+      if (!sourceName) throw invalid('sourceName 不能为空')
+      if (!rows.length) throw invalid('导入文件没有可处理的数据行')
+      if (rows.length > maxRows) throw invalid(`单次最多导入 ${maxRows} 行`)
+
+      const intakeId = randomUUID()
+      const normalizedRows = rows.map((row, index) => normalizeRow(row, index + 2, sourceName, intakeId))
+      const identifiers = normalizedRows.map((row) => row.normalizedPrimaryOe).filter(Boolean)
+      const duplicateMap = await catalogRepository.findDuplicatesMany(identifiers)
+
+      return withTransaction(pool, async (client) => {
+        const jobId = randomUUID()
+        await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
+          VALUES ($1,'import','preview',$2::jsonb,$3::jsonb,$4)`,
+        [intakeId, JSON.stringify({ sourceName, rowCount: rows.length }), JSON.stringify({ rows }), actor])
+
+        let readyRows = 0
+        let duplicateRows = 0
+        let invalidRows = 0
+        const prepared = normalizedRows.map((item, index) => {
+          const duplicates = item.normalizedPrimaryOe ? duplicateMap[item.normalizedPrimaryOe] || [] : []
+          const hasError = item.issues.some((issue) => issue.severity === 'error')
+          const state = hasError ? 'invalid' : duplicates.length ? 'duplicate' : 'ready'
+          if (state === 'ready') readyRows += 1
+          if (state === 'duplicate') duplicateRows += 1
+          if (state === 'invalid') invalidRows += 1
+          return { id: randomUUID(), rowNumber: index + 2, ...item, duplicates, state }
+        })
+
+        const { rows: jobs } = await client.query(`INSERT INTO catalog_import_job
+          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor])
+        for (const item of prepared) {
+          await client.query(`INSERT INTO catalog_import_row
+            (id,job_id,row_number,normalized_payload,state,issues,duplicate_matches)
+            VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb)`,
+          [item.id, jobId, item.rowNumber, JSON.stringify(item.payload), item.state, JSON.stringify(item.issues), JSON.stringify(item.duplicates)])
+        }
+        return getJobWith(client, jobs[0].id)
+      })
+    },
+
+    get(id) {
+      return getJobWith(pool, id)
+    },
+
+    async commit(id, input, actor = '系统操作员') {
+      const expectedVersion = Number(input?.expectedVersion)
+      const selectedIds = [...new Set(Array.isArray(input?.rowIds) ? input.rowIds.map(text).filter(Boolean) : [])]
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      if (!selectedIds.length) throw invalid('至少选择一条可导入记录')
+
+      const selectedRows = await withTransaction(pool, async (client) => {
+        const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!job) return null
+        if (job.version !== expectedVersion) {
+          const error = new Error(`导入批次已更新（当前版本 v${job.version}）`)
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_VERSION_CONFLICT'
+          throw error
+        }
+        if (job.state !== 'preview') {
+          const error = new Error('该导入批次不能重复提交')
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_ALREADY_COMMITTED'
+          throw error
+        }
+        const result = await client.query(`SELECT * FROM catalog_import_row WHERE job_id=$1 AND id=ANY($2::text[]) ORDER BY row_number`, [id, selectedIds])
+        if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate'].includes(row.state))) throw invalid('选择中包含不可导入的记录')
+        await client.query("UPDATE catalog_import_job SET state='committing',version=version+1 WHERE id=$1", [id])
+        return result.rows
+      })
+      if (!selectedRows) return null
+
+      let imported = 0
+      let failed = 0
+      for (const row of selectedRows) {
+        try {
+          const sku = await catalogRepository.create(row.normalized_payload, actor)
+          await pool.query("UPDATE catalog_import_row SET state='imported',imported_sku_id=$2,updated_at=now() WHERE id=$1", [row.id, sku.id])
+          imported += 1
+        } catch (error) {
+          await pool.query("UPDATE catalog_import_row SET state='failed',error_message=$2,updated_at=now() WHERE id=$1", [row.id, error.message || '写入失败'])
+          failed += 1
+        }
+      }
+      await pool.query(`UPDATE catalog_import_row SET state='skipped',updated_at=now() WHERE job_id=$1 AND state IN ('ready','duplicate')`, [id])
+      await pool.query(`UPDATE catalog_import_job SET state=$2,imported_rows=$3,failed_rows=$4,committed_at=now(),version=version+1 WHERE id=$1`,
+        [id, failed ? 'partial' : 'completed', imported, failed])
+      await pool.query("UPDATE catalog_intake SET state=$2,updated_at=now(),version=version+1 WHERE id=(SELECT intake_id FROM catalog_import_job WHERE id=$1)", [id, failed ? 'partial' : 'completed'])
+      return getJobWith(pool, id)
+    },
+  }
+}

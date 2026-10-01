@@ -58,6 +58,37 @@ function createCatalogRepository() {
   }
 }
 
+function createCatalogImportRepository() {
+  const jobs = []
+  return {
+    async createPreview(input, actor) {
+      const rows = (input.rows || []).map((row, index) => ({
+        id: `row-${index + 1}`, rowNumber: index + 2, payload: { identity: { nameZh: row.nameZh }, identifiers: row.primaryOe ? [{ rawValue: row.primaryOe, isPrimary: true }] : [] },
+        state: row.nameZh && row.primaryOe ? row.primaryOe === 'DUPLICATE' ? 'duplicate' : 'ready' : 'invalid', issues: [], duplicateMatches: [],
+      }))
+      const job = { id: `import-${jobs.length + 1}`, sourceName: input.sourceName, state: 'preview', totalRows: rows.length, readyRows: rows.filter((row) => row.state === 'ready').length, duplicateRows: rows.filter((row) => row.state === 'duplicate').length, invalidRows: rows.filter((row) => row.state === 'invalid').length, importedRows: 0, failedRows: 0, version: 1, createdBy: actor, rows }
+      jobs.push(job)
+      return job
+    },
+    async get(id) { return jobs.find((job) => job.id === id) || null },
+    async commit(id, input) {
+      const job = jobs.find((item) => item.id === id)
+      if (!job) return null
+      if (job.version !== input.expectedVersion) {
+        const error = new Error('导入批次已更新')
+        error.statusCode = 409
+        error.errorCode = 'IMPORT_VERSION_CONFLICT'
+        throw error
+      }
+      job.rows = job.rows.map((row) => input.rowIds.includes(row.id) ? { ...row, state: 'imported', importedSkuId: `sku-${row.id}` } : { ...row, state: 'skipped' })
+      job.importedRows = input.rowIds.length
+      job.state = 'completed'
+      job.version += 2
+      return job
+    },
+  }
+}
+
 test('catalog v2 accepts incomplete drafts without touching the legacy SKU contract', async () => {
   const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
   const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '前刹车片' } } })
@@ -146,5 +177,28 @@ test('catalog v2 detects normalized duplicate identifiers without blocking legit
   const exceptCurrent = await app.inject(`/api/v2/catalog/duplicates?identifier=95B698151H&exceptId=${first.id}`)
   assert.deepEqual(exceptCurrent.json().items, [])
   assert.equal((await app.inject('/api/v2/catalog/duplicates')).statusCode, 400)
+  await app.close()
+})
+
+test('catalog v2 previews and commits explicitly selected import rows', async () => {
+  const app = buildApp({ catalogImportRepository: createCatalogImportRepository(), logger: false })
+  const preview = await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {
+    sourceName: 'sku-import.csv', rows: [
+      { nameZh: '前刹车片', primaryOe: '95B698151H' },
+      { nameZh: '重复件', primaryOe: 'DUPLICATE' },
+      { nameZh: '', primaryOe: '' },
+    ],
+  } })
+  assert.equal(preview.statusCode, 201)
+  assert.equal(preview.json().readyRows, 1)
+  assert.equal(preview.json().duplicateRows, 1)
+  assert.equal(preview.json().invalidRows, 1)
+  const job = preview.json()
+  const committed = await app.inject({ method: 'POST', url: `/api/v2/catalog/imports/${job.id}/commit`, payload: { expectedVersion: 1, rowIds: [job.rows[0].id] } })
+  assert.equal(committed.statusCode, 200)
+  assert.equal(committed.json().state, 'completed')
+  assert.equal(committed.json().importedRows, 1)
+  assert.equal(committed.json().rows[1].state, 'skipped')
+  assert.equal((await app.inject(`/api/v2/catalog/imports/${job.id}`)).statusCode, 200)
   await app.close()
 })

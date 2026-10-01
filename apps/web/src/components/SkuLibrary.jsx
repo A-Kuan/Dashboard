@@ -23,6 +23,7 @@ import { skuRecords, skuStatusFilters } from '../data/skuMockData'
 import { assetPath } from '../utils/assetPath'
 import { WorkbenchSidebar } from './WorkbenchSidebar'
 import { SkuEditor } from './SkuEditor'
+import { SkuImportDialog } from './SkuImportDialog'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -52,6 +53,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [selectedId, setSelectedId] = useState(skuRecords[0].id)
   const [detailTab, setDetailTab] = useState('identity')
   const [sourceOpen, setSourceOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
   const [allRecords, setAllRecords] = useState(skuRecords)
@@ -198,7 +200,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         <div className="sku-content">
           <section className="sku-toolbar" aria-label="SKU 搜索和操作">
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
-            <button className="sku-secondary-action" type="button" onClick={() => notify('批量导入将在数据模板确认后接入')}><FileArrowUp size={20} weight="bold" />批量导入</button>
+            <button className="sku-secondary-action" type="button" onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
             <button className="sku-primary-action" type="button" onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
           </section>
 
@@ -266,6 +268,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
       </main>
 
       {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); setEditorContext({ source: source.id }) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>草稿将写入新资料库；核验前不会进入正式可用状态。</footer></div></div> : null}
+      {importOpen ? <SkuImportDialog onClose={() => setImportOpen(false)} onCompleted={() => loadCatalog()} onNotify={notify} /> : null}
       {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
     </div>
   )

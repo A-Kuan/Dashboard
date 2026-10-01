@@ -3,7 +3,7 @@ import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './
 import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validation.mjs'
 import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, validateCatalogVerifiable } from './catalog-validation.mjs'
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
@@ -151,6 +151,22 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const changes = await catalogRepository.changes(request.params.id)
     if (!changes) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     return { items: changes }
+  })
+  app.post('/api/v2/catalog/imports', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    return reply.code(201).send(await catalogImportRepository.createPreview(request.body, request.headers['x-operator-name'] || '系统操作员'))
+  })
+  app.get('/api/v2/catalog/imports/:id', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    const job = await catalogImportRepository.get(request.params.id)
+    if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
+    return job
+  })
+  app.post('/api/v2/catalog/imports/:id/commit', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    const job = await catalogImportRepository.commit(request.params.id, request.body, request.headers['x-operator-name'] || '系统操作员')
+    if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
+    return job
   })
 
   app.setErrorHandler((error, _request, reply) => {

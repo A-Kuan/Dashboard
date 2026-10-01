@@ -33,6 +33,14 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `POST /api/v2/catalog/skus/:id/verify`：核验，必须提交 `expectedVersion`。
 - `GET /api/v2/catalog/skus/:id/changes`：读取变更历史及当时的完整快照。
 
+### 批量导入
+
+- `POST /api/v2/catalog/imports`：提交 `sourceName` 和最多 500 行结构化数据，创建只读预检查批次。
+- `GET /api/v2/catalog/imports/:id`：读取批次、逐行问题、重复匹配和写入结果。
+- `POST /api/v2/catalog/imports/:id/commit`：提交 `expectedVersion` 与明确选中的 `rowIds`，只写入 `ready` 或用户主动选择的 `duplicate` 行。
+
+导入行状态为 `ready`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。疑似重复项默认不选择；不可导入项不能选择。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
+
 版本过期返回 `409 CATALOG_VERSION_CONFLICT`，响应的 `details.currentVersion` 指明当前版本。资料不完整返回 `422 SKU_NOT_VERIFIABLE`，`details.issues` 包含缺失项。
 
 ## 创建示例
