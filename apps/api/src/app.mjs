@@ -15,6 +15,7 @@ const transitionCapabilities = {
 
 export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
+  const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
   app.get('/api/v2/catalog/session', async (request) => {
@@ -138,6 +139,16 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     return catalogRepository.metrics({ days: request.query?.days })
   })
+  app.get('/api/v2/catalog/conflicts', async (_request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    return { items: await catalogRepository.identifierConflicts() }
+  })
+  app.post('/api/v2/catalog/conflicts/resolve', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.resolve_conflict')
+    if (!actor) return
+    return catalogRepository.resolveIdentifierConflict(request.body, actor.name)
+  })
   app.get('/api/v2/catalog/duplicates', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     const identifier = String(request.query?.identifier || '').trim()
@@ -176,7 +187,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     if (existing.lifecycleStatus !== 'review') return reply.code(409).send({ error: 'INVALID_STATUS_TRANSITION', message: '请先提交审核，再执行核验通过' })
     validateCatalogVerifiable(normalizeCatalogInput({}, existing))
-    const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
+    const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => unresolvedDuplicates(item.rawValue, existing.id)))).flat()
     if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
     return catalogRepository.transition(existing.id, { action: 'approve_review', expectedVersion, note: request.body?.note }, actor.name)
   })
@@ -191,7 +202,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     if (['submit_review', 'approve_review'].includes(request.body?.action)) {
       validateCatalogVerifiable(normalizeCatalogInput({}, existing))
-      const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
+      const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => unresolvedDuplicates(item.rawValue, existing.id)))).flat()
       if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
     }
     const item = await catalogRepository.transition(existing.id, { ...request.body, expectedVersion }, actor.name)
@@ -218,7 +229,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
         if (!existing) throw Object.assign(new Error('SKU 资料不存在'), { errorCode: 'CATALOG_SKU_NOT_FOUND' })
         if (action === 'submit_review') {
           validateCatalogVerifiable(normalizeCatalogInput({}, existing))
-          const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => catalogRepository.findDuplicates(item.rawValue, existing.id)))).flat()
+          const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => unresolvedDuplicates(item.rawValue, existing.id)))).flat()
           if (duplicateMatches.length) throw Object.assign(new Error('存在与其他 SKU 重复的零件编号'), { errorCode: 'SKU_QUALITY_BLOCKED' })
         }
         const item = await catalogRepository.transition(existing.id, {

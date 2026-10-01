@@ -134,7 +134,17 @@ const qualityIssueExpression = `ARRAY_REMOVE(ARRAY[
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_part_identifier qi WHERE qi.sku_id=s.id AND qi.is_primary AND qi.normalized_value<>'') THEN 'primaryIdentifier' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id) THEN 'fitment' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_source_evidence qe WHERE qe.sku_id=s.id AND (qe.source_system<>'' OR qe.source_record_id<>'' OR qe.catalog_path<>'' OR qe.raw_payload<>'{}'::jsonb)) THEN 'evidence' END,
-  CASE WHEN EXISTS (SELECT 1 FROM catalog_part_identifier own_i JOIN catalog_part_identifier other_i ON other_i.normalized_value=own_i.normalized_value AND other_i.sku_id<>own_i.sku_id JOIN catalog_sku other_s ON other_s.id=other_i.sku_id AND other_s.lifecycle_status<>'discontinued' WHERE own_i.sku_id=s.id) THEN 'duplicateIdentifier' END
+  CASE WHEN EXISTS (
+    SELECT 1 FROM catalog_part_identifier own_i
+    JOIN catalog_part_identifier other_i ON other_i.normalized_value=own_i.normalized_value AND other_i.sku_id<>own_i.sku_id
+    JOIN catalog_sku other_s ON other_s.id=other_i.sku_id AND other_s.lifecycle_status<>'discontinued'
+    WHERE own_i.sku_id=s.id AND NOT EXISTS (
+      SELECT 1 FROM catalog_identifier_resolution r
+      WHERE r.normalized_value=own_i.normalized_value AND r.active
+        AND r.resolution_type IN ('shared_reference','separate_scope')
+        AND ((r.sku_id_a=own_i.sku_id AND r.sku_id_b=other_i.sku_id) OR (r.sku_id_a=other_i.sku_id AND r.sku_id_b=own_i.sku_id))
+    )
+  ) THEN 'duplicateIdentifier' END
 ],NULL)`
 
 export function createCatalogRepository(pool) {
@@ -266,6 +276,22 @@ export function createCatalogRepository(pool) {
       }))
     },
 
+    async findUnresolvedDuplicates(identifier, exceptId) {
+      const normalized = normalizeSearchIdentifier(identifier)
+      if (!normalized || !exceptId) return []
+      const { rows } = await pool.query(`SELECT s.id,s.sku_code,s.canonical_name_zh,s.lifecycle_status,i.raw_value,i.identifier_type,i.is_primary
+        FROM catalog_part_identifier i JOIN catalog_sku s ON s.id=i.sku_id
+        WHERE i.normalized_value=$1 AND s.id<>$2 AND s.lifecycle_status<>'discontinued'
+          AND NOT EXISTS (SELECT 1 FROM catalog_identifier_resolution r WHERE r.normalized_value=i.normalized_value AND r.active
+            AND r.resolution_type IN ('shared_reference','separate_scope')
+            AND ((r.sku_id_a=$2 AND r.sku_id_b=s.id) OR (r.sku_id_a=s.id AND r.sku_id_b=$2)))
+        ORDER BY i.is_primary DESC,s.updated_at DESC LIMIT 20`, [normalized, exceptId])
+      return rows.map((row) => ({
+        skuId: row.id, skuCode: row.sku_code, nameZh: row.canonical_name_zh, lifecycleStatus: row.lifecycle_status,
+        rawValue: row.raw_value, identifierType: row.identifier_type, isPrimary: row.is_primary,
+      }))
+    },
+
     async findDuplicatesMany(identifiers = []) {
       const normalized = [...new Set(identifiers.map(normalizeSearchIdentifier).filter(Boolean))]
       if (!normalized.length) return {}
@@ -280,6 +306,69 @@ export function createCatalogRepository(pool) {
         })
         return result
       }, {})
+    },
+
+    async identifierConflicts() {
+      const { rows } = await pool.query(`SELECT DISTINCT ON (a.normalized_value,a.sku_id,b.sku_id)
+        a.normalized_value,a.raw_value AS raw_value_a,b.raw_value AS raw_value_b,
+        sa.id AS sku_id_a,sa.sku_code AS sku_code_a,sa.canonical_name_zh AS name_a,sa.brand_label AS brand_a,
+        sa.lifecycle_status AS status_a,sa.completeness_score AS completeness_a,sa.version AS version_a,
+        sb.id AS sku_id_b,sb.sku_code AS sku_code_b,sb.canonical_name_zh AS name_b,sb.brand_label AS brand_b,
+        sb.lifecycle_status AS status_b,sb.completeness_score AS completeness_b,sb.version AS version_b,
+        r.id AS resolution_id,r.resolution_type,r.note,r.resolved_by,r.resolved_at
+        FROM catalog_part_identifier a
+        JOIN catalog_part_identifier b ON b.normalized_value=a.normalized_value AND a.sku_id<b.sku_id
+        JOIN catalog_sku sa ON sa.id=a.sku_id AND sa.lifecycle_status<>'discontinued'
+        JOIN catalog_sku sb ON sb.id=b.sku_id AND sb.lifecycle_status<>'discontinued'
+        LEFT JOIN catalog_identifier_resolution r ON r.normalized_value=a.normalized_value AND r.sku_id_a=a.sku_id AND r.sku_id_b=b.sku_id AND r.active
+        ORDER BY a.normalized_value,a.sku_id,b.sku_id,a.is_primary DESC,b.is_primary DESC`)
+      return rows.map((row) => ({
+        key: `${row.normalized_value}:${row.sku_id_a}:${row.sku_id_b}`,
+        normalizedValue: row.normalized_value,
+        rawValues: [row.raw_value_a, row.raw_value_b],
+        left: { id: row.sku_id_a, skuCode: row.sku_code_a, nameZh: row.name_a, brandLabel: row.brand_a, lifecycleStatus: row.status_a, completenessScore: row.completeness_a, version: row.version_a },
+        right: { id: row.sku_id_b, skuCode: row.sku_code_b, nameZh: row.name_b, brandLabel: row.brand_b, lifecycleStatus: row.status_b, completenessScore: row.completeness_b, version: row.version_b },
+        resolution: row.resolution_id ? { id: row.resolution_id, type: row.resolution_type, note: row.note, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at } : null,
+      }))
+    },
+
+    async resolveIdentifierConflict(input, actor = '系统操作员') {
+      const allowed = new Set(['shared_reference', 'separate_scope', 'merge_required'])
+      const resolutionType = String(input?.resolutionType || '').trim()
+      const normalizedValue = normalizeSearchIdentifier(input?.normalizedValue)
+      const note = String(input?.note || '').trim()
+      const ids = [String(input?.skuIdA || '').trim(), String(input?.skuIdB || '').trim()].sort()
+      const expected = new Map([[String(input?.skuIdA || '').trim(), Number(input?.expectedVersionA)], [String(input?.skuIdB || '').trim(), Number(input?.expectedVersionB)]])
+      if (!allowed.has(resolutionType)) throw transitionError('不支持的冲突处理结论')
+      if (!normalizedValue || !ids[0] || !ids[1] || ids[0] === ids[1]) throw transitionError('冲突资料或编号无效')
+      if (!note) throw transitionError('请填写处理依据')
+      return withTransaction(pool, async (client) => {
+        const { rows } = await client.query('SELECT id,version FROM catalog_sku WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE', [ids])
+        if (rows.length !== 2) throw transitionError('冲突中的 SKU 已不存在')
+        for (const row of rows) if (row.version !== expected.get(row.id)) throw versionConflict(row.version)
+        const shared = await client.query(`SELECT 1 FROM catalog_part_identifier a JOIN catalog_part_identifier b
+          ON b.normalized_value=a.normalized_value AND b.sku_id=$3 WHERE a.sku_id=$2 AND a.normalized_value=$1 LIMIT 1`, [normalizedValue, ids[0], ids[1]])
+        if (!shared.rows.length) throw transitionError('这两条资料已经不存在相同编号')
+        const resolutionId = randomUUID()
+        const resolution = (await client.query(`INSERT INTO catalog_identifier_resolution
+          (id,normalized_value,sku_id_a,sku_id_b,resolution_type,note,resolved_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+          ON CONFLICT (normalized_value,sku_id_a,sku_id_b) DO UPDATE SET
+          resolution_type=EXCLUDED.resolution_type,note=EXCLUDED.note,resolved_by=EXCLUDED.resolved_by,resolved_at=now(),active=true
+          RETURNING *`, [resolutionId, normalizedValue, ids[0], ids[1], resolutionType, note, actor])).rows[0]
+        await client.query('UPDATE catalog_sku SET version=version+1,updated_by=$2,updated_at=now() WHERE id=ANY($1::text[])', [ids, actor])
+        const updated = []
+        for (const skuId of ids) {
+          const aggregate = await getWith(client, skuId)
+          const counterpartId = ids.find((value) => value !== skuId)
+          await addChange(client, skuId, aggregate.version, 'resolve_identifier_conflict', aggregate, actor, { normalizedValue, resolutionType, note, counterpartId })
+          updated.push(await getWith(client, skuId, true))
+        }
+        return {
+          id: resolution.id, normalizedValue, resolutionType, note, resolvedBy: actor, resolvedAt: resolution.resolved_at,
+          items: updated,
+        }
+      })
     },
 
     async qualityQueue({ issue = '', status = '', assignee = '', page = 1, pageSize = 30 } = {}) {

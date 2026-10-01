@@ -183,6 +183,29 @@ test('switches development roles and disables unauthorized operations', async ({
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-role-permissions-1680.png', fullPage: false })
 })
 
+test('reviews and resolves an identifier conflict with evidence', async ({ page }) => {
+  const payload = (name, vehicle) => ({
+    identity: { nameZh: name, brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'CONFLICT-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: vehicle, years: '2018-2023', evidenceKey: 'source' }], interchanges: [],
+  })
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload('冲突测试左', 'Cayenne (9YA)') })).ok()).toBeTruthy()
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload('冲突测试右', 'Macan (95B)') })).ok()).toBeTruthy()
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '编号冲突' }).click()
+  await page.getByRole('button', { name: /CONFLICT-001/ }).first().click()
+  await expect(page.getByText('CONFLICT001', { exact: true })).toBeVisible()
+  await page.getByLabel(/适用范围不同/).check()
+  await page.getByPlaceholder('记录品牌目录、EPC 图组、适用范围或人工复核依据').fill('两个 SKU 的适配车型不同，已依据品牌目录逐项复核')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-conflict-resolution-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '保存处理结论' }).click()
+  await expect(page.getByText('冲突结论已保存，质量阻断已解除')).toBeVisible()
+  await expect(page.getByText('适用范围不同', { exact: true }).first()).toBeVisible()
+})
+
 test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()

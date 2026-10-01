@@ -5,6 +5,7 @@ import {
 } from '@phosphor-icons/react'
 import { getCatalogSku, listCatalogQuality, transitionCatalogSku } from '../services/catalogApi'
 import { SkuQualityInsights } from './SkuQualityInsights'
+import { SkuConflictCenter } from './SkuConflictCenter'
 import '../sku-quality.css'
 
 const issueMeta = {
@@ -108,11 +109,11 @@ export function SkuQualityQueue({ capabilities = [], onBack, onEdit, onSaved, on
     <main className="sku-main quality-main">
       <header className="quality-topbar">
         <div><button type="button" aria-label="返回 SKU 资料库" onClick={onBack}><ArrowLeft size={20} weight="bold" /></button><span><b>数据质量与审核</b><small>集中处理缺失字段、编号冲突和待核验资料</small></span></div>
-        <div className="quality-top-actions"><div className="quality-surface-tabs"><button type="button" className={surface === 'queue' ? 'active' : ''} onClick={() => setSurface('queue')}>处理队列</button><button type="button" className={surface === 'insights' ? 'active' : ''} onClick={() => setSurface('insights')}>运营洞察</button></div><div className="quality-live"><i />规则实时计算 · 版本写入留痕</div></div>
+        <div className="quality-top-actions"><div className="quality-surface-tabs"><button type="button" className={surface === 'queue' ? 'active' : ''} onClick={() => setSurface('queue')}>处理队列</button><button type="button" className={surface === 'conflicts' ? 'active' : ''} onClick={() => setSurface('conflicts')}>编号冲突</button><button type="button" className={surface === 'insights' ? 'active' : ''} onClick={() => setSurface('insights')}>运营洞察</button></div><div className="quality-live"><i />规则实时计算 · 版本写入留痕</div></div>
       </header>
 
       <div className="quality-content">
-        {surface === 'insights' ? <SkuQualityInsights /> : <>
+        {surface === 'insights' ? <SkuQualityInsights /> : surface === 'conflicts' ? <SkuConflictCenter canResolve={hasCapability('catalog.resolve_conflict')} onNotify={onNotify} onResolved={() => loadQueue()} /> : <>
         <section className="quality-metrics" aria-label="质量队列概览">
           <article><span><ShieldCheck size={20} weight="duotone" />待处理总数</span><strong>{total}</strong><small>草稿、待审核及风险资料</small></article>
           <article><span><Clock size={20} weight="duotone" />等待审核</span><strong>{counts.statuses.review || 0}</strong><small>优先处理已提交资料</small></article>

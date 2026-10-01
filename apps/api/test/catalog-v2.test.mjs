@@ -6,6 +6,7 @@ import { resolveCatalogActor } from '../src/catalog-access.mjs'
 function createCatalogRepository() {
   const items = []
   const intakes = []
+  const resolutions = []
   let nextId = 1
   const changes = new Map()
   function find(id) {
@@ -17,6 +18,10 @@ function createCatalogRepository() {
     error.errorCode = 'CATALOG_VERSION_CONFLICT'
     error.details = { currentVersion }
     return error
+  }
+  function duplicateMatches(identifier, exceptId, unresolvedOnly = false) {
+    const normalized = String(identifier).toUpperCase().replace(/[\s._/#+()\-]/g, '')
+    return items.filter((item) => item.id !== exceptId && item.identifiers.some((entry) => entry.normalizedValue === normalized) && (!unresolvedOnly || !resolutions.some((resolution) => resolution.normalizedValue === normalized && ['shared_reference', 'separate_scope'].includes(resolution.resolutionType) && [resolution.skuIdA, resolution.skuIdB].includes(exceptId) && [resolution.skuIdA, resolution.skuIdB].includes(item.id)))).map((item) => ({ skuId: item.id, skuCode: item.identity.skuCode, nameZh: item.identity.nameZh }))
   }
   return {
     async list({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
@@ -33,8 +38,33 @@ function createCatalogRepository() {
       return { days: Number(days), statusCounts: { draft: items.filter((item) => item.lifecycleStatus === 'draft').length }, issueCounts: { fitment: items.filter((item) => item.completenessScore < 100).length }, completeness: { low: 1, medium: 0, complete: 0 }, reviews: { submitted: 0, approved: 0, rejected: 0, avg_hours: 0, overdue: 0 }, imports: { batches: 0, total_rows: 0, imported_rows: 0, failed_rows: 0, successRate: 0 }, activity: [] }
     },
     async findDuplicates(identifier, exceptId) {
-      const normalized = String(identifier).toUpperCase().replace(/[\s._/#+()\-]/g, '')
-      return items.filter((item) => item.id !== exceptId && item.identifiers.some((entry) => entry.normalizedValue === normalized)).map((item) => ({ skuId: item.id, skuCode: item.identity.skuCode, nameZh: item.identity.nameZh }))
+      return duplicateMatches(identifier, exceptId)
+    },
+    async findUnresolvedDuplicates(identifier, exceptId) { return duplicateMatches(identifier, exceptId, true) },
+    async identifierConflicts() {
+      const pairs = []
+      for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) for (let rightIndex = leftIndex + 1; rightIndex < items.length; rightIndex += 1) {
+        const left = items[leftIndex]
+        const right = items[rightIndex]
+        const shared = left.identifiers.find((entry) => right.identifiers.some((other) => other.normalizedValue === entry.normalizedValue))
+        if (!shared) continue
+        const resolution = resolutions.find((entry) => entry.normalizedValue === shared.normalizedValue && entry.skuIdA === left.id && entry.skuIdB === right.id)
+        pairs.push({ key: `${shared.normalizedValue}:${left.id}:${right.id}`, normalizedValue: shared.normalizedValue, rawValues: [shared.rawValue, shared.rawValue], left: { id: left.id, skuCode: left.identity.skuCode, nameZh: left.identity.nameZh, lifecycleStatus: left.lifecycleStatus, completenessScore: left.completenessScore, version: left.version }, right: { id: right.id, skuCode: right.identity.skuCode, nameZh: right.identity.nameZh, lifecycleStatus: right.lifecycleStatus, completenessScore: right.completenessScore, version: right.version }, resolution: resolution || null })
+      }
+      return pairs
+    },
+    async resolveIdentifierConflict(input, actor) {
+      const left = find(input.skuIdA)
+      const right = find(input.skuIdB)
+      if (left.version !== input.expectedVersionA) throw conflict(left.version)
+      if (right.version !== input.expectedVersionB) throw conflict(right.version)
+      const resolution = { id: `resolution-${resolutions.length + 1}`, normalizedValue: input.normalizedValue, skuIdA: left.id, skuIdB: right.id, resolutionType: input.resolutionType, note: input.note, resolvedBy: actor }
+      resolutions.push(resolution)
+      for (const item of [left, right]) {
+        item.version += 1
+        changes.get(item.id).unshift({ version: item.version, action: 'resolve_identifier_conflict', changedBy: actor, summary: resolution, snapshot: structuredClone(item) })
+      }
+      return { ...resolution, items: [left, right] }
     },
     async get(id) { return find(id) },
     async create(input, actor) {
@@ -288,6 +318,34 @@ test('catalog v2 performs controlled bulk transitions with per-record results', 
   assert.equal((await app.inject(`/api/v2/catalog/skus/${first.id}`)).json().lifecycleStatus, 'review')
   const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus/bulk-transition', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { action: 'submit_review', items: [{ id: first.id, expectedVersion: 2 }] } })
   assert.equal(denied.statusCode, 403)
+  await app.close()
+})
+
+test('catalog v2 resolves shared identifier conflicts with an audited decision', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const makePayload = (name) => ({
+    identity: { nameZh: name, brandCode: 'POR', categoryCode: 'BRAKE' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'SHARED-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: 'Cayenne (9YA)', years: '2018-2023', evidenceKey: 'source' }],
+  })
+  const first = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('共享编号资料一') })).json()
+  const second = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('共享编号资料二') })).json()
+  const blocked = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${first.id}/transition`, payload: { action: 'submit_review', expectedVersion: first.version } })
+  assert.equal(blocked.statusCode, 422)
+  const conflicts = await app.inject('/api/v2/catalog/conflicts')
+  assert.equal(conflicts.json().items.length, 1)
+  const resolved = await app.inject({ method: 'POST', url: '/api/v2/catalog/conflicts/resolve', headers: { 'x-operator-role': 'catalog_reviewer' }, payload: {
+    normalizedValue: 'SHARED001', skuIdA: first.id, skuIdB: second.id, expectedVersionA: first.version, expectedVersionB: second.version,
+    resolutionType: 'shared_reference', note: '套装与单件共用参考编号，保留独立资料',
+  } })
+  assert.equal(resolved.statusCode, 200)
+  assert.equal(resolved.json().resolutionType, 'shared_reference')
+  const submitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${first.id}/transition`, payload: { action: 'submit_review', expectedVersion: first.version + 1 } })
+  assert.equal(submitted.statusCode, 200)
+  const audited = (await app.inject(`/api/v2/catalog/skus/${first.id}/changes`)).json().items
+  assert.equal(audited[0].action, 'submit_review')
+  assert.equal(audited[1].action, 'resolve_identifier_conflict')
   await app.close()
 })
 

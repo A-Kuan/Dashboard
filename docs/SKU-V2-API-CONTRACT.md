@@ -40,6 +40,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/skus/:id/changes`：读取变更历史及当时的完整快照。
 - `POST /api/v2/catalog/skus/:id/restore`：提交 `expectedVersion`、`sourceVersion` 和必填的 `reason`，把历史快照中的业务资料恢复为一个新的草稿版本。
 - `GET /api/v2/catalog/quality`：读取数据质量与审核队列，可按 `issue`、`status`、`assignee` 筛选。
+- `GET /api/v2/catalog/conflicts`：读取有效 SKU 之间的规范化编号冲突及已有处理结论。
+- `POST /api/v2/catalog/conflicts/resolve`：对一组 SKU 与编号写入带版本锁的人工判断和依据。
 - `POST /api/v2/catalog/skus/:id/transition`：执行带版本锁的审核状态流转。
 - `POST /api/v2/catalog/skus/bulk-transition`：最多对 100 条资料执行批量提交审核、分配审核人或停用；每条记录单独执行完整性、编号冲突、状态和版本检查。
 
@@ -61,6 +63,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 批量状态操作返回 `succeeded`、`failed`、`results` 和 `failures`。部分失败不会撤销已经成功的记录，也不会跳过单条资料原有的审核事件与变更快照；调用方需要明确展示失败原因并允许重新选择处理。
 
 质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。
+
+编号冲突支持三种结论：`shared_reference`（合法共用参考号）、`separate_scope`（适用范围不同）和 `merge_required`（确认为重复、待合并）。前两种结论会解除对应 SKU 对之间的质量阻断；`merge_required` 继续保留冲突，防止资料在真正合并前通过审核。每次判断必须填写依据，同时提升两条 SKU 的版本并分别写入 `resolve_identifier_conflict` 变更快照。
 
 ### 批量导入
 

@@ -206,6 +206,21 @@ export function getCatalogMetrics(days = 30) {
   return request(`/api/v2/catalog/metrics?days=${encodeURIComponent(days)}`)
 }
 
+export function listCatalogConflicts() {
+  return request('/api/v2/catalog/conflicts')
+}
+
+export function resolveCatalogConflict(conflict, resolutionType, note) {
+  return request('/api/v2/catalog/conflicts/resolve', {
+    method: 'POST', body: JSON.stringify({
+      normalizedValue: conflict.normalizedValue,
+      skuIdA: conflict.left.id, skuIdB: conflict.right.id,
+      expectedVersionA: conflict.left.version, expectedVersionB: conflict.right.version,
+      resolutionType, note,
+    }),
+  })
+}
+
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }
 
 export function draftToCatalogPayload(draft, source) {
