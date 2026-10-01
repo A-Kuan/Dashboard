@@ -114,6 +114,26 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-insights-1680.png', fullPage: false })
 })
 
+test('compares historical SKU versions and restores one as a new draft', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByText('前制动盘', { exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑 SKU' }).click()
+  await page.getByLabel('中文标准名称').fill('前制动盘（误改）')
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText(/草稿已保存到 SKU 资料库/)).toBeVisible()
+  await page.getByLabel('返回 SKU 资料库').click()
+  await page.getByRole('button', { name: '变更记录' }).click()
+  await page.getByRole('button', { name: /v4 · 审核通过/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'SKU 版本对比' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('审核状态不会回退')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-version-compare-1680.png', fullPage: false })
+  await dialog.getByPlaceholder('例如：撤销错误的 OE 与车型适配修改').fill('撤销测试中的错误名称修改')
+  await dialog.getByRole('button', { name: '恢复 v4 为新草稿' }).click()
+  await expect(page.getByText(/已从 v4 恢复为新草稿/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
+})
+
 test('previews CSV conflicts and imports only explicitly selected rows', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '批量导入' }).click()

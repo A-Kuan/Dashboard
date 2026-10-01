@@ -148,9 +148,9 @@ export function createCatalogRepository(pool) {
     return { identifiers: identifiers.rows, evidence: evidence.rows, fitments: fitments.rows, interchanges: interchanges.rows, changes: changes?.rows || [], reviewEvents: reviewEvents?.rows || [] }
   }
 
-  async function addChange(client, skuId, version, action, input, actor) {
+  async function addChange(client, skuId, version, action, input, actor, details = {}) {
     await client.query(`INSERT INTO catalog_change_log (id,sku_id,version,action,summary,snapshot,changed_by)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)`, [randomUUID(), skuId, version, action, JSON.stringify(auditSummary(input)), JSON.stringify(input), actor])
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)`, [randomUUID(), skuId, version, action, JSON.stringify({ ...auditSummary(input), ...details }), JSON.stringify(input), actor])
   }
 
   async function replaceChildren(client, skuId, input) {
@@ -398,6 +398,32 @@ export function createCatalogRepository(pool) {
           input.identity.categoryCode, input.identity.categoryLabel, input.identity.unitCode, input.identity.unitLabel, input.completenessScore, actor])
         await replaceChildren(client, current.id, input)
         await addChange(client, current.id, rows[0].version, current.lifecycle_status === 'draft' ? 'update_draft' : 'update_requires_review', input, actor)
+        return getWith(client, current.id, true)
+      })
+    },
+
+    async restore(id, input, expectedVersion, sourceVersion, reason, actor = '系统操作员') {
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT id,version FROM catalog_sku WHERE id=$1 OR sku_code=$1 LIMIT 1 FOR UPDATE', [id])).rows[0]
+        if (!current) return null
+        if (current.version !== expectedVersion) throw versionConflict(current.version)
+        const source = (await client.query('SELECT version FROM catalog_change_log WHERE sku_id=$1 AND version=$2 LIMIT 1', [current.id, sourceVersion])).rows[0]
+        if (!source) {
+          const error = new Error(`找不到版本 v${sourceVersion}`)
+          error.statusCode = 404
+          error.errorCode = 'CATALOG_VERSION_NOT_FOUND'
+          throw error
+        }
+        const { rows } = await client.query(`UPDATE catalog_sku SET
+          sku_code=$2,canonical_name_zh=$3,canonical_name_en=$4,brand_code=$5,brand_label=$6,category_code=$7,category_label=$8,
+          unit_code=$9,unit_label=$10,completeness_score=$11,lifecycle_status='draft',verification_level='unverified',
+          review_assignee='',review_note='',review_submitted_at=NULL,review_due_at=NULL,discontinued_reason='',
+          updated_by=$12,updated_at=now(),version=version+1 WHERE id=$1 RETURNING *`,
+        [current.id, input.identity.skuCode, input.identity.nameZh, input.identity.nameEn, input.identity.brandCode, input.identity.brandLabel,
+          input.identity.categoryCode, input.identity.categoryLabel, input.identity.unitCode, input.identity.unitLabel, input.completenessScore, actor])
+        await replaceChildren(client, current.id, input)
+        const restored = await getWith(client, current.id)
+        await addChange(client, current.id, rows[0].version, 'restore_version', restored, actor, { sourceVersion, reason })
         return getWith(client, current.id, true)
       })
     },

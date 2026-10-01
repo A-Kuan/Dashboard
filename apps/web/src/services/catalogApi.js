@@ -87,6 +87,12 @@ export async function getCatalogSku(id) {
   return mapCatalogSku(await request(`/api/v2/catalog/skus/${encodeURIComponent(id)}`))
 }
 
+export async function restoreCatalogSkuVersion(record, sourceVersion, reason) {
+  return mapCatalogSku(await request(`/api/v2/catalog/skus/${encodeURIComponent(record.id)}/restore`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: record.version, sourceVersion, reason }),
+  }))
+}
+
 export async function listCatalogQuality({ issue = '', status = '', assignee = '', page = 1, pageSize = 30 } = {}) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (issue) params.set('issue', issue)

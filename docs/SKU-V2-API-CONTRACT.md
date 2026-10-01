@@ -32,6 +32,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `PATCH /api/v2/catalog/skus/:id`：保存完整或局部资料，必须提交 `expectedVersion`。
 - `POST /api/v2/catalog/skus/:id/verify`：核验，必须提交 `expectedVersion`。
 - `GET /api/v2/catalog/skus/:id/changes`：读取变更历史及当时的完整快照。
+- `POST /api/v2/catalog/skus/:id/restore`：提交 `expectedVersion`、`sourceVersion` 和必填的 `reason`，把历史快照中的业务资料恢复为一个新的草稿版本。
 - `GET /api/v2/catalog/quality`：读取数据质量与审核队列，可按 `issue`、`status`、`assignee` 筛选。
 - `POST /api/v2/catalog/skus/:id/transition`：执行带版本锁的审核状态流转。
 
@@ -47,6 +48,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `reopen`：填写原因后将停用资料恢复为草稿。
 
 所有动作必须携带 `expectedVersion`，并写入 `catalog_review_event` 与 `catalog_change_log`。对待审核或已核验资料进行内容编辑时，系统会自动退回草稿并清除核验状态；已停用资料必须先恢复后才能编辑。
+
+历史版本恢复同样使用版本锁。它不会覆盖或删除现有变更记录，也不会让资料直接回到过去的审核状态；系统复制所选版本的身份、编号、适配、互换关系与来源证据，创建新的 `restore_version` 草稿版本，并在摘要中保留来源版本和恢复原因。
 
 质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。
 

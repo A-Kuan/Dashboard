@@ -39,16 +39,24 @@ function createCatalogRepository() {
     async create(input, actor) {
       const item = { id: `catalog-${nextId++}`, ...structuredClone(input), identity: { ...input.identity, skuCode: input.identity.skuCode || `SKU-AUTO-${nextId}` }, version: 1, createdBy: actor, updatedBy: actor }
       items.push(item)
-      changes.set(item.id, [{ version: 1, action: 'create_draft', changedBy: actor }])
-      return item
+      changes.set(item.id, [{ version: 1, action: 'create_draft', changedBy: actor, snapshot: structuredClone(item) }])
+      return { ...item, changes: changes.get(item.id) }
     },
     async update(id, input, expectedVersion, actor) {
       const item = find(id)
       if (item.version !== expectedVersion) throw conflict(item.version)
       const wasDraft = item.lifecycleStatus === 'draft'
       Object.assign(item, structuredClone(input), { version: item.version + 1, lifecycleStatus: 'draft', verificationLevel: 'unverified', reviewAssignee: '', updatedBy: actor })
-      changes.get(item.id).unshift({ version: item.version, action: wasDraft ? 'update_draft' : 'update_requires_review', changedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: wasDraft ? 'update_draft' : 'update_requires_review', changedBy: actor, snapshot: structuredClone(item) })
       return item
+    },
+    async restore(id, input, expectedVersion, sourceVersion, reason, actor) {
+      const item = find(id)
+      if (!item) return null
+      if (item.version !== expectedVersion) throw conflict(item.version)
+      Object.assign(item, structuredClone(input), { version: item.version + 1, lifecycleStatus: 'draft', verificationLevel: 'unverified', reviewAssignee: '', updatedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: 'restore_version', changedBy: actor, summary: { sourceVersion, reason }, snapshot: structuredClone(item) })
+      return { ...item, changes: changes.get(item.id) }
     },
     async verify(id, expectedVersion, actor) {
       const item = find(id)
@@ -231,6 +239,22 @@ test('catalog v2 exposes a quality queue and enforces audited lifecycle transiti
   assert.equal(metrics.statusCode, 200)
   assert.equal(metrics.json().days, 14)
   assert.equal(metrics.json().statusCounts.draft, 1)
+  await app.close()
+})
+
+test('catalog v2 restores an audited historical snapshot as a new draft version', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const created = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '原始名称' } } })).json()
+  const updated = (await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${created.id}`, payload: { expectedVersion: 1, identity: { nameZh: '误改名称' } } })).json()
+  const missingReason = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${created.id}/restore`, payload: { expectedVersion: updated.version, sourceVersion: 1 } })
+  assert.equal(missingReason.statusCode, 400)
+  const restored = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${created.id}/restore`, payload: { expectedVersion: updated.version, sourceVersion: 1, reason: '撤销误改' } })
+  assert.equal(restored.statusCode, 200)
+  assert.equal(restored.json().identity.nameZh, '原始名称')
+  assert.equal(restored.json().lifecycleStatus, 'draft')
+  assert.equal(restored.json().version, 3)
+  assert.equal(restored.json().changes[0].action, 'restore_version')
+  assert.equal(restored.json().changes[0].summary.sourceVersion, 1)
   await app.close()
 })
 

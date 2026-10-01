@@ -178,6 +178,21 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!changes) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
     return { items: changes }
   })
+  app.post('/api/v2/catalog/skus/:id/restore', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const expectedVersion = requireCatalogVersion(request.body)
+    const sourceVersion = Number(request.body?.sourceVersion)
+    const reason = String(request.body?.reason || '').trim()
+    if (!Number.isInteger(sourceVersion) || sourceVersion < 1) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: 'sourceVersion 必须是正整数' })
+    if (!reason) return reply.code(400).send({ error: 'INVALID_CATALOG_INPUT', message: '请填写恢复原因' })
+    const existing = await catalogRepository.get(request.params.id)
+    if (!existing) return reply.code(404).send({ error: 'CATALOG_SKU_NOT_FOUND', message: 'SKU 资料不存在' })
+    const changes = await catalogRepository.changes(existing.id)
+    const source = changes.find((change) => change.version === sourceVersion)
+    if (!source) return reply.code(404).send({ error: 'CATALOG_VERSION_NOT_FOUND', message: `找不到版本 v${sourceVersion}` })
+    const input = normalizeCatalogInput(source.snapshot, existing)
+    return catalogRepository.restore(existing.id, input, expectedVersion, sourceVersion, reason, request.headers['x-operator-name'] || '系统操作员')
+  })
   app.post('/api/v2/catalog/imports', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     return reply.code(201).send(await catalogImportRepository.createPreview(request.body, request.headers['x-operator-name'] || '系统操作员'))

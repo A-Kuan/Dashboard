@@ -26,6 +26,7 @@ import { WorkbenchSidebar } from './WorkbenchSidebar'
 import { SkuEditor } from './SkuEditor'
 import { SkuImportDialog } from './SkuImportDialog'
 import { SkuQualityQueue } from './SkuQualityQueue'
+import { SkuVersionDialog } from './SkuVersionDialog'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -39,6 +40,7 @@ const sources = [
 const changeActionLabels = {
   create_draft: '创建资料草稿', update_draft: '更新资料草稿', verify: '资料核验通过', submit_review: '提交资料审核',
   approve_review: '审核通过', reject_review: '退回修改', assign_review: '分配审核人', discontinue: '停用资料', reopen: '恢复为草稿',
+  restore_version: '恢复历史版本', update_requires_review: '编辑后重新审核',
 }
 const pageSize = 30
 const emptyRecord = {
@@ -60,6 +62,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [sourceOpen, setSourceOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [qualityOpen, setQualityOpen] = useState(false)
+  const [versionDialogChange, setVersionDialogChange] = useState(null)
   const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
   const [allRecords, setAllRecords] = useState(skuRecords)
@@ -276,7 +279,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                   <section className="inspector-section"><div className="inspector-section-title"><h3>库存概览</h3><span>{selected.dataOrigin === 'live' ? '尚未接入' : '演示数据'}</span></div><div className="inventory-grid"><div><span>可用</span><strong>{selected.inventory.available}</strong></div><div><span>已锁定</span><strong>{selected.inventory.locked}</strong></div><div><span>在途</span><strong>{selected.inventory.inbound}</strong></div></div></section>
                   <section className="inspector-section"><div className="inspector-section-title"><h3>价格信息</h3><span>{selected.dataOrigin === 'live' ? '尚未接入' : '人民币含税'}</span></div><div className="price-row"><span>OEM 参考价<small>来源只读</small></span><strong>{selected.price.oemReference}</strong></div><div className="price-row"><span>最近采购价</span><strong>{selected.price.purchase}</strong></div><div className="price-row"><span>建议销售价</span><strong>{selected.price.sale}</strong></div></section>
                 </> : null}
-                {detailTab === 'history' ? <section className="inspector-section history-list"><div className="inspector-section-title"><h3>最近变更</h3><span>版本 {selected.version || 1}</span></div>{selected.dataOrigin === 'live' ? selected.changes.map((change) => <div key={change.id || `${change.version}-${change.action}`}><CheckCircle size={19} weight="fill" /><span><strong>{changeActionLabels[change.action] || change.action}</strong><small>{change.changedBy || '系统操作员'} · {changeTime(change.changedAt)}</small></span></div>) : <><div><CheckCircle size={19} weight="fill" /><span><strong>来源核验通过</strong><small>演示记录</small></span></div><div><ClockCounterClockwise size={19} /><span><strong>更新适配条件</strong><small>演示记录</small></span></div><div><Stack size={19} /><span><strong>同步 EPC 原始记录</strong><small>演示记录</small></span></div></>}{selected.dataOrigin === 'live' && !selected.changes.length ? <div><ClockCounterClockwise size={19} /><span><strong>暂无变更记录</strong><small>保存后将在此显示</small></span></div> : null}</section> : null}
+                {detailTab === 'history' ? <section className="inspector-section history-list"><div className="inspector-section-title"><h3>最近变更</h3><span>版本 {selected.version || 1}</span></div>{selected.dataOrigin === 'live' ? selected.changes.map((change) => <button type="button" key={change.id || `${change.version}-${change.action}`} onClick={() => setVersionDialogChange(change)}><CheckCircle size={19} weight="fill" /><span><strong>v{change.version} · {changeActionLabels[change.action] || change.action}</strong><small>{change.changedBy || '系统操作员'} · {changeTime(change.changedAt)}</small></span><ArrowRight size={15} /></button>) : <><div><CheckCircle size={19} weight="fill" /><span><strong>来源核验通过</strong><small>演示记录</small></span></div><div><ClockCounterClockwise size={19} /><span><strong>更新适配条件</strong><small>演示记录</small></span></div><div><Stack size={19} /><span><strong>同步 EPC 原始记录</strong><small>演示记录</small></span></div></>}{selected.dataOrigin === 'live' && !selected.changes.length ? <div><ClockCounterClockwise size={19} /><span><strong>暂无变更记录</strong><small>保存后将在此显示</small></span></div> : null}</section> : null}
               </div>
               <footer className="sku-inspector-actions"><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={() => notify('当前右侧已展示完整身份资料')}>查看完整资料</button><button type="button" disabled={selected.dataOrigin === 'empty'} onClick={openSelectedEditor}>编辑 SKU</button></footer>
             </aside>
@@ -286,6 +289,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
       {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); setEditorContext({ source: source.id }) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>草稿将写入新资料库；核验前不会进入正式可用状态。</footer></div></div> : null}
       {importOpen ? <SkuImportDialog onClose={() => setImportOpen(false)} onCompleted={() => loadCatalog()} onNotify={notify} /> : null}
+      {versionDialogChange && selected.dataOrigin === 'live' ? <SkuVersionDialog record={selected} initialChange={versionDialogChange} onClose={() => setVersionDialogChange(null)} onRestored={handleSaved} onNotify={notify} /> : null}
       {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
     </div>
   )
