@@ -62,6 +62,13 @@ export function mapCatalogSku(item) {
     inventory: { available: '—', locked: '—', inbound: '—' },
     price: { oemReference: '—', purchase: '—', sale: '—' },
     changes: item.changes || [],
+    reviewEvents: item.reviewEvents || [],
+    reviewAssignee: item.reviewAssignee || '',
+    reviewNote: item.reviewNote || '',
+    reviewSubmittedAt: item.reviewSubmittedAt || '',
+    reviewDueAt: item.reviewDueAt || '',
+    discontinuedReason: item.discontinuedReason || '',
+    qualityIssues: item.qualityIssues || [],
     version: item.version,
     dataOrigin: 'live',
     aggregate: item,
@@ -78,6 +85,22 @@ export async function listCatalogSkus({ query = '', status = '', page = 1, pageS
 
 export async function getCatalogSku(id) {
   return mapCatalogSku(await request(`/api/v2/catalog/skus/${encodeURIComponent(id)}`))
+}
+
+export async function listCatalogQuality({ issue = '', status = '', assignee = '', page = 1, pageSize = 30 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (issue) params.set('issue', issue)
+  if (status) params.set('status', status)
+  if (assignee) params.set('assignee', assignee)
+  const result = await request(`/api/v2/catalog/quality?${params}`)
+  return { ...result, records: result.items.map((item) => ({ ...mapCatalogSku(item), aggregate: null })) }
+}
+
+export async function transitionCatalogSku(record, action, { note = '', assignee = '', dueAt = '' } = {}) {
+  const result = await request(`/api/v2/catalog/skus/${record.id}/transition`, {
+    method: 'POST', body: JSON.stringify({ action, expectedVersion: record.version, note, assignee, dueAt: dueAt || null }),
+  })
+  return mapCatalogSku(result)
 }
 
 export async function findDuplicateIdentifiers(identifier, exceptId = '') {
@@ -178,7 +201,6 @@ export async function saveCatalogDraft(draft, source, existingRecord) {
   return mapCatalogSku(result)
 }
 
-export async function verifyCatalogSku(record) {
-  const result = await request(`/api/v2/catalog/skus/${record.id}/verify`, { method: 'POST', body: JSON.stringify({ expectedVersion: record.version }) })
-  return mapCatalogSku(result)
+export async function submitCatalogReview(record) {
+  return transitionCatalogSku(record, 'submit_review', { assignee: '资料审核员' })
 }

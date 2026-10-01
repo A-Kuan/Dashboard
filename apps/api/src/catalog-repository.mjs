@@ -67,6 +67,13 @@ function mapChange(row) {
   return { id: row.id, version: row.version, action: row.action, summary: row.summary || {}, snapshot: row.snapshot || {}, changedBy: row.changed_by, changedAt: row.changed_at }
 }
 
+function mapReviewEvent(row) {
+  return {
+    id: row.id, fromStatus: row.from_status, toStatus: row.to_status, action: row.action,
+    note: row.note, assignee: row.assignee, changedBy: row.changed_by, changedAt: row.changed_at, skuVersion: row.sku_version,
+  }
+}
+
 function mapSku(row, children = {}) {
   return {
     id: row.id,
@@ -74,6 +81,12 @@ function mapSku(row, children = {}) {
     lifecycleStatus: row.lifecycle_status,
     completenessScore: row.completeness_score,
     verificationLevel: row.verification_level,
+    reviewAssignee: row.review_assignee || '',
+    reviewNote: row.review_note || '',
+    reviewSubmittedAt: row.review_submitted_at,
+    reviewDueAt: row.review_due_at,
+    discontinuedReason: row.discontinued_reason || '',
+    qualityIssues: row.quality_issues || [],
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
@@ -84,6 +97,7 @@ function mapSku(row, children = {}) {
     fitments: (children.fitments || []).map(mapFitment),
     interchanges: (children.interchanges || []).map(mapInterchange),
     changes: (children.changes || []).map(mapChange),
+    reviewEvents: (children.reviewEvents || []).map(mapReviewEvent),
   }
 }
 
@@ -107,6 +121,22 @@ function versionConflict(currentVersion) {
   return error
 }
 
+function transitionError(message) {
+  const error = new Error(message)
+  error.statusCode = 409
+  error.errorCode = 'INVALID_STATUS_TRANSITION'
+  return error
+}
+
+const qualityIssueExpression = `ARRAY_REMOVE(ARRAY[
+  CASE WHEN s.canonical_name_zh='' AND s.canonical_name_en='' THEN 'identity' END,
+  CASE WHEN (s.brand_code='' AND s.brand_label='') OR (s.category_code='' AND s.category_label='') THEN 'classification' END,
+  CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_part_identifier qi WHERE qi.sku_id=s.id AND qi.is_primary AND qi.normalized_value<>'') THEN 'primaryIdentifier' END,
+  CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id) THEN 'fitment' END,
+  CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_source_evidence qe WHERE qe.sku_id=s.id AND (qe.source_system<>'' OR qe.source_record_id<>'' OR qe.catalog_path<>'' OR qe.raw_payload<>'{}'::jsonb)) THEN 'evidence' END,
+  CASE WHEN EXISTS (SELECT 1 FROM catalog_part_identifier own_i JOIN catalog_part_identifier other_i ON other_i.normalized_value=own_i.normalized_value AND other_i.sku_id<>own_i.sku_id JOIN catalog_sku other_s ON other_s.id=other_i.sku_id AND other_s.lifecycle_status<>'discontinued' WHERE own_i.sku_id=s.id) THEN 'duplicateIdentifier' END
+],NULL)`
+
 export function createCatalogRepository(pool) {
   async function childRows(client, skuId, includeChanges = false) {
     const identifiers = await client.query('SELECT * FROM catalog_part_identifier WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
@@ -114,7 +144,8 @@ export function createCatalogRepository(pool) {
     const fitments = await client.query('SELECT * FROM catalog_fitment WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
     const interchanges = await client.query('SELECT * FROM catalog_interchange_relation WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
     const changes = includeChanges ? await client.query('SELECT * FROM catalog_change_log WHERE sku_id=$1 ORDER BY version DESC, changed_at DESC', [skuId]) : null
-    return { identifiers: identifiers.rows, evidence: evidence.rows, fitments: fitments.rows, interchanges: interchanges.rows, changes: changes?.rows || [] }
+    const reviewEvents = includeChanges ? await client.query('SELECT * FROM catalog_review_event WHERE sku_id=$1 ORDER BY changed_at DESC', [skuId]) : null
+    return { identifiers: identifiers.rows, evidence: evidence.rows, fitments: fitments.rows, interchanges: interchanges.rows, changes: changes?.rows || [], reviewEvents: reviewEvents?.rows || [] }
   }
 
   async function addChange(client, skuId, version, action, input, actor) {
@@ -174,7 +205,8 @@ export function createCatalogRepository(pool) {
   }
 
   async function getWith(client, id, includeChanges = false) {
-    const { rows } = await client.query('SELECT * FROM catalog_sku WHERE id=$1 OR sku_code=$1 LIMIT 1', [id])
+    const { rows } = await client.query(`SELECT s.*,${qualityIssueExpression} AS quality_issues
+      FROM catalog_sku s WHERE s.id=$1 OR s.sku_code=$1 LIMIT 1`, [id])
     if (!rows[0]) return null
     return mapSku(rows[0], await childRows(client, rows[0].id, includeChanges))
   }
@@ -211,7 +243,8 @@ export function createCatalogRepository(pool) {
       const { rows } = await pool.query(`SELECT s.*,
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
         (SELECT count(*)::int FROM catalog_fitment f WHERE f.sku_id=s.id) AS fitment_count,
-        (SELECT source_system FROM catalog_source_evidence e WHERE e.sku_id=s.id ORDER BY e.sort_order LIMIT 1) AS source_system
+        (SELECT source_system FROM catalog_source_evidence e WHERE e.sku_id=s.id ORDER BY e.sort_order LIMIT 1) AS source_system,
+        ${qualityIssueExpression} AS quality_issues
         FROM catalog_sku s ${where} ORDER BY s.updated_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)
       return {
         items: rows.map((row) => ({ ...mapSku(row), primaryIdentifier: row.primary_identifier || '', fitmentCount: row.fitment_count, sourceSystem: row.source_system || '' })),
@@ -249,6 +282,38 @@ export function createCatalogRepository(pool) {
       }, {})
     },
 
+    async qualityQueue({ issue = '', status = '', assignee = '', page = 1, pageSize = 30 } = {}) {
+      const safePage = Math.max(1, Number(page) || 1)
+      const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 30))
+      const clauses = ["(q.lifecycle_status IN ('draft','review') OR cardinality(q.quality_issues)>0)"]
+      const values = []
+      if (issue) { values.push(issue); clauses.push(`$${values.length}=ANY(q.quality_issues)`) }
+      if (status) { values.push(status); clauses.push(`q.lifecycle_status=$${values.length}`) }
+      if (assignee) { values.push(assignee); clauses.push(`q.review_assignee=$${values.length}`) }
+      const where = `WHERE ${clauses.join(' AND ')}`
+      const cte = `WITH quality AS (SELECT s.*,
+        (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
+        (SELECT count(*)::int FROM catalog_fitment f WHERE f.sku_id=s.id) AS fitment_count,
+        (SELECT source_system FROM catalog_source_evidence e WHERE e.sku_id=s.id ORDER BY e.sort_order LIMIT 1) AS source_system,
+        ${qualityIssueExpression} AS quality_issues FROM catalog_sku s)`
+      const countValues = [...values]
+      const [count, statuses, issues] = await Promise.all([
+        pool.query(`${cte} SELECT count(*)::int AS total FROM quality q ${where}`, countValues),
+        pool.query(`${cte} SELECT lifecycle_status,count(*)::int AS count FROM quality q ${where} GROUP BY lifecycle_status`, countValues),
+        pool.query(`${cte} SELECT issue,count(*)::int AS count FROM quality q CROSS JOIN LATERAL unnest(q.quality_issues) issue ${where} GROUP BY issue`, countValues),
+      ])
+      values.push(safeSize, (safePage - 1) * safeSize)
+      const { rows } = await pool.query(`${cte} SELECT q.* FROM quality q ${where}
+        ORDER BY CASE q.lifecycle_status WHEN 'review' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+        q.review_due_at NULLS LAST,q.updated_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)
+      return {
+        items: rows.map((row) => ({ ...mapSku(row), primaryIdentifier: row.primary_identifier || '', fitmentCount: row.fitment_count, sourceSystem: row.source_system || '' })),
+        total: count.rows[0].total, page: safePage, pageSize: safeSize,
+        statusCounts: Object.fromEntries(statuses.rows.map((row) => [row.lifecycle_status, row.count])),
+        issueCounts: Object.fromEntries(issues.rows.map((row) => [row.issue, row.count])),
+      }
+    },
+
     get(id) {
       return getWith(pool, id, true)
     },
@@ -271,17 +336,18 @@ export function createCatalogRepository(pool) {
 
     async update(id, input, expectedVersion, actor = '系统操作员') {
       return withTransaction(pool, async (client) => {
-        const current = (await client.query('SELECT id,version FROM catalog_sku WHERE id=$1 OR sku_code=$1 LIMIT 1 FOR UPDATE', [id])).rows[0]
+        const current = (await client.query('SELECT id,version,lifecycle_status FROM catalog_sku WHERE id=$1 OR sku_code=$1 LIMIT 1 FOR UPDATE', [id])).rows[0]
         if (!current) return null
         if (current.version !== expectedVersion) throw versionConflict(current.version)
         const { rows } = await client.query(`UPDATE catalog_sku SET
           sku_code=$2,canonical_name_zh=$3,canonical_name_en=$4,brand_code=$5,brand_label=$6,category_code=$7,category_label=$8,
-          unit_code=$9,unit_label=$10,completeness_score=$11,updated_by=$12,updated_at=now(),version=version+1
+          unit_code=$9,unit_label=$10,completeness_score=$11,lifecycle_status='draft',verification_level='unverified',
+          review_assignee='',review_due_at=NULL,updated_by=$12,updated_at=now(),version=version+1
           WHERE id=$1 RETURNING *`,
         [current.id, input.identity.skuCode, input.identity.nameZh, input.identity.nameEn, input.identity.brandCode, input.identity.brandLabel,
           input.identity.categoryCode, input.identity.categoryLabel, input.identity.unitCode, input.identity.unitLabel, input.completenessScore, actor])
         await replaceChildren(client, current.id, input)
-        await addChange(client, current.id, rows[0].version, 'update_draft', input, actor)
+        await addChange(client, current.id, rows[0].version, current.lifecycle_status === 'draft' ? 'update_draft' : 'update_requires_review', input, actor)
         return getWith(client, current.id, true)
       })
     },
@@ -295,6 +361,49 @@ export function createCatalogRepository(pool) {
           completeness_score=100,updated_by=$2,updated_at=now(),version=version+1 WHERE id=$1 RETURNING *`, [current.id, actor])
         const aggregate = await getWith(client, current.id)
         await addChange(client, current.id, rows[0].version, 'verify', aggregate, actor)
+        return getWith(client, current.id, true)
+      })
+    },
+
+    async transition(id, input, actor = '系统操作员') {
+      const action = String(input?.action || '').trim()
+      const expectedVersion = Number(input?.expectedVersion)
+      const note = String(input?.note || '').trim()
+      const assignee = String(input?.assignee || '').trim()
+      const dueAt = input?.dueAt || null
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw transitionError('expectedVersion 必须是正整数')
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM catalog_sku WHERE id=$1 OR sku_code=$1 LIMIT 1 FOR UPDATE', [id])).rows[0]
+        if (!current) return null
+        if (current.version !== expectedVersion) throw versionConflict(current.version)
+        const transitions = {
+          submit_review: { from: 'draft', to: 'review', verification: 'unverified' },
+          approve_review: { from: 'review', to: 'verified', verification: 'verified' },
+          reject_review: { from: 'review', to: 'draft', verification: 'unverified', needsNote: true },
+          discontinue: { from: 'verified', to: 'discontinued', verification: 'verified', needsNote: true },
+          reopen: { from: 'discontinued', to: 'draft', verification: 'unverified', needsNote: true },
+          assign_review: { from: 'review', to: 'review', verification: current.verification_level, needsAssignee: true },
+        }
+        const transition = transitions[action]
+        if (!transition) throw transitionError('不支持的资料状态操作')
+        if (current.lifecycle_status !== transition.from) throw transitionError(`当前状态不能执行 ${action}`)
+        if (transition.needsNote && !note) throw transitionError('请填写操作原因')
+        if (transition.needsAssignee && !assignee) throw transitionError('请选择审核人')
+        const nextAssignee = action === 'submit_review' || action === 'assign_review' ? assignee : action === 'reject_review' || action === 'reopen' ? '' : current.review_assignee
+        const nextReviewNote = ['submit_review', 'reject_review', 'approve_review', 'assign_review'].includes(action) ? note : current.review_note
+        const discontinuedReason = action === 'discontinue' ? note : action === 'reopen' ? '' : current.discontinued_reason
+        const { rows } = await client.query(`UPDATE catalog_sku SET lifecycle_status=$2,verification_level=$3,
+          completeness_score=CASE WHEN $4='approve_review' THEN 100 ELSE completeness_score END,
+          review_assignee=$5,review_note=$6,
+          review_submitted_at=CASE WHEN $4='submit_review' THEN now() ELSE review_submitted_at END,
+          review_due_at=CASE WHEN $4='submit_review' THEN COALESCE($7::timestamptz,now()+interval '2 days') WHEN $4 IN ('reject_review','approve_review','reopen') THEN NULL ELSE review_due_at END,
+          discontinued_reason=$8,updated_by=$9,updated_at=now(),version=version+1 WHERE id=$1 RETURNING *`,
+        [current.id, transition.to, transition.verification, action, nextAssignee, nextReviewNote, dueAt, discontinuedReason, actor])
+        const updated = await getWith(client, current.id)
+        await client.query(`INSERT INTO catalog_review_event (id,sku_id,from_status,to_status,action,note,assignee,changed_by,sku_version)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [randomUUID(), current.id, current.lifecycle_status, transition.to, action, note, nextAssignee, actor, rows[0].version])
+        await addChange(client, current.id, rows[0].version, action, updated, actor)
         return getWith(client, current.id, true)
       })
     },

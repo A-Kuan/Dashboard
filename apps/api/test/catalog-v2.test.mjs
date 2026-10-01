@@ -23,6 +23,11 @@ function createCatalogRepository() {
       const filtered = items.filter((item) => (!status || item.lifecycleStatus === status) && (!term || JSON.stringify(item).toLowerCase().includes(term)))
       return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: { draft: filtered.filter((item) => item.lifecycleStatus === 'draft').length, verified: filtered.filter((item) => item.lifecycleStatus === 'verified').length } }
     },
+    async qualityQueue({ issue = '', status = '', page = 1, pageSize = 30 } = {}) {
+      const withIssues = items.map((item) => ({ ...item, qualityIssues: item.completenessScore === 100 ? [] : ['fitment'] }))
+      const filtered = withIssues.filter((item) => (!status || item.lifecycleStatus === status) && (!issue || item.qualityIssues.includes(issue)) && (['draft', 'review'].includes(item.lifecycleStatus) || item.qualityIssues.length))
+      return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: { draft: filtered.filter((item) => item.lifecycleStatus === 'draft').length, review: filtered.filter((item) => item.lifecycleStatus === 'review').length }, issueCounts: { fitment: filtered.filter((item) => item.qualityIssues.includes('fitment')).length } }
+    },
     async findDuplicates(identifier, exceptId) {
       const normalized = String(identifier).toUpperCase().replace(/[\s._/#+()\-]/g, '')
       return items.filter((item) => item.id !== exceptId && item.identifiers.some((entry) => entry.normalizedValue === normalized)).map((item) => ({ skuId: item.id, skuCode: item.identity.skuCode, nameZh: item.identity.nameZh }))
@@ -37,8 +42,9 @@ function createCatalogRepository() {
     async update(id, input, expectedVersion, actor) {
       const item = find(id)
       if (item.version !== expectedVersion) throw conflict(item.version)
-      Object.assign(item, structuredClone(input), { version: item.version + 1, updatedBy: actor })
-      changes.get(item.id).unshift({ version: item.version, action: 'update_draft', changedBy: actor })
+      const wasDraft = item.lifecycleStatus === 'draft'
+      Object.assign(item, structuredClone(input), { version: item.version + 1, lifecycleStatus: 'draft', verificationLevel: 'unverified', reviewAssignee: '', updatedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: wasDraft ? 'update_draft' : 'update_requires_review', changedBy: actor })
       return item
     },
     async verify(id, expectedVersion, actor) {
@@ -46,6 +52,31 @@ function createCatalogRepository() {
       if (item.version !== expectedVersion) throw conflict(item.version)
       Object.assign(item, { version: item.version + 1, lifecycleStatus: 'verified', verificationLevel: 'verified', completenessScore: 100, updatedBy: actor })
       changes.get(item.id).unshift({ version: item.version, action: 'verify', changedBy: actor })
+      return item
+    },
+    async transition(id, input, actor) {
+      const item = find(id)
+      if (!item) return null
+      if (item.version !== input.expectedVersion) throw conflict(item.version)
+      const rules = {
+        submit_review: ['draft', 'review'], approve_review: ['review', 'verified'], reject_review: ['review', 'draft'],
+        discontinue: ['verified', 'discontinued'], reopen: ['discontinued', 'draft'], assign_review: ['review', 'review'],
+      }
+      const rule = rules[input.action]
+      if (!rule || item.lifecycleStatus !== rule[0]) {
+        const error = new Error('当前状态不能执行该操作')
+        error.statusCode = 409
+        error.errorCode = 'INVALID_STATUS_TRANSITION'
+        throw error
+      }
+      if (['reject_review', 'discontinue', 'reopen'].includes(input.action) && !input.note) {
+        const error = new Error('请填写操作原因')
+        error.statusCode = 409
+        error.errorCode = 'INVALID_STATUS_TRANSITION'
+        throw error
+      }
+      Object.assign(item, { version: item.version + 1, lifecycleStatus: rule[1], verificationLevel: rule[1] === 'verified' ? 'verified' : 'unverified', reviewAssignee: input.assignee || item.reviewAssignee || '', reviewNote: input.note || '', updatedBy: actor })
+      changes.get(item.id).unshift({ version: item.version, action: input.action, changedBy: actor })
       return item
     },
     async changes(id) { return find(id) ? changes.get(find(id).id) : null },
@@ -116,7 +147,7 @@ test('catalog v2 captures source intake and preserves raw source context', async
 test('catalog v2 requires traceable complete data before verification', async () => {
   const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
   const draft = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '前刹车片' } } })).json()
-  const rejected = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 1 } })
+  const rejected = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 1 } })
   assert.equal(rejected.statusCode, 422)
   assert.equal(rejected.json().error, 'SKU_NOT_VERIFIABLE')
   assert.deepEqual(rejected.json().details.issues, ['classification', 'primaryIdentifier', 'fitment', 'evidence'])
@@ -132,10 +163,46 @@ test('catalog v2 requires traceable complete data before verification', async ()
   assert.equal(completed.json().completenessScore, 100)
   assert.equal(completed.json().identifiers[0].normalizedValue, '95B698151H')
   assert.match(completed.json().evidence[0].immutableHash, /^[a-f0-9]{64}$/)
-  const verified = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 2 } })
+  const submitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 2, assignee: '资料审核员' } })
+  assert.equal(submitted.statusCode, 200)
+  assert.equal(submitted.json().lifecycleStatus, 'review')
+  const verified = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 3 } })
   assert.equal(verified.statusCode, 200)
   assert.equal(verified.json().lifecycleStatus, 'verified')
-  assert.equal((await app.inject(`/api/v2/catalog/skus/${draft.id}/changes`)).json().items[0].action, 'verify')
+  assert.equal((await app.inject(`/api/v2/catalog/skus/${draft.id}/changes`)).json().items[0].action, 'approve_review')
+  const editedAfterApproval = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 4, identity: { nameZh: '前刹车片（修订）' } } })
+  assert.equal(editedAfterApproval.statusCode, 200)
+  assert.equal(editedAfterApproval.json().lifecycleStatus, 'draft')
+  assert.equal(editedAfterApproval.json().verificationLevel, 'unverified')
+  const resubmitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 5, assignee: '审核员甲' } })
+  assert.equal(resubmitted.json().lifecycleStatus, 'review')
+  const assigned = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'assign_review', expectedVersion: 6, assignee: '审核员乙' } })
+  assert.equal(assigned.json().reviewAssignee, '审核员乙')
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 7 } })).statusCode, 409)
+  const rejectedForEdit = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 7, note: '请补充适配条件说明' } })
+  assert.equal(rejectedForEdit.json().lifecycleStatus, 'draft')
+  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 8, assignee: '审核员乙' } })
+  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'approve_review', expectedVersion: 9 } })
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 10 } })).statusCode, 409)
+  const discontinued = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 10, note: '编号已被替代' } })
+  assert.equal(discontinued.json().lifecycleStatus, 'discontinued')
+  assert.equal((await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 11, identity: { nameZh: '不应保存' } } })).statusCode, 409)
+  const reopened = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reopen', expectedVersion: 11, note: '重新确认编号' } })
+  assert.equal(reopened.json().lifecycleStatus, 'draft')
+  await app.close()
+})
+
+test('catalog v2 exposes a quality queue and enforces audited lifecycle transitions', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const draft = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: { identity: { nameZh: '待补资料' } } })).json()
+  const queue = await app.inject('/api/v2/catalog/quality?issue=fitment')
+  assert.equal(queue.statusCode, 200)
+  assert.equal(queue.json().items[0].id, draft.id)
+  const incomplete = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 1 } })
+  assert.equal(incomplete.statusCode, 422)
+  const invalidTransition = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 1, note: '不再销售' } })
+  assert.equal(invalidTransition.statusCode, 409)
+  assert.equal(invalidTransition.json().error, 'INVALID_STATUS_TRANSITION')
   await app.close()
 })
 

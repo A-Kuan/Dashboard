@@ -32,6 +32,23 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `PATCH /api/v2/catalog/skus/:id`：保存完整或局部资料，必须提交 `expectedVersion`。
 - `POST /api/v2/catalog/skus/:id/verify`：核验，必须提交 `expectedVersion`。
 - `GET /api/v2/catalog/skus/:id/changes`：读取变更历史及当时的完整快照。
+- `GET /api/v2/catalog/quality`：读取数据质量与审核队列，可按 `issue`、`status`、`assignee` 筛选。
+- `POST /api/v2/catalog/skus/:id/transition`：执行带版本锁的审核状态流转。
+
+### 审核状态流转
+
+`transition` 支持以下动作：
+
+- `submit_review`：草稿提交审核，完整性和重复编号检查必须通过，可指定 `assignee` 与 `dueAt`。
+- `assign_review`：重新分配等待审核的资料。
+- `approve_review`：审核通过，资料进入 `verified`。
+- `reject_review`：填写原因后退回草稿。
+- `discontinue`：填写原因后停用已核验资料。
+- `reopen`：填写原因后将停用资料恢复为草稿。
+
+所有动作必须携带 `expectedVersion`，并写入 `catalog_review_event` 与 `catalog_change_log`。对待审核或已核验资料进行内容编辑时，系统会自动退回草稿并清除核验状态；已停用资料必须先恢复后才能编辑。
+
+质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。
 
 ### 批量导入
 

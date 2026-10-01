@@ -15,7 +15,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import '../sku-editor.css'
-import { findDuplicateIdentifiers, saveCatalogDraft, verifyCatalogSku } from '../services/catalogApi'
+import { findDuplicateIdentifiers, saveCatalogDraft, submitCatalogReview } from '../services/catalogApi'
 
 const sourceLabels = {
   epc: 'EPC / VIN',
@@ -85,13 +85,13 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
   const [step, setStep] = useState('identity')
   const [draft, setDraft] = useState(() => makeInitialDraft(source, record))
   const [savedAt, setSavedAt] = useState('')
-  const [verified, setVerified] = useState(false)
+  const [submitted, setSubmitted] = useState(record?.status === 'review')
   const [saving, setSaving] = useState(false)
   const [persistedRecord, setPersistedRecord] = useState(() => record?.dataOrigin === 'live' ? record : null)
   const [duplicateMatches, setDuplicateMatches] = useState([])
 
   const setField = (field, value) => {
-    setVerified(false)
+    setSubmitted(false)
     setDraft((current) => ({ ...current, [field]: value }))
   }
 
@@ -110,13 +110,13 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
   const categoryOptions = dictionaryItems(dictionaries, 'part_category', ['制动系统 / 制动盘', '制动系统 / 制动片', '保养件 / 机油滤芯', '底盘 / 控制臂'], draft.category)
   const unitOptions = dictionaryItems(dictionaries, 'unit', ['件', '套', '盒', '支'], draft.unit)
 
-  const addIdentifier = () => setDraft((current) => ({ ...current, identifiers: [...current.identifiers, { id: `relation-${Date.now()}`, type: '品牌号', value: '', relation: '制造商号' }] }))
-  const updateIdentifier = (id, field, value) => setDraft((current) => ({ ...current, identifiers: current.identifiers.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
-  const removeIdentifier = (id) => setDraft((current) => ({ ...current, identifiers: current.identifiers.filter((item) => item.id !== id) }))
+  const addIdentifier = () => { setSubmitted(false); setDraft((current) => ({ ...current, identifiers: [...current.identifiers, { id: `relation-${Date.now()}`, type: '品牌号', value: '', relation: '制造商号' }] })) }
+  const updateIdentifier = (id, field, value) => { setSubmitted(false); setDraft((current) => ({ ...current, identifiers: current.identifiers.map((item) => item.id === id ? { ...item, [field]: value } : item) })) }
+  const removeIdentifier = (id) => { setSubmitted(false); setDraft((current) => ({ ...current, identifiers: current.identifiers.filter((item) => item.id !== id) })) }
 
-  const addFitment = () => setDraft((current) => ({ ...current, fitments: [...current.fitments, { id: `fitment-${Date.now()}`, vehicle: '', years: '', condition: '' }] }))
-  const updateFitment = (id, field, value) => setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
-  const removeFitment = (id) => setDraft((current) => ({ ...current, fitments: current.fitments.filter((item) => item.id !== id) }))
+  const addFitment = () => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: [...current.fitments, { id: `fitment-${Date.now()}`, vehicle: '', years: '', condition: '' }] })) }
+  const updateFitment = (id, field, value) => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, [field]: value } : item) })) }
+  const removeFitment = (id) => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: current.fitments.filter((item) => item.id !== id) })) }
 
   const checkPrimaryDuplicate = async () => {
     if (!draft.primaryOe.trim()) return setDuplicateMatches([])
@@ -133,6 +133,7 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
       const saved = await saveCatalogDraft(draft, source, persistedRecord)
       const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       setPersistedRecord(saved)
+      setSubmitted(saved.status === 'review')
       setDraft((current) => ({ ...current, code: saved.code }))
       setSavedAt(now)
       onSaved?.(saved)
@@ -154,7 +155,7 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
     if (currentIndex < steps.length - 1) setStep(steps[currentIndex + 1].id)
   }
 
-  const verify = async () => {
+  const submitForReview = async () => {
     if (passedCount !== checks.length) {
       const firstIssue = checks.find((item) => !item.passed)
       setStep(firstIssue.step)
@@ -165,13 +166,13 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
     if (!saved) return
     setSaving(true)
     try {
-      const verifiedRecord = await verifyCatalogSku(saved)
-      setPersistedRecord(verifiedRecord)
-      setVerified(true)
-      onSaved?.(verifiedRecord)
-      onNotify?.('资料核验已通过并记录版本')
+      const reviewRecord = await submitCatalogReview(saved)
+      setPersistedRecord(reviewRecord)
+      setSubmitted(true)
+      onSaved?.(reviewRecord)
+      onNotify?.('资料已提交审核并进入质量队列')
     } catch (error) {
-      onNotify?.(`核验失败：${error.message}`)
+      onNotify?.(`提交审核失败：${error.message}`)
     } finally {
       setSaving(false)
     }
@@ -192,7 +193,7 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
         <nav className="sku-editor-steps" aria-label="SKU 编辑步骤">
           {steps.map((item, index) => {
             const active = item.id === step
-            const completed = index < currentIndex || (item.id === 'review' && verified)
+            const completed = index < currentIndex || (item.id === 'review' && submitted)
             return <button className={`${active ? 'active' : ''} ${completed ? 'completed' : ''}`} key={item.id} type="button" onClick={() => setStep(item.id)}><span>{completed ? <Check size={15} weight="bold" /> : index + 1}</span><strong>{item.label}</strong></button>
           })}
         </nav>
@@ -229,10 +230,10 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
             </> : null}
 
             {step === 'review' ? <>
-              <div className="sku-form-heading"><div><h2>发布检查</h2><p>核对关键信息并确认是否具备发布条件。</p></div></div>
-              {verified ? <div className="verification-success"><span><CheckCircle size={30} weight="fill" /></span><div><h3>资料核验已通过</h3><p>身份、主 OE、适配车型和来源证据均满足当前规则，核验版本已记录。</p></div></div> : null}
+              <div className="sku-form-heading"><div><h2>提交审核</h2><p>核对关键信息并交由审核队列完成最终核验。</p></div></div>
+              {submitted ? <div className="verification-success"><span><CheckCircle size={30} weight="fill" /></span><div><h3>资料已进入审核队列</h3><p>审核人将结合来源证据、编号冲突和适配条件做最终确认。</p></div></div> : null}
               <div className="review-summary"><article><span>标准名称</span><strong>{draft.name || '—'}</strong></article><article><span>主 OE</span><strong>{draft.primaryOe || '—'}</strong></article><article><span>品牌 / 分类</span><strong>{draft.brand || '—'}</strong><small>{draft.category || '—'}</small></article><article><span>适配车型</span><strong>{draft.fitments.length} 条</strong></article><article className="wide"><span>来源证据</span><strong>{draft.evidence.sourceSystem}</strong><small>{draft.evidence.catalog}</small></article></div>
-              <div className="publish-notice"><WarningCircle size={20} weight="fill" /><span>“完成核验”会写入资料库并生成不可覆盖的版本记录；库存与价格仍属于后续业务模块。</span></div>
+              <div className="publish-notice"><WarningCircle size={20} weight="fill" /><span>“提交审核”会锁定当前版本并写入审核队列；只有审核通过后资料状态才会变为“已核验”。</span></div>
             </> : null}
           </section>
 
@@ -244,7 +245,7 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
         </div>
       </div>
 
-      <footer className="sku-editor-footer"><button type="button" onClick={onBack}>取消并返回</button><div><span>{saving ? '正在同步资料库' : savedAt ? `草稿保存于 ${savedAt}` : '尚未写入资料库'}</span>{step !== 'review' ? <button className="editor-next" type="button" onClick={nextStep}>下一步：{steps[currentIndex + 1]?.label}<ArrowRight size={18} weight="bold" /></button> : <button className="editor-verify" type="button" disabled={saving} onClick={verify}><SealCheck size={19} weight="fill" />{verified ? '已完成核验' : saving ? '核验中' : '完成核验'}</button>}</div></footer>
+      <footer className="sku-editor-footer"><button type="button" onClick={onBack}>取消并返回</button><div><span>{saving ? '正在同步资料库' : savedAt ? `草稿保存于 ${savedAt}` : '尚未写入资料库'}</span>{step !== 'review' ? <button className="editor-next" type="button" onClick={nextStep}>下一步：{steps[currentIndex + 1]?.label}<ArrowRight size={18} weight="bold" /></button> : <button className="editor-verify" type="button" disabled={saving || submitted} onClick={submitForReview}><SealCheck size={19} weight="fill" />{submitted ? '已提交审核' : saving ? '提交中' : '提交审核'}</button>}</div></footer>
     </main>
   )
 }

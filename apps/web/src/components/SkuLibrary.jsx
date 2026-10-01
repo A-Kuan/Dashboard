@@ -14,6 +14,7 @@ import {
   MagnifyingGlass,
   Plus,
   SealCheck,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkle,
   Stack,
@@ -24,6 +25,7 @@ import { assetPath } from '../utils/assetPath'
 import { WorkbenchSidebar } from './WorkbenchSidebar'
 import { SkuEditor } from './SkuEditor'
 import { SkuImportDialog } from './SkuImportDialog'
+import { SkuQualityQueue } from './SkuQualityQueue'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -34,7 +36,10 @@ const sources = [
   { id: 'manual', title: '手工建立空白 SKU', note: '用于暂无外部来源的自有商品', icon: ClipboardText },
 ]
 
-const changeActionLabels = { create_draft: '创建资料草稿', update_draft: '更新资料草稿', verify: '资料核验通过' }
+const changeActionLabels = {
+  create_draft: '创建资料草稿', update_draft: '更新资料草稿', verify: '资料核验通过', submit_review: '提交资料审核',
+  approve_review: '审核通过', reject_review: '退回修改', assign_review: '分配审核人', discontinue: '停用资料', reopen: '恢复为草稿',
+}
 const pageSize = 30
 const emptyRecord = {
   id: 'empty', code: '—', name: '暂无匹配资料', englishName: '', primaryOe: '—', brand: '—', category: '—', status: 'draft', statusLabel: '无结果',
@@ -54,6 +59,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [detailTab, setDetailTab] = useState('identity')
   const [sourceOpen, setSourceOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [qualityOpen, setQualityOpen] = useState(false)
   const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
   const [allRecords, setAllRecords] = useState(skuRecords)
@@ -181,6 +187,16 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     )
   }
 
+  if (qualityOpen) {
+    return (
+      <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
+        <SkuQualityQueue onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
+        {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
+      </div>
+    )
+  }
+
   return (
     <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
@@ -200,6 +216,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         <div className="sku-content">
           <section className="sku-toolbar" aria-label="SKU 搜索和操作">
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
+            <button className="sku-secondary-action" type="button" onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
             <button className="sku-secondary-action" type="button" onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
             <button className="sku-primary-action" type="button" onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
           </section>

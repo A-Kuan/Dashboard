@@ -60,7 +60,7 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
 })
 
-test('completes the source-first SKU draft and verification prototype', async ({ page }) => {
+test('creates a source-first SKU and submits it into the review queue', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()
   await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
@@ -80,8 +80,8 @@ test('completes the source-first SKU draft and verification prototype', async ({
   await page.getByRole('button', { name: '来源与身份' }).click()
   await expect(page.getByLabel('SKU 编码')).not.toHaveValue('保存后自动生成')
   await page.getByRole('button', { name: '4 发布检查' }).click()
-  await page.getByRole('button', { name: '完成核验' }).click()
-  await expect(page.getByRole('heading', { name: '资料核验已通过' })).toBeVisible()
+  await page.getByRole('button', { name: '提交审核' }).click()
+  await expect(page.getByRole('heading', { name: '资料已进入审核队列' })).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-verified-1680.png', fullPage: false })
 
   await page.getByRole('button', { name: '返回 SKU 资料库' }).click()
@@ -92,6 +92,21 @@ test('completes the source-first SKU draft and verification prototype', async ({
   await page.getByRole('button', { name: '编辑 SKU' }).click()
   await expect(page.getByText('编辑 SKU', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
+})
+
+test('reviews a submitted SKU in the data quality workspace', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await expect(page.getByText('数据质量与审核', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '处理队列' })).toBeVisible()
+  await page.getByRole('button', { name: /前制动盘/ }).click()
+  await expect(page.getByText('全部通过', { exact: true })).toBeVisible()
+  await expect(page.getByText('资料审核员', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-review-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '通过审核', exact: true }).click()
+  await page.getByPlaceholder('可填写审核结论（选填）').fill('来源、编号与车型适配均已复核')
+  await page.getByRole('button', { name: '确认通过审核' }).click()
+  await expect(page.getByText('审核已通过')).toBeVisible()
 })
 
 test('previews CSV conflicts and imports only explicitly selected rows', async ({ page }) => {
@@ -121,7 +136,7 @@ test('shows actionable validation issues for an incomplete manual SKU', async ({
 
   await expect(page.getByText('0%', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '4 发布检查' }).click()
-  await page.getByRole('button', { name: '完成核验' }).click()
+  await page.getByRole('button', { name: '提交审核' }).click()
   await expect(page.getByRole('heading', { name: '来源与基本身份' })).toBeVisible()
   await expect(page.getByText('还有 5 项需要补充')).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-incomplete-1680.png', fullPage: false })

@@ -13,7 +13,7 @@
 .sku-profile strong { font-size: 15px; }
 .sku-content { padding: 20px 22px 22px; }
 
-.sku-toolbar { height: 62px; display: grid; grid-template-columns: minmax(500px, 1fr) auto auto; gap: 10px; }
+.sku-toolbar { height: 62px; display: grid; grid-template-columns: minmax(460px, 1fr) auto auto auto; gap: 10px; }
 .sku-searchbox { height: 62px; padding: 0 16px 0 18px; display: flex; align-items: center; gap: 12px; border: 1px solid #d8e1e7; border-radius: 12px; background: rgba(255,255,255,.94); box-shadow: 0 5px 18px rgba(35,54,70,.035); }
 .sku-searchbox input { min-width: 0; flex: 1; height: 100%; border: 0; outline: 0; background: transparent; font-size: 17px; font-weight: 520; }
 .sku-searchbox input::placeholder { color: #778396; opacity: 1; }

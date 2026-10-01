@@ -54,4 +54,5 @@ export const skuStatusFilters = [
   { id: 'verified', label: '已核验', count: 1098 },
   { id: 'review', label: '待核验', count: 126 },
   { id: 'draft', label: '草稿', count: 62 },
+  { id: 'discontinued', label: '已停用', count: 0 },
 ]
