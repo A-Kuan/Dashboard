@@ -45,12 +45,22 @@ function mapRow(row) {
   }
 }
 
-function mapJob(row, rows = []) {
+function mapAttempt(row) {
+  return {
+    id: row.id, attemptNumber: row.attempt_number, attemptType: row.attempt_type, state: row.state,
+    selectedRows: row.selected_rows, importedRows: row.imported_rows, failedRows: row.failed_rows,
+    startedBy: row.started_by, startedAt: row.started_at, completedAt: row.completed_at,
+  }
+}
+
+function mapJob(row, rows = [], attempts = []) {
   return {
     id: row.id, intakeId: row.intake_id, sourceName: row.source_name, state: row.state, totalRows: row.total_rows,
     readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows,
     importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
-    createdAt: row.created_at, committedAt: row.committed_at, version: row.version, rows: rows.map(mapRow),
+    createdAt: row.created_at, committedAt: row.committed_at, version: row.version,
+    attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
+    rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
   }
 }
 
@@ -65,11 +75,30 @@ export function createCatalogImportRepository(pool, catalogRepository) {
   async function getJobWith(client, id) {
     const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1', [id])).rows[0]
     if (!job) return null
-    const rows = await client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id])
-    return mapJob(job, rows.rows)
+    const [rows, attempts] = await Promise.all([
+      client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id]),
+      client.query('SELECT * FROM catalog_import_attempt WHERE job_id=$1 ORDER BY attempt_number DESC', [id]),
+    ])
+    return mapJob(job, rows.rows, attempts.rows)
   }
 
   return {
+    async list({ state = '', page = 1, pageSize = 20 } = {}) {
+      const safePage = Math.max(1, Number(page) || 1)
+      const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 20))
+      const values = []
+      const clauses = []
+      if (state) { values.push(state); clauses.push(`j.state=$${values.length}`) }
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+      const count = await pool.query(`SELECT count(*)::int AS total FROM catalog_import_job j ${where}`, values)
+      values.push(safeSize, (safePage - 1) * safeSize)
+      const { rows } = await pool.query(`SELECT j.*,
+        (SELECT count(*)::int FROM catalog_import_attempt a WHERE a.job_id=j.id) AS attempt_count,
+        (SELECT started_at FROM catalog_import_attempt a WHERE a.job_id=j.id ORDER BY attempt_number DESC LIMIT 1) AS last_attempt_at
+        FROM catalog_import_job j ${where} ORDER BY j.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)
+      return { items: rows.map((row) => mapJob(row)), total: count.rows[0].total, page: safePage, pageSize: safeSize }
+    },
+
     async createPreview(input, actor = '系统操作员') {
       const sourceName = text(input?.sourceName)
       const rows = Array.isArray(input?.rows) ? input.rows : []
@@ -125,7 +154,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
       if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
       if (!selectedIds.length) throw invalid('至少选择一条可导入记录')
 
-      const selectedRows = await withTransaction(pool, async (client) => {
+      const preparedAttempt = await withTransaction(pool, async (client) => {
         const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1 FOR UPDATE', [id])).rows[0]
         if (!job) return null
         if (job.version !== expectedVersion) {
@@ -143,13 +172,16 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         const result = await client.query(`SELECT * FROM catalog_import_row WHERE job_id=$1 AND id=ANY($2::text[]) ORDER BY row_number`, [id, selectedIds])
         if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate'].includes(row.state))) throw invalid('选择中包含不可导入的记录')
         await client.query("UPDATE catalog_import_job SET state='committing',version=version+1 WHERE id=$1", [id])
-        return result.rows
+        const attemptId = randomUUID()
+        await client.query(`INSERT INTO catalog_import_attempt (id,job_id,attempt_number,attempt_type,selected_rows,started_by)
+          VALUES ($1,$2,1,'initial',$3,$4)`, [attemptId, id, result.rows.length, actor])
+        return { rows: result.rows, attemptId }
       })
-      if (!selectedRows) return null
+      if (!preparedAttempt) return null
 
       let imported = 0
       let failed = 0
-      for (const row of selectedRows) {
+      for (const row of preparedAttempt.rows) {
         try {
           const sku = await catalogRepository.create(row.normalized_payload, actor)
           await pool.query("UPDATE catalog_import_row SET state='imported',imported_sku_id=$2,updated_at=now() WHERE id=$1", [row.id, sku.id])
@@ -162,7 +194,66 @@ export function createCatalogImportRepository(pool, catalogRepository) {
       await pool.query(`UPDATE catalog_import_row SET state='skipped',updated_at=now() WHERE job_id=$1 AND state IN ('ready','duplicate')`, [id])
       await pool.query(`UPDATE catalog_import_job SET state=$2,imported_rows=$3,failed_rows=$4,committed_at=now(),version=version+1 WHERE id=$1`,
         [id, failed ? 'partial' : 'completed', imported, failed])
+      await pool.query(`UPDATE catalog_import_attempt SET state=$2,imported_rows=$3,failed_rows=$4,completed_at=now() WHERE id=$1`,
+        [preparedAttempt.attemptId, failed ? 'partial' : 'completed', imported, failed])
       await pool.query("UPDATE catalog_intake SET state=$2,updated_at=now(),version=version+1 WHERE id=(SELECT intake_id FROM catalog_import_job WHERE id=$1)", [id, failed ? 'partial' : 'completed'])
+      return getJobWith(pool, id)
+    },
+
+    async retry(id, input, actor = '系统操作员') {
+      const expectedVersion = Number(input?.expectedVersion)
+      const requestedIds = [...new Set(Array.isArray(input?.rowIds) ? input.rowIds.map(text).filter(Boolean) : [])]
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      const preparedAttempt = await withTransaction(pool, async (client) => {
+        const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!job) return null
+        if (job.version !== expectedVersion) {
+          const error = new Error(`导入批次已更新（当前版本 v${job.version}）`)
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_VERSION_CONFLICT'
+          throw error
+        }
+        if (job.state !== 'partial') {
+          const error = new Error('只有存在失败记录的批次可以重试')
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_NOT_RETRYABLE'
+          throw error
+        }
+        const parameters = [id]
+        let rowFilter = "job_id=$1 AND state='failed'"
+        if (requestedIds.length) { parameters.push(requestedIds); rowFilter += ` AND id=ANY($2::text[])` }
+        const result = await client.query(`SELECT * FROM catalog_import_row WHERE ${rowFilter} ORDER BY row_number`, parameters)
+        if (!result.rows.length || (requestedIds.length && result.rows.length !== requestedIds.length)) throw invalid('没有可重试的失败记录')
+        const attemptNumber = (await client.query('SELECT COALESCE(max(attempt_number),0)::int+1 AS next FROM catalog_import_attempt WHERE job_id=$1', [id])).rows[0].next
+        const attemptId = randomUUID()
+        await client.query("UPDATE catalog_import_row SET state='retrying',error_message='',updated_at=now() WHERE id=ANY($1::text[])", [result.rows.map((row) => row.id)])
+        await client.query("UPDATE catalog_import_job SET state='retrying',version=version+1 WHERE id=$1", [id])
+        await client.query(`INSERT INTO catalog_import_attempt (id,job_id,attempt_number,attempt_type,selected_rows,started_by)
+          VALUES ($1,$2,$3,'retry',$4,$5)`, [attemptId, id, attemptNumber, result.rows.length, actor])
+        return { rows: result.rows, attemptId }
+      })
+      if (!preparedAttempt) return null
+
+      let imported = 0
+      let failed = 0
+      for (const row of preparedAttempt.rows) {
+        try {
+          const sku = await catalogRepository.create(row.normalized_payload, actor)
+          await pool.query("UPDATE catalog_import_row SET state='imported',imported_sku_id=$2,error_message='',updated_at=now() WHERE id=$1", [row.id, sku.id])
+          imported += 1
+        } catch (error) {
+          await pool.query("UPDATE catalog_import_row SET state='failed',error_message=$2,updated_at=now() WHERE id=$1", [row.id, error.message || '重试失败'])
+          failed += 1
+        }
+      }
+      const totals = (await pool.query(`SELECT count(*) FILTER (WHERE state='imported')::int AS imported,
+        count(*) FILTER (WHERE state='failed')::int AS failed FROM catalog_import_row WHERE job_id=$1`, [id])).rows[0]
+      const finalState = totals.failed ? 'partial' : 'completed'
+      await pool.query(`UPDATE catalog_import_job SET state=$2,imported_rows=$3,failed_rows=$4,committed_at=now(),version=version+1 WHERE id=$1`,
+        [id, finalState, totals.imported, totals.failed])
+      await pool.query(`UPDATE catalog_import_attempt SET state=$2,imported_rows=$3,failed_rows=$4,completed_at=now() WHERE id=$1`,
+        [preparedAttempt.attemptId, failed ? 'partial' : 'completed', imported, failed])
+      await pool.query("UPDATE catalog_intake SET state=$2,updated_at=now(),version=version+1 WHERE id=(SELECT intake_id FROM catalog_import_job WHERE id=$1)", [id, finalState])
       return getJobWith(pool, id)
     },
   }

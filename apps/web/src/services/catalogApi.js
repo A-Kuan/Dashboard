@@ -160,6 +160,24 @@ export function commitCatalogImport(jobId, expectedVersion, rowIds) {
   return request(`/api/v2/catalog/imports/${jobId}/commit`, { method: 'POST', body: JSON.stringify({ expectedVersion, rowIds }) })
 }
 
+export function listCatalogImports({ state = '', page = 1, pageSize = 20 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (state) params.set('state', state)
+  return request(`/api/v2/catalog/imports?${params}`)
+}
+
+export function getCatalogImport(jobId) {
+  return request(`/api/v2/catalog/imports/${jobId}`)
+}
+
+export function retryCatalogImport(jobId, expectedVersion, rowIds = []) {
+  return request(`/api/v2/catalog/imports/${jobId}/retry`, { method: 'POST', body: JSON.stringify({ expectedVersion, rowIds }) })
+}
+
+export function getCatalogMetrics(days = 30) {
+  return request(`/api/v2/catalog/metrics?days=${encodeURIComponent(days)}`)
+}
+
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }
 
 export function draftToCatalogPayload(draft, source) {

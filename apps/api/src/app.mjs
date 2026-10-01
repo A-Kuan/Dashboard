@@ -118,6 +118,10 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     return catalogRepository.qualityQueue({ issue: request.query?.issue, status: request.query?.status, assignee: request.query?.assignee, page: request.query?.page, pageSize: request.query?.pageSize })
   })
+  app.get('/api/v2/catalog/metrics', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    return catalogRepository.metrics({ days: request.query?.days })
+  })
   app.get('/api/v2/catalog/duplicates', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     const identifier = String(request.query?.identifier || '').trim()
@@ -178,6 +182,10 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     return reply.code(201).send(await catalogImportRepository.createPreview(request.body, request.headers['x-operator-name'] || '系统操作员'))
   })
+  app.get('/api/v2/catalog/imports', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    return catalogImportRepository.list({ state: request.query?.state, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
   app.get('/api/v2/catalog/imports/:id', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     const job = await catalogImportRepository.get(request.params.id)
@@ -187,6 +195,12 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.post('/api/v2/catalog/imports/:id/commit', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     const job = await catalogImportRepository.commit(request.params.id, request.body, request.headers['x-operator-name'] || '系统操作员')
+    if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
+    return job
+  })
+  app.post('/api/v2/catalog/imports/:id/retry', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    const job = await catalogImportRepository.retry(request.params.id, request.body, request.headers['x-operator-name'] || '系统操作员')
     if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
     return job
   })

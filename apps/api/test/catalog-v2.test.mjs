@@ -28,6 +28,9 @@ function createCatalogRepository() {
       const filtered = withIssues.filter((item) => (!status || item.lifecycleStatus === status) && (!issue || item.qualityIssues.includes(issue)) && (['draft', 'review'].includes(item.lifecycleStatus) || item.qualityIssues.length))
       return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: { draft: filtered.filter((item) => item.lifecycleStatus === 'draft').length, review: filtered.filter((item) => item.lifecycleStatus === 'review').length }, issueCounts: { fitment: filtered.filter((item) => item.qualityIssues.includes('fitment')).length } }
     },
+    async metrics({ days = 30 } = {}) {
+      return { days: Number(days), statusCounts: { draft: items.filter((item) => item.lifecycleStatus === 'draft').length }, issueCounts: { fitment: items.filter((item) => item.completenessScore < 100).length }, completeness: { low: 1, medium: 0, complete: 0 }, reviews: { submitted: 0, approved: 0, rejected: 0, avg_hours: 0, overdue: 0 }, imports: { batches: 0, total_rows: 0, imported_rows: 0, failed_rows: 0, successRate: 0 }, activity: [] }
+    },
     async findDuplicates(identifier, exceptId) {
       const normalized = String(identifier).toUpperCase().replace(/[\s._/#+()\-]/g, '')
       return items.filter((item) => item.id !== exceptId && item.identifiers.some((entry) => entry.normalizedValue === normalized)).map((item) => ({ skuId: item.id, skuCode: item.identity.skuCode, nameZh: item.identity.nameZh }))
@@ -92,12 +95,13 @@ function createCatalogRepository() {
 function createCatalogImportRepository() {
   const jobs = []
   return {
+    async list() { return { items: jobs.map(({ rows, ...job }) => job), total: jobs.length, page: 1, pageSize: 20 } },
     async createPreview(input, actor) {
       const rows = (input.rows || []).map((row, index) => ({
         id: `row-${index + 1}`, rowNumber: index + 2, payload: { identity: { nameZh: row.nameZh }, identifiers: row.primaryOe ? [{ rawValue: row.primaryOe, isPrimary: true }] : [] },
-        state: row.nameZh && row.primaryOe ? row.primaryOe === 'DUPLICATE' ? 'duplicate' : 'ready' : 'invalid', issues: [], duplicateMatches: [],
+        state: row.nameZh && row.primaryOe ? row.primaryOe === 'DUPLICATE' ? 'duplicate' : 'ready' : 'invalid', issues: [], duplicateMatches: [], shouldFail: row.primaryOe === 'FAIL-ONCE',
       }))
-      const job = { id: `import-${jobs.length + 1}`, sourceName: input.sourceName, state: 'preview', totalRows: rows.length, readyRows: rows.filter((row) => row.state === 'ready').length, duplicateRows: rows.filter((row) => row.state === 'duplicate').length, invalidRows: rows.filter((row) => row.state === 'invalid').length, importedRows: 0, failedRows: 0, version: 1, createdBy: actor, rows }
+      const job = { id: `import-${jobs.length + 1}`, sourceName: input.sourceName, state: 'preview', totalRows: rows.length, readyRows: rows.filter((row) => row.state === 'ready').length, duplicateRows: rows.filter((row) => row.state === 'duplicate').length, invalidRows: rows.filter((row) => row.state === 'invalid').length, importedRows: 0, failedRows: 0, version: 1, createdBy: actor, rows, attempts: [] }
       jobs.push(job)
       return job
     },
@@ -111,10 +115,30 @@ function createCatalogImportRepository() {
         error.errorCode = 'IMPORT_VERSION_CONFLICT'
         throw error
       }
-      job.rows = job.rows.map((row) => input.rowIds.includes(row.id) ? { ...row, state: 'imported', importedSkuId: `sku-${row.id}` } : { ...row, state: 'skipped' })
-      job.importedRows = input.rowIds.length
-      job.state = 'completed'
+      job.rows = job.rows.map((row) => input.rowIds.includes(row.id) ? row.shouldFail ? { ...row, state: 'failed', errorMessage: '临时写入失败' } : { ...row, state: 'imported', importedSkuId: `sku-${row.id}` } : { ...row, state: 'skipped' })
+      job.importedRows = job.rows.filter((row) => row.state === 'imported').length
+      job.failedRows = job.rows.filter((row) => row.state === 'failed').length
+      job.state = job.failedRows ? 'partial' : 'completed'
       job.version += 2
+      job.attempts.unshift({ id: 'attempt-1', attemptNumber: 1, attemptType: 'initial', state: job.state, selectedRows: input.rowIds.length, importedRows: job.importedRows, failedRows: job.failedRows })
+      return job
+    },
+    async retry(id, input) {
+      const job = jobs.find((item) => item.id === id)
+      if (!job) return null
+      if (job.version !== input.expectedVersion || job.state !== 'partial') {
+        const error = new Error('批次不能重试')
+        error.statusCode = 409
+        error.errorCode = 'IMPORT_NOT_RETRYABLE'
+        throw error
+      }
+      const failed = job.rows.filter((row) => row.state === 'failed' && (!input.rowIds?.length || input.rowIds.includes(row.id)))
+      job.rows = job.rows.map((row) => failed.some((item) => item.id === row.id) ? { ...row, state: 'imported', shouldFail: false, errorMessage: '', importedSkuId: `sku-retry-${row.id}` } : row)
+      job.importedRows = job.rows.filter((row) => row.state === 'imported').length
+      job.failedRows = job.rows.filter((row) => row.state === 'failed').length
+      job.state = job.failedRows ? 'partial' : 'completed'
+      job.version += 2
+      job.attempts.unshift({ id: 'attempt-2', attemptNumber: 2, attemptType: 'retry', state: 'completed', selectedRows: failed.length, importedRows: failed.length, failedRows: 0 })
       return job
     },
   }
@@ -203,6 +227,10 @@ test('catalog v2 exposes a quality queue and enforces audited lifecycle transiti
   const invalidTransition = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 1, note: '不再销售' } })
   assert.equal(invalidTransition.statusCode, 409)
   assert.equal(invalidTransition.json().error, 'INVALID_STATUS_TRANSITION')
+  const metrics = await app.inject('/api/v2/catalog/metrics?days=14')
+  assert.equal(metrics.statusCode, 200)
+  assert.equal(metrics.json().days, 14)
+  assert.equal(metrics.json().statusCounts.draft, 1)
   await app.close()
 })
 
@@ -267,5 +295,23 @@ test('catalog v2 previews and commits explicitly selected import rows', async ()
   assert.equal(committed.json().importedRows, 1)
   assert.equal(committed.json().rows[1].state, 'skipped')
   assert.equal((await app.inject(`/api/v2/catalog/imports/${job.id}`)).statusCode, 200)
+  assert.equal((await app.inject('/api/v2/catalog/imports')).json().total, 1)
+  await app.close()
+})
+
+test('catalog v2 preserves import attempts and retries only failed rows', async () => {
+  const app = buildApp({ catalogImportRepository: createCatalogImportRepository(), logger: false })
+  const preview = (await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {
+    sourceName: 'retry.csv', rows: [{ nameZh: '临时失败件', primaryOe: 'FAIL-ONCE' }],
+  } })).json()
+  const partial = await app.inject({ method: 'POST', url: `/api/v2/catalog/imports/${preview.id}/commit`, payload: { expectedVersion: 1, rowIds: [preview.rows[0].id] } })
+  assert.equal(partial.json().state, 'partial')
+  assert.equal(partial.json().attempts[0].failedRows, 1)
+  const retried = await app.inject({ method: 'POST', url: `/api/v2/catalog/imports/${preview.id}/retry`, payload: { expectedVersion: 3 } })
+  assert.equal(retried.statusCode, 200)
+  assert.equal(retried.json().state, 'completed')
+  assert.equal(retried.json().attempts.length, 2)
+  assert.equal(retried.json().rows[0].state, 'imported')
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/imports/${preview.id}/retry`, payload: { expectedVersion: 5 } })).statusCode, 409)
   await app.close()
 })

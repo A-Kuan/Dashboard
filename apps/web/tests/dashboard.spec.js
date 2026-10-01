@@ -107,6 +107,11 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await page.getByPlaceholder('可填写审核结论（选填）').fill('来源、编号与车型适配均已复核')
   await page.getByRole('button', { name: '确认通过审核' }).click()
   await expect(page.getByText('审核已通过')).toBeVisible()
+  await page.getByRole('button', { name: '运营洞察' }).click()
+  await expect(page.getByRole('heading', { name: '运营洞察' })).toBeVisible()
+  await expect(page.getByText('审核通过率')).toBeVisible()
+  await expect(page.getByText('平均审核耗时')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-insights-1680.png', fullPage: false })
 })
 
 test('previews CSV conflicts and imports only explicitly selected rows', async ({ page }) => {
@@ -125,7 +130,11 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await page.getByRole('button', { name: '写入 1 条草稿' }).click()
   await expect(page.getByRole('heading', { name: '导入批次已完成' })).toBeVisible()
   await expect(page.getByText('成功写入 1 条，失败 0 条')).toBeVisible()
-  await page.getByRole('button', { name: '完成并返回资料库' }).click()
+  await page.getByRole('button', { name: '查看本次导入记录' }).click()
+  await expect(page.getByText('首次写入')).toBeVisible()
+  await expect(page.getByText('sku-import.csv', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-history-1680.png', fullPage: false })
+  await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
   await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
 })
 

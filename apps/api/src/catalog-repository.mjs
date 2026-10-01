@@ -314,6 +314,56 @@ export function createCatalogRepository(pool) {
       }
     },
 
+    async metrics({ days = 30 } = {}) {
+      const safeDays = Math.min(90, Math.max(7, Number(days) || 30))
+      const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000)
+      const qualityCte = `WITH quality AS (SELECT s.*,${qualityIssueExpression} AS quality_issues FROM catalog_sku s)`
+      const [statuses, issues, completeness, review, imports, activity] = await Promise.all([
+        pool.query('SELECT lifecycle_status,count(*)::int AS count FROM catalog_sku GROUP BY lifecycle_status'),
+        pool.query(`${qualityCte} SELECT issue,count(*)::int AS count FROM quality q CROSS JOIN LATERAL unnest(q.quality_issues) issue GROUP BY issue`),
+        pool.query(`SELECT
+          count(*) FILTER (WHERE completeness_score<60)::int AS low,
+          count(*) FILTER (WHERE completeness_score>=60 AND completeness_score<100)::int AS medium,
+          count(*) FILTER (WHERE completeness_score=100)::int AS complete
+          FROM catalog_sku`),
+        pool.query(`WITH decisions AS (
+          SELECT e.*,(SELECT max(s.changed_at) FROM catalog_review_event s WHERE s.sku_id=e.sku_id AND s.action='submit_review' AND s.changed_at<=e.changed_at) AS submitted_at
+          FROM catalog_review_event e WHERE e.action IN ('approve_review','reject_review') AND e.changed_at >= $1)
+          SELECT
+            (SELECT count(*)::int FROM catalog_review_event WHERE action='submit_review' AND changed_at >= $1) AS submitted,
+            count(*) FILTER (WHERE action='approve_review')::int AS approved,
+            count(*) FILTER (WHERE action='reject_review')::int AS rejected,
+            COALESCE(round((avg(extract(epoch FROM (changed_at-submitted_at))) FILTER (WHERE submitted_at IS NOT NULL)/3600)::numeric,1),0) AS avg_hours,
+            (SELECT count(*)::int FROM catalog_sku WHERE lifecycle_status='review' AND review_due_at<now()) AS overdue
+          FROM decisions`, [since]),
+        pool.query(`SELECT count(*)::int AS batches,COALESCE(sum(total_rows),0)::int AS total_rows,
+          COALESCE(sum(imported_rows),0)::int AS imported_rows,COALESCE(sum(failed_rows),0)::int AS failed_rows
+          FROM catalog_import_job WHERE created_at >= $1`, [since]),
+        pool.query(`WITH clock AS (SELECT (now() AT TIME ZONE 'Asia/Shanghai')::date AS today),
+          dates AS (SELECT generate_series(clock.today-($1::int-1),clock.today,'1 day')::date AS day FROM clock),
+          events AS (SELECT (changed_at AT TIME ZONE 'Asia/Shanghai')::date AS day,
+            count(*) FILTER (WHERE action='create_draft')::int AS created,
+            count(*) FILTER (WHERE action='submit_review')::int AS submitted,
+            count(*) FILTER (WHERE action='approve_review')::int AS approved,
+            count(*) FILTER (WHERE action='reject_review')::int AS rejected
+            FROM catalog_change_log,clock WHERE changed_at >= clock.today-($1::int-1) GROUP BY (changed_at AT TIME ZONE 'Asia/Shanghai')::date)
+          SELECT to_char(dates.day,'YYYY-MM-DD') AS day,COALESCE(created,0)::int AS created,COALESCE(submitted,0)::int AS submitted,
+            COALESCE(approved,0)::int AS approved,COALESCE(rejected,0)::int AS rejected
+          FROM dates LEFT JOIN events USING(day) ORDER BY dates.day`, [safeDays]),
+      ])
+      const importRow = imports.rows[0]
+      const attemptedRows = importRow.imported_rows + importRow.failed_rows
+      return {
+        days: safeDays,
+        statusCounts: Object.fromEntries(statuses.rows.map((row) => [row.lifecycle_status, row.count])),
+        issueCounts: Object.fromEntries(issues.rows.map((row) => [row.issue, row.count])),
+        completeness: completeness.rows[0],
+        reviews: review.rows[0],
+        imports: { ...importRow, successRate: attemptedRows ? Math.round((importRow.imported_rows / attemptedRows) * 100) : 0 },
+        activity: activity.rows.map((row) => ({ ...row, day: row.day instanceof Date ? row.day.toISOString().slice(0, 10) : String(row.day) })),
+      }
+    },
+
     get(id) {
       return getWith(pool, id, true)
     },
