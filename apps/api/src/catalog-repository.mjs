@@ -221,6 +221,59 @@ export function createCatalogRepository(pool) {
     return mapSku(rows[0], await childRows(client, rows[0].id, includeChanges))
   }
 
+  function mergeEntityKey(type, item) {
+    if (type === 'identifier') return `${item.type}:${item.normalizedValue}`
+    if (type === 'evidence') return item.immutableHash || JSON.stringify([item.sourceType, item.sourceSystem, item.sourceRecordId, item.catalogPath, item.figurePosition, item.vinContext])
+    if (type === 'fitment') return JSON.stringify([item.vehiclePlatformId, item.vehicleLabel, item.years, item.yearFrom, item.yearTo, item.engineCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.position, item.includeConditions, item.excludeConditions])
+    return ''
+  }
+
+  async function buildMergePreview(client, input) {
+    const survivorId = String(input?.survivorSkuId || '').trim()
+    const retiredId = String(input?.retiredSkuId || '').trim()
+    const normalizedValue = normalizeSearchIdentifier(input?.normalizedValue)
+    if (!survivorId || !retiredId || survivorId === retiredId || !normalizedValue) throw transitionError('请选择两条不同的 SKU 和冲突编号')
+    const survivor = await getWith(client, survivorId, true)
+    const retired = await getWith(client, retiredId, true)
+    if (!survivor || !retired) throw transitionError('待合并的 SKU 已不存在')
+    if (survivor.lifecycleStatus === 'discontinued' || retired.lifecycleStatus === 'discontinued') throw transitionError('已停用的 SKU 不能再次合并')
+    const ids = [survivor.id, retired.id].sort()
+    const resolution = (await client.query(`SELECT * FROM catalog_identifier_resolution
+      WHERE normalized_value=$1 AND sku_id_a=$2 AND sku_id_b=$3 AND active AND resolution_type='merge_required' LIMIT 1`, [normalizedValue, ids[0], ids[1]])).rows[0]
+    if (!resolution) throw transitionError('请先把该编号冲突标记为“确认为重复，待合并”')
+    const survivorKeys = {
+      identifier: new Set(survivor.identifiers.map((item) => mergeEntityKey('identifier', item))),
+      evidence: new Set(survivor.evidence.map((item) => mergeEntityKey('evidence', item))),
+      fitment: new Set(survivor.fitments.map((item) => mergeEntityKey('fitment', item))),
+    }
+    const additions = {
+      identifiers: retired.identifiers.filter((item) => !survivorKeys.identifier.has(mergeEntityKey('identifier', item))),
+      evidence: retired.evidence.filter((item) => !survivorKeys.evidence.has(mergeEntityKey('evidence', item))),
+      fitments: retired.fitments.filter((item) => !survivorKeys.fitment.has(mergeEntityKey('fitment', item))),
+      interchanges: retired.interchanges,
+    }
+    const identityDifferences = ['nameZh', 'nameEn', 'brandLabel', 'categoryLabel', 'unitLabel']
+      .filter((field) => survivor.identity[field] !== retired.identity[field])
+      .map((field) => ({ field, survivor: survivor.identity[field] || '—', retired: retired.identity[field] || '—' }))
+    return {
+      normalizedValue,
+      resolution: { id: resolution.id, note: resolution.note, resolvedBy: resolution.resolved_by, resolvedAt: resolution.resolved_at },
+      survivor,
+      retired,
+      additions,
+      identityDifferences,
+      summary: {
+        identifiersAdded: additions.identifiers.length,
+        identifiersDeduplicated: retired.identifiers.length - additions.identifiers.length,
+        fitmentsAdded: additions.fitments.length,
+        fitmentsDeduplicated: retired.fitments.length - additions.fitments.length,
+        evidenceAdded: additions.evidence.length,
+        evidenceDeduplicated: retired.evidence.length - additions.evidence.length,
+        interchangesReviewed: additions.interchanges.length,
+      },
+    }
+  }
+
   return {
     async list({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
       const safePage = Math.max(1, Number(page) || 1)
@@ -371,10 +424,97 @@ export function createCatalogRepository(pool) {
       })
     },
 
+    mergePreview(input) {
+      return buildMergePreview(pool, input)
+    },
+
+    async mergeSkus(input, actor = '系统操作员') {
+      const survivorId = String(input?.survivorSkuId || '').trim()
+      const retiredId = String(input?.retiredSkuId || '').trim()
+      const reason = String(input?.reason || '').trim()
+      const expected = new Map([[survivorId, Number(input?.survivorExpectedVersion)], [retiredId, Number(input?.retiredExpectedVersion)]])
+      if (!reason) throw transitionError('请填写合并依据')
+      if (!Number.isInteger(expected.get(survivorId)) || !Number.isInteger(expected.get(retiredId))) throw transitionError('合并版本无效，请刷新后重试')
+      return withTransaction(pool, async (client) => {
+        const ids = [survivorId, retiredId].sort()
+        const locked = (await client.query('SELECT id,version FROM catalog_sku WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE', [ids])).rows
+        if (locked.length !== 2) throw transitionError('待合并的 SKU 已不存在')
+        for (const row of locked) if (row.version !== expected.get(row.id)) throw versionConflict(row.version)
+        const preview = await buildMergePreview(client, input)
+        const beforeSurvivor = preview.survivor
+        const beforeRetired = preview.retired
+
+        const survivorEvidence = new Map(beforeSurvivor.evidence.map((item) => [mergeEntityKey('evidence', item), item.id]))
+        for (const evidence of beforeRetired.evidence) {
+          const existingId = survivorEvidence.get(mergeEntityKey('evidence', evidence))
+          if (existingId) {
+            await client.query('UPDATE catalog_part_identifier SET source_evidence_id=$1 WHERE source_evidence_id=$2', [existingId, evidence.id])
+            await client.query('UPDATE catalog_fitment SET source_evidence_id=$1 WHERE source_evidence_id=$2', [existingId, evidence.id])
+            await client.query('UPDATE catalog_interchange_relation SET source_evidence_id=$1 WHERE source_evidence_id=$2', [existingId, evidence.id])
+            await client.query('DELETE FROM catalog_source_evidence WHERE id=$1', [evidence.id])
+          } else {
+            await client.query('UPDATE catalog_source_evidence SET sku_id=$1 WHERE id=$2', [survivorId, evidence.id])
+            survivorEvidence.set(mergeEntityKey('evidence', evidence), evidence.id)
+          }
+        }
+
+        const survivorIdentifiers = new Map(beforeSurvivor.identifiers.map((item) => [mergeEntityKey('identifier', item), item.id]))
+        let hasPrimary = beforeSurvivor.identifiers.some((item) => item.isPrimary)
+        for (const identifier of beforeRetired.identifiers) {
+          const existingId = survivorIdentifiers.get(mergeEntityKey('identifier', identifier))
+          if (existingId) {
+            await client.query('UPDATE catalog_interchange_relation SET from_identifier_id=$1 WHERE from_identifier_id=$2', [existingId, identifier.id])
+            await client.query('UPDATE catalog_interchange_relation SET to_identifier_id=$1 WHERE to_identifier_id=$2', [existingId, identifier.id])
+            await client.query('DELETE FROM catalog_part_identifier WHERE id=$1', [identifier.id])
+          } else {
+            const keepPrimary = identifier.isPrimary && !hasPrimary
+            await client.query('UPDATE catalog_part_identifier SET sku_id=$1,is_primary=$3 WHERE id=$2', [survivorId, identifier.id, keepPrimary])
+            survivorIdentifiers.set(mergeEntityKey('identifier', identifier), identifier.id)
+            if (keepPrimary) hasPrimary = true
+          }
+        }
+
+        const addedFitmentIds = new Set(preview.additions.fitments.map((item) => item.id))
+        for (const fitment of beforeRetired.fitments) {
+          if (addedFitmentIds.has(fitment.id)) await client.query('UPDATE catalog_fitment SET sku_id=$1 WHERE id=$2', [survivorId, fitment.id])
+          else await client.query('DELETE FROM catalog_fitment WHERE id=$1', [fitment.id])
+        }
+        await client.query('UPDATE catalog_interchange_relation SET sku_id=$1 WHERE sku_id=$2', [survivorId, retiredId])
+        await client.query('DELETE FROM catalog_interchange_relation WHERE sku_id=$1 AND from_identifier_id=to_identifier_id', [survivorId])
+        await client.query(`DELETE FROM catalog_interchange_relation WHERE id IN (
+          SELECT id FROM (SELECT id,row_number() OVER (PARTITION BY sku_id,from_identifier_id,to_identifier_id,relation_type,direction,effective_from,effective_to,conditions ORDER BY created_at,id) AS occurrence
+          FROM catalog_interchange_relation WHERE sku_id=$1) duplicates WHERE occurrence>1)`, [survivorId])
+
+        await client.query(`UPDATE catalog_sku SET lifecycle_status='draft',verification_level='unverified',
+          review_assignee='',review_note='',review_submitted_at=NULL,review_due_at=NULL,discontinued_reason='',
+          completeness_score=(CASE WHEN canonical_name_zh<>'' OR canonical_name_en<>'' THEN 20 ELSE 0 END)
+            +(CASE WHEN (brand_code<>'' OR brand_label<>'') AND (category_code<>'' OR category_label<>'') THEN 20 ELSE 0 END)
+            +(CASE WHEN EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=catalog_sku.id AND i.is_primary AND i.normalized_value<>'') THEN 20 ELSE 0 END)
+            +(CASE WHEN EXISTS (SELECT 1 FROM catalog_fitment f WHERE f.sku_id=catalog_sku.id) THEN 20 ELSE 0 END)
+            +(CASE WHEN EXISTS (SELECT 1 FROM catalog_source_evidence e WHERE e.sku_id=catalog_sku.id AND (e.source_system<>'' OR e.source_record_id<>'' OR e.catalog_path<>'' OR e.raw_payload<>'{}'::jsonb)) THEN 20 ELSE 0 END),
+          updated_by=$2,updated_at=now(),version=version+1 WHERE id=$1`, [survivorId, actor])
+        await client.query(`UPDATE catalog_sku SET lifecycle_status='discontinued',verification_level='unverified',completeness_score=0,
+          review_assignee='',review_note='',review_submitted_at=NULL,review_due_at=NULL,discontinued_reason=$3,
+          updated_by=$2,updated_at=now(),version=version+1 WHERE id=$1`, [retiredId, actor, `已合并至 ${beforeSurvivor.identity.skuCode}`])
+        await client.query('UPDATE catalog_identifier_resolution SET active=false WHERE active AND (sku_id_a=$1 OR sku_id_b=$1)', [retiredId])
+
+        const afterSurvivor = await getWith(client, survivorId)
+        const afterRetired = await getWith(client, retiredId)
+        const mergeId = randomUUID()
+        await client.query(`INSERT INTO catalog_sku_merge
+          (id,survivor_sku_id,retired_sku_id,normalized_value,reason,survivor_version_before,retired_version_before,survivor_snapshot_before,retired_snapshot_before,survivor_snapshot_after,merged_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11)`, [mergeId, survivorId, retiredId, preview.normalizedValue, reason,
+          beforeSurvivor.version, beforeRetired.version, JSON.stringify(beforeSurvivor), JSON.stringify(beforeRetired), JSON.stringify(afterSurvivor), actor])
+        await addChange(client, survivorId, afterSurvivor.version, 'merge_absorb', afterSurvivor, actor, { mergeId, retiredSkuId: retiredId, retiredSkuCode: beforeRetired.identity.skuCode, reason, ...preview.summary })
+        await addChange(client, retiredId, afterRetired.version, 'merge_retire', afterRetired, actor, { mergeId, survivorSkuId: survivorId, survivorSkuCode: beforeSurvivor.identity.skuCode, reason })
+        return { id: mergeId, mergedBy: actor, normalizedValue: preview.normalizedValue, reason, summary: preview.summary, survivor: await getWith(client, survivorId, true), retired: await getWith(client, retiredId, true) }
+      })
+    },
+
     async qualityQueue({ issue = '', status = '', assignee = '', page = 1, pageSize = 30 } = {}) {
       const safePage = Math.max(1, Number(page) || 1)
       const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 30))
-      const clauses = ["(q.lifecycle_status IN ('draft','review') OR cardinality(q.quality_issues)>0)"]
+      const clauses = ["q.lifecycle_status<>'discontinued'", "(q.lifecycle_status IN ('draft','review') OR cardinality(q.quality_issues)>0)"]
       const values = []
       if (issue) { values.push(issue); clauses.push(`$${values.length}=ANY(q.quality_issues)`) }
       if (status) { values.push(status); clauses.push(`q.lifecycle_status=$${values.length}`) }
@@ -409,7 +549,7 @@ export function createCatalogRepository(pool) {
       const qualityCte = `WITH quality AS (SELECT s.*,${qualityIssueExpression} AS quality_issues FROM catalog_sku s)`
       const [statuses, issues, completeness, review, imports, activity] = await Promise.all([
         pool.query('SELECT lifecycle_status,count(*)::int AS count FROM catalog_sku GROUP BY lifecycle_status'),
-        pool.query(`${qualityCte} SELECT issue,count(*)::int AS count FROM quality q CROSS JOIN LATERAL unnest(q.quality_issues) issue GROUP BY issue`),
+        pool.query(`${qualityCte} SELECT issue,count(*)::int AS count FROM quality q CROSS JOIN LATERAL unnest(q.quality_issues) issue WHERE q.lifecycle_status<>'discontinued' GROUP BY issue`),
         pool.query(`SELECT
           count(*) FILTER (WHERE completeness_score<60)::int AS low,
           count(*) FILTER (WHERE completeness_score>=60 AND completeness_score<100)::int AS medium,

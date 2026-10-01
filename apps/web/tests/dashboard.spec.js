@@ -206,6 +206,46 @@ test('reviews and resolves an identifier conflict with evidence', async ({ page 
   await expect(page.getByText('适用范围不同', { exact: true }).first()).toBeVisible()
 })
 
+test('previews and safely merges a confirmed duplicate SKU', async ({ page }) => {
+  const payload = (name, reference, vehicle) => ({
+    identity: { nameZh: name, brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'MERGE-E2E-001', isPrimary: true, evidenceKey: 'source' }, { clientKey: 'reference', type: 'reference', rawValue: reference, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: vehicle, years: '2018-2023', evidenceKey: 'source' }], interchanges: [],
+  })
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const survivor = await (await page.request.post('/api/v2/catalog/skus', { headers, data: payload('合并测试主资料', 'MERGE-REF-A', 'Cayenne (9YA)') })).json()
+  const retired = await (await page.request.post('/api/v2/catalog/skus', { headers, data: payload('合并测试重复资料', 'MERGE-REF-B', 'Touareg (CR)') })).json()
+  const resolved = await page.request.post('/api/v2/catalog/conflicts/resolve', { headers, data: {
+    normalizedValue: 'MERGEE2E001', skuIdA: survivor.id, skuIdB: retired.id, expectedVersionA: survivor.version, expectedVersionB: retired.version,
+    resolutionType: 'merge_required', note: '品牌目录和实物标签复核为同一零件',
+  } })
+  expect(resolved.ok()).toBeTruthy()
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '编号冲突' }).click()
+  await page.getByRole('button', { name: /MERGE-E2E-001/ }).click()
+  await page.getByRole('button', { name: '进入安全合并' }).click()
+  const dialog = page.getByRole('dialog', { name: '安全合并重复 SKU' })
+  await expect(dialog).toBeVisible()
+  await dialog.locator('.sku-merge-choice label').filter({ hasText: '合并测试主资料' }).getByRole('radio').check()
+  await expect(dialog.getByText('新增编号')).toBeVisible()
+  await expect(dialog.getByText('版本锁、双份快照和操作人留痕已开启')).toBeVisible()
+  await dialog.getByPlaceholder(/例如：经 Porsche EPC/).fill('经 Porsche PET 目录和实物标签复核，两条资料确认是同一零件')
+  await dialog.getByLabel(/我已核对保留项与停用项/).check()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-safe-merge-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '确认安全合并' }).click()
+  await expect(page.getByText(/已合并至 .*原 SKU 已安全停用/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /MERGE-E2E-001/ })).toHaveCount(0)
+  const survivorAfter = await (await page.request.get(`/api/v2/catalog/skus/${survivor.id}`, { headers })).json()
+  const retiredAfter = await (await page.request.get(`/api/v2/catalog/skus/${retired.id}`, { headers })).json()
+  expect(survivorAfter.lifecycleStatus).toBe('draft')
+  expect(survivorAfter.identifiers).toHaveLength(3)
+  expect(survivorAfter.fitments).toHaveLength(2)
+  expect(retiredAfter.lifecycleStatus).toBe('discontinued')
+})
+
 test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()

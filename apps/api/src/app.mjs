@@ -149,6 +149,18 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return catalogRepository.resolveIdentifierConflict(request.body, actor.name)
   })
+  app.post('/api/v2/catalog/conflicts/merge-preview', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.merge')
+    if (!actor) return
+    return catalogRepository.mergePreview(request.body)
+  })
+  app.post('/api/v2/catalog/conflicts/merge', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.merge')
+    if (!actor) return
+    return catalogRepository.mergeSkus(request.body, actor.name)
+  })
   app.get('/api/v2/catalog/duplicates', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     const identifier = String(request.query?.identifier || '').trim()

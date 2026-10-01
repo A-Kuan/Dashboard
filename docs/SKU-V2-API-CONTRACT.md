@@ -42,6 +42,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/quality`：读取数据质量与审核队列，可按 `issue`、`status`、`assignee` 筛选。
 - `GET /api/v2/catalog/conflicts`：读取有效 SKU 之间的规范化编号冲突及已有处理结论。
 - `POST /api/v2/catalog/conflicts/resolve`：对一组 SKU 与编号写入带版本锁的人工判断和依据。
+- `POST /api/v2/catalog/conflicts/merge-preview`：在不写入数据的前提下，预览主 SKU、停用 SKU、迁移内容、去重数量及不会自动覆盖的主资料差异。
+- `POST /api/v2/catalog/conflicts/merge`：仅资料管理员可执行；提交两条资料的期望版本和必填依据，原子完成安全合并。
 - `POST /api/v2/catalog/skus/:id/transition`：执行带版本锁的审核状态流转。
 - `POST /api/v2/catalog/skus/bulk-transition`：最多对 100 条资料执行批量提交审核、分配审核人或停用；每条记录单独执行完整性、编号冲突、状态和版本检查。
 
@@ -65,6 +67,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。
 
 编号冲突支持三种结论：`shared_reference`（合法共用参考号）、`separate_scope`（适用范围不同）和 `merge_required`（确认为重复、待合并）。前两种结论会解除对应 SKU 对之间的质量阻断；`merge_required` 继续保留冲突，防止资料在真正合并前通过审核。每次判断必须填写依据，同时提升两条 SKU 的版本并分别写入 `resolve_identifier_conflict` 变更快照。
+
+真正合并前必须先存在有效的 `merge_required` 结论。合并以用户明确选择的主 SKU 为准：主字段不被自动覆盖，编号、适配、来源证据和互换关系在同一事务中迁移并去重；主 SKU 回到草稿重新审核，另一条 SKU 标记为已停用。系统不物理删除 SKU，并在 `catalog_sku_merge` 中保存合并前双份快照、合并后主快照、操作人、依据与版本，同时分别写入 `merge_absorb` 和 `merge_retire` 变更记录。
 
 ### 批量导入
 

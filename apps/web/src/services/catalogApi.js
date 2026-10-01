@@ -221,6 +221,30 @@ export function resolveCatalogConflict(conflict, resolutionType, note) {
   })
 }
 
+function catalogMergePayload(conflict, survivorSkuId) {
+  const survivor = conflict.left.id === survivorSkuId ? conflict.left : conflict.right
+  const retired = conflict.left.id === survivorSkuId ? conflict.right : conflict.left
+  return {
+    normalizedValue: conflict.normalizedValue,
+    survivorSkuId: survivor.id,
+    retiredSkuId: retired.id,
+    survivorExpectedVersion: survivor.version,
+    retiredExpectedVersion: retired.version,
+  }
+}
+
+export function previewCatalogMerge(conflict, survivorSkuId) {
+  return request('/api/v2/catalog/conflicts/merge-preview', {
+    method: 'POST', body: JSON.stringify(catalogMergePayload(conflict, survivorSkuId)),
+  })
+}
+
+export function mergeCatalogSkus(conflict, survivorSkuId, reason) {
+  return request('/api/v2/catalog/conflicts/merge', {
+    method: 'POST', body: JSON.stringify({ ...catalogMergePayload(conflict, survivorSkuId), reason }),
+  })
+}
+
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }
 
 export function draftToCatalogPayload(draft, source) {

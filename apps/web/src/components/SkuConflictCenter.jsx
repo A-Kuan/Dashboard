@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowsLeftRight, CheckCircle, GitMerge, Scales, WarningCircle } from '@phosphor-icons/react'
 import { getCatalogSku, listCatalogConflicts, resolveCatalogConflict } from '../services/catalogApi'
+import { SkuMergeDialog } from './SkuMergeDialog'
 
 const resolutionOptions = [
   { value: 'shared_reference', label: '合法共用参考号', description: '套装、单件或关联商品确实允许共用该参考编号。', icon: ArrowsLeftRight },
@@ -20,7 +21,7 @@ function itemFacts(record) {
   ]
 }
 
-export function SkuConflictCenter({ canResolve = false, onNotify, onResolved }) {
+export function SkuConflictCenter({ canResolve = false, canMerge = false, onNotify, onResolved }) {
   const [conflicts, setConflicts] = useState([])
   const [selectedKey, setSelectedKey] = useState('')
   const [details, setDetails] = useState([])
@@ -29,6 +30,7 @@ export function SkuConflictCenter({ canResolve = false, onNotify, onResolved }) 
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [mergeOpen, setMergeOpen] = useState(false)
 
   const load = async (preferredKey = '') => {
     setLoading(true)
@@ -72,8 +74,8 @@ export function SkuConflictCenter({ canResolve = false, onNotify, onResolved }) 
     }
   }
 
-  return <section className="conflict-workspace">
+  return <><section className="conflict-workspace">
     <article className="conflict-list-panel"><header><div><h2>编号冲突</h2><span>{loading ? '正在检查…' : `${conflicts.length} 组冲突`}</span></div><p>相同规范编号出现在多条有效 SKU 中</p></header><div>{conflicts.map((conflict) => <button type="button" className={selectedKey === conflict.key ? 'selected' : ''} key={conflict.key} onClick={() => setSelectedKey(conflict.key)}><span><WarningCircle size={20} weight="fill" /></span><div><strong>{conflict.rawValues[0]}</strong><small>{conflict.left.nameZh} ↔ {conflict.right.nameZh}</small><em className={conflict.resolution ? conflict.resolution.type : ''}>{conflict.resolution ? resolutionOptions.find((option) => option.value === conflict.resolution.type)?.label : '待处理'}</em></div></button>)}{!conflicts.length && !loading ? <div className="conflict-empty"><CheckCircle size={38} weight="duotone" /><strong>没有编号冲突</strong><span>当前所有有效 SKU 的编号关系清晰</span></div> : null}</div></article>
-    <article className="conflict-detail-panel">{selected ? <><header><div><span>规范编号</span><strong>{selected.normalizedValue}</strong></div><p>处理结论只解释这两条 SKU 的编号关系，不会删除或自动合并资料。</p></header><div className="conflict-compare">{[selected.left, selected.right].map((summary, index) => { const record = details[index]; return <section key={summary.id}><div><span className={`sku-state ${summary.lifecycleStatus}`}>{record?.statusLabel || summary.lifecycleStatus}</span><small>v{summary.version}</small></div><h3>{record?.name || summary.nameZh}</h3><p>{summary.skuCode}</p><dl>{itemFacts(record).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section> })}</div><div className="conflict-resolution"><h3>处理结论</h3><div>{resolutionOptions.map((option) => { const Icon = option.icon; return <label className={resolutionType === option.value ? 'selected' : ''} key={option.value}><input type="radio" name="resolution" value={option.value} checked={resolutionType === option.value} disabled={!canResolve || busy} onChange={() => setResolutionType(option.value)} /><Icon size={20} weight="duotone" /><span><strong>{option.label}</strong><small>{option.description}</small></span></label> })}</div><label className="conflict-note"><span>判断依据</span><textarea value={note} disabled={!canResolve || busy} onChange={(event) => setNote(event.target.value)} placeholder={canResolve ? '记录品牌目录、EPC 图组、适用范围或人工复核依据' : '当前角色没有处理冲突的权限'} /></label>{error ? <p><WarningCircle size={17} />{error}</p> : null}<button type="button" disabled={!canResolve || busy} onClick={resolve}>{busy ? '正在保存…' : selected.resolution ? '更新处理结论' : '保存处理结论'}</button></div></> : <div className="conflict-no-selection"><ArrowsLeftRight size={44} weight="duotone" /><strong>选择一组冲突开始核对</strong></div>}</article>
-  </section>
+    <article className="conflict-detail-panel">{selected ? <><header><div><span>规范编号</span><strong>{selected.normalizedValue}</strong></div><p>处理结论只解释这两条 SKU 的编号关系，不会删除或自动合并资料。</p></header><div className="conflict-compare">{[selected.left, selected.right].map((summary, index) => { const record = details[index]; return <section key={summary.id}><div><span className={`sku-state ${summary.lifecycleStatus}`}>{record?.statusLabel || summary.lifecycleStatus}</span><small>v{summary.version}</small></div><h3>{record?.name || summary.nameZh}</h3><p>{summary.skuCode}</p><dl>{itemFacts(record).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section> })}</div><div className="conflict-resolution"><h3>处理结论</h3><div>{resolutionOptions.map((option) => { const Icon = option.icon; return <label className={resolutionType === option.value ? 'selected' : ''} key={option.value}><input type="radio" name="resolution" value={option.value} checked={resolutionType === option.value} disabled={!canResolve || busy} onChange={() => setResolutionType(option.value)} /><Icon size={20} weight="duotone" /><span><strong>{option.label}</strong><small>{option.description}</small></span></label> })}</div><label className="conflict-note"><span>判断依据</span><textarea value={note} disabled={!canResolve || busy} onChange={(event) => setNote(event.target.value)} placeholder={canResolve ? '记录品牌目录、EPC 图组、适用范围或人工复核依据' : '当前角色没有处理冲突的权限'} /></label>{error ? <p><WarningCircle size={17} />{error}</p> : null}<div className="conflict-actions">{selected.resolution?.type === 'merge_required' ? <button type="button" className="merge" disabled={!canMerge || busy} onClick={() => setMergeOpen(true)}><GitMerge size={17} />{canMerge ? '进入安全合并' : '仅管理员可合并'}</button> : null}<button type="button" disabled={!canResolve || busy} onClick={resolve}>{busy ? '正在保存…' : selected.resolution ? '更新处理结论' : '保存处理结论'}</button></div></div></> : <div className="conflict-no-selection"><ArrowsLeftRight size={44} weight="duotone" /><strong>选择一组冲突开始核对</strong></div>}</article>
+  </section>{mergeOpen && selected ? <SkuMergeDialog conflict={selected} onClose={() => setMergeOpen(false)} onNotify={onNotify} onMerged={() => { load(); onResolved?.() }} /> : null}</>
 }

@@ -46,6 +46,7 @@ function createCatalogRepository() {
       for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) for (let rightIndex = leftIndex + 1; rightIndex < items.length; rightIndex += 1) {
         const left = items[leftIndex]
         const right = items[rightIndex]
+        if (left.lifecycleStatus === 'discontinued' || right.lifecycleStatus === 'discontinued') continue
         const shared = left.identifiers.find((entry) => right.identifiers.some((other) => other.normalizedValue === entry.normalizedValue))
         if (!shared) continue
         const resolution = resolutions.find((entry) => entry.normalizedValue === shared.normalizedValue && entry.skuIdA === left.id && entry.skuIdB === right.id)
@@ -65,6 +66,40 @@ function createCatalogRepository() {
         changes.get(item.id).unshift({ version: item.version, action: 'resolve_identifier_conflict', changedBy: actor, summary: resolution, snapshot: structuredClone(item) })
       }
       return { ...resolution, items: [left, right] }
+    },
+    async mergePreview(input) {
+      const survivor = find(input.survivorSkuId)
+      const retired = find(input.retiredSkuId)
+      const resolution = resolutions.find((entry) => entry.normalizedValue === input.normalizedValue && entry.resolutionType === 'merge_required' && [entry.skuIdA, entry.skuIdB].includes(survivor?.id) && [entry.skuIdA, entry.skuIdB].includes(retired?.id))
+      if (!survivor || !retired || !resolution) {
+        const error = new Error('请先把该编号冲突标记为“确认为重复，待合并”')
+        error.statusCode = 409
+        error.errorCode = 'INVALID_STATUS_TRANSITION'
+        throw error
+      }
+      const additions = {
+        identifiers: retired.identifiers.filter((entry) => !survivor.identifiers.some((item) => item.type === entry.type && item.normalizedValue === entry.normalizedValue)),
+        evidence: retired.evidence.filter((entry) => !survivor.evidence.some((item) => item.immutableHash === entry.immutableHash)),
+        fitments: retired.fitments.filter((entry) => !survivor.fitments.some((item) => item.vehicleLabel === entry.vehicleLabel && item.years === entry.years)),
+        interchanges: retired.interchanges,
+      }
+      return { normalizedValue: input.normalizedValue, survivor, retired, resolution, additions, identityDifferences: [], summary: { identifiersAdded: additions.identifiers.length, identifiersDeduplicated: retired.identifiers.length - additions.identifiers.length, fitmentsAdded: additions.fitments.length, fitmentsDeduplicated: retired.fitments.length - additions.fitments.length, evidenceAdded: additions.evidence.length, evidenceDeduplicated: retired.evidence.length - additions.evidence.length, interchangesReviewed: additions.interchanges.length } }
+    },
+    async mergeSkus(input, actor) {
+      const preview = await this.mergePreview(input)
+      const { survivor, retired } = preview
+      if (survivor.version !== input.survivorExpectedVersion) throw conflict(survivor.version)
+      if (retired.version !== input.retiredExpectedVersion) throw conflict(retired.version)
+      if (!input.reason) throw Object.assign(new Error('请填写合并依据'), { statusCode: 409, errorCode: 'INVALID_STATUS_TRANSITION' })
+      survivor.identifiers.push(...structuredClone(preview.additions.identifiers).map((entry) => ({ ...entry, isPrimary: false })))
+      survivor.evidence.push(...structuredClone(preview.additions.evidence))
+      survivor.fitments.push(...structuredClone(preview.additions.fitments))
+      survivor.interchanges.push(...structuredClone(preview.additions.interchanges))
+      Object.assign(survivor, { version: survivor.version + 1, lifecycleStatus: 'draft', verificationLevel: 'unverified', updatedBy: actor })
+      Object.assign(retired, { version: retired.version + 1, lifecycleStatus: 'discontinued', verificationLevel: 'unverified', discontinuedReason: `已合并至 ${survivor.identity.skuCode}`, identifiers: [], evidence: [], fitments: [], interchanges: [], updatedBy: actor })
+      changes.get(survivor.id).unshift({ version: survivor.version, action: 'merge_absorb', changedBy: actor, summary: { retiredSkuId: retired.id, reason: input.reason }, snapshot: structuredClone(survivor) })
+      changes.get(retired.id).unshift({ version: retired.version, action: 'merge_retire', changedBy: actor, summary: { survivorSkuId: survivor.id, reason: input.reason }, snapshot: structuredClone(retired) })
+      return { id: `merge-${retired.id}`, normalizedValue: input.normalizedValue, reason: input.reason, summary: preview.summary, survivor, retired }
     },
     async get(id) { return find(id) },
     async create(input, actor) {
@@ -346,6 +381,44 @@ test('catalog v2 resolves shared identifier conflicts with an audited decision',
   const audited = (await app.inject(`/api/v2/catalog/skus/${first.id}/changes`)).json().items
   assert.equal(audited[0].action, 'submit_review')
   assert.equal(audited[1].action, 'resolve_identifier_conflict')
+  await app.close()
+})
+
+test('catalog v2 previews and safely merges confirmed duplicate SKUs', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  const makePayload = (name, secondary, vehicle) => ({
+    identity: { nameZh: name, brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'MERGE-001', isPrimary: true, evidenceKey: 'source' }, { clientKey: 'ref', type: 'reference', rawValue: secondary, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: vehicle, years: '2018-2023', evidenceKey: 'source' }],
+  })
+  const survivor = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('主资料', 'REF-A', 'Cayenne (9YA)') })).json()
+  const retired = (await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: makePayload('重复资料', 'REF-B', 'Touareg (CR)') })).json()
+  const resolution = await app.inject({ method: 'POST', url: '/api/v2/catalog/conflicts/resolve', headers: { 'x-operator-role': 'catalog_reviewer' }, payload: {
+    normalizedValue: 'MERGE001', skuIdA: survivor.id, skuIdB: retired.id, expectedVersionA: 1, expectedVersionB: 1,
+    resolutionType: 'merge_required', note: '品牌目录与实物标签复核为同一零件',
+  } })
+  assert.equal(resolution.statusCode, 200)
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/conflicts/merge-preview', headers: { 'x-operator-role': 'catalog_reviewer' }, payload: { normalizedValue: 'MERGE001', survivorSkuId: survivor.id, retiredSkuId: retired.id } })
+  assert.equal(denied.statusCode, 403)
+  const preview = await app.inject({ method: 'POST', url: '/api/v2/catalog/conflicts/merge-preview', payload: { normalizedValue: 'MERGE001', survivorSkuId: survivor.id, retiredSkuId: retired.id } })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.json().summary.identifiersAdded, 1)
+  assert.equal(preview.json().summary.identifiersDeduplicated, 1)
+  assert.equal(preview.json().summary.fitmentsAdded, 1)
+  const merged = await app.inject({ method: 'POST', url: '/api/v2/catalog/conflicts/merge', payload: {
+    normalizedValue: 'MERGE001', survivorSkuId: survivor.id, retiredSkuId: retired.id,
+    survivorExpectedVersion: 2, retiredExpectedVersion: 2, reason: '确认同件，保留资料较完整的主 SKU',
+  } })
+  assert.equal(merged.statusCode, 200)
+  assert.equal(merged.json().survivor.lifecycleStatus, 'draft')
+  assert.equal(merged.json().survivor.identifiers.length, 3)
+  assert.equal(merged.json().survivor.fitments.length, 2)
+  assert.equal(merged.json().retired.lifecycleStatus, 'discontinued')
+  assert.match(merged.json().retired.discontinuedReason, /已合并至/)
+  assert.equal((await app.inject('/api/v2/catalog/conflicts')).json().items.length, 0)
+  assert.equal((await app.inject(`/api/v2/catalog/skus/${survivor.id}/changes`)).json().items[0].action, 'merge_absorb')
+  assert.equal((await app.inject(`/api/v2/catalog/skus/${retired.id}/changes`)).json().items[0].action, 'merge_retire')
   await app.close()
 })
 

@@ -7,6 +7,7 @@ const actionLabels = {
   submit_review: '提交资料审核', approve_review: '审核通过', reject_review: '退回修改', assign_review: '分配审核人',
   discontinue: '停用资料', reopen: '恢复为草稿', restore_version: '恢复历史版本',
   resolve_identifier_conflict: '处理编号冲突',
+  merge_absorb: '吸收合并资料', merge_retire: '合并后停用',
 }
 
 function displayTime(value) {

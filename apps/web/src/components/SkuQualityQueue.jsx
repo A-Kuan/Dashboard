@@ -113,7 +113,7 @@ export function SkuQualityQueue({ capabilities = [], onBack, onEdit, onSaved, on
       </header>
 
       <div className="quality-content">
-        {surface === 'insights' ? <SkuQualityInsights /> : surface === 'conflicts' ? <SkuConflictCenter canResolve={hasCapability('catalog.resolve_conflict')} onNotify={onNotify} onResolved={() => loadQueue()} /> : <>
+        {surface === 'insights' ? <SkuQualityInsights /> : surface === 'conflicts' ? <SkuConflictCenter canResolve={hasCapability('catalog.resolve_conflict')} canMerge={hasCapability('catalog.merge')} onNotify={onNotify} onResolved={() => loadQueue()} /> : <>
         <section className="quality-metrics" aria-label="质量队列概览">
           <article><span><ShieldCheck size={20} weight="duotone" />待处理总数</span><strong>{total}</strong><small>草稿、待审核及风险资料</small></article>
           <article><span><Clock size={20} weight="duotone" />等待审核</span><strong>{counts.statuses.review || 0}</strong><small>优先处理已提交资料</small></article>
