@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -47,8 +47,8 @@ jobs:
         working-directory: apps/web
         run: |
           npm run test:unit
-          npm run test:sites
           npm run build
+          npm run test:sites
 
   browser-regression:
     name: Isolated browser regression
@@ -70,10 +70,10 @@ jobs:
           --health-retries 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
