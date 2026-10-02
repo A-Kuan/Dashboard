@@ -63,6 +63,36 @@ const input = {
   lifecycleStatus: '草稿', oeRelations: [], fitments: [],
 }
 
+test('separates process health from database readiness', async () => {
+  const ready = buildApp({ readinessCheck: async () => ({ database: 'ready', migrations: 13, latestMigration: '013_catalog_sku_merge.sql' }), logger: false })
+  assert.deepEqual((await ready.inject('/api/health')).json(), { status: 'ok', service: 'dashboard-sku-api' })
+  const response = await ready.inject('/api/ready')
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().status, 'ready')
+  assert.equal(response.json().latestMigration, '013_catalog_sku_merge.sql')
+  await ready.close()
+
+  const unavailable = buildApp({ readinessCheck: async () => { const error = new Error('schema missing'); error.code = 'DATABASE_SCHEMA_NOT_READY'; throw error }, logger: false })
+  const rejected = await unavailable.inject('/api/ready')
+  assert.equal(rejected.statusCode, 503)
+  assert.equal(rejected.json().error, 'DATABASE_SCHEMA_NOT_READY')
+  await unavailable.close()
+})
+
+test('serves the versioned SKU import specification and CSV template', async () => {
+  const app = buildApp({ logger: false })
+  const specification = await app.inject('/api/v2/catalog/import-template')
+  assert.equal(specification.statusCode, 200)
+  assert.equal(specification.json().schemaVersion, 'catalog-import-template-v1')
+  assert.equal(specification.json().fields.find((field) => field.key === 'primaryOe').required, true)
+  const csv = await app.inject('/api/v2/catalog/import-template?format=csv')
+  assert.equal(csv.statusCode, 200)
+  assert.match(csv.headers['content-type'], /^text\/csv/)
+  assert.match(csv.headers['content-disposition'], /hushanxing-sku-import-template\.csv/)
+  assert.match(csv.body, /中文名称,英文名称/)
+  await app.close()
+})
+
 test('creates, lists, reads and updates a SKU', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })
@@ -170,6 +200,9 @@ test('reads, saves and resets shared dictionaries', async () => {
   const saved = await app.inject({ method: 'PUT', url: '/api/v1/dictionaries', payload: { version: 1, dictionaries: { sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'Audi', label: 'Audi', sort: 10, enabled: true }] } } } })
   assert.equal(saved.statusCode, 200)
   assert.equal(saved.json().dictionaries.sku_brand.items[1].label, 'Audi')
+  const denied = await app.inject({ method: 'PUT', url: '/api/v1/dictionaries', headers: { 'x-operator-role': 'catalog_editor' }, payload: saved.json() })
+  assert.equal(denied.statusCode, 403)
+  assert.equal(denied.json().details.capability, 'catalog.configure')
   const reset = await app.inject({ method: 'POST', url: '/api/v1/dictionaries/reset' })
   assert.equal(reset.json().dictionaries.sku_brand.items.length, 1)
   await app.close()

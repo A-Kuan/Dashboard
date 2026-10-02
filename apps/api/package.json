@@ -7,6 +7,9 @@
     "dev": "node --watch src/server.mjs",
     "start": "node src/server.mjs",
     "migrate": "node src/migrate.mjs",
+    "backup": "node scripts/backup-database.mjs",
+    "backup:verify": "node scripts/verify-backup.mjs",
+    "assets:verify": "node scripts/verify-epc-assets.mjs",
     "test": "node --test"
   },
   "dependencies": {

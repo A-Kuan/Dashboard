@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>虎山行工作台视觉对比</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 16px; background: #25282c; color: white; font: 14px system-ui, sans-serif; }
+      main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      section { min-width: 0; }
+      h2 { margin: 0 0 8px; font-size: 14px; }
+      .frame { position: relative; width: 100%; aspect-ratio: 1672 / 941; overflow: hidden; background: white; }
+      img { width: 100%; height: 100%; object-fit: contain; display: block; }
+      iframe { position: absolute; inset: 0; width: 1672px; height: 941px; border: 0; transform: scale(.486); transform-origin: top left; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section><h2>参考图 · 1672×941</h2><div class="frame"><img src="/references/workbench-home-reference.png" alt="参考图" /></div></section>
+      <section><h2>实现 · 1672×941</h2><div class="frame"><iframe src="./" title="实现页面"></iframe></div></section>
+    </main>
+  </body>
+</html>

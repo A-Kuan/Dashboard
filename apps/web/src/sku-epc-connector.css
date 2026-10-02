@@ -1,0 +1,231 @@
+.epc-connector-card {
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid #dce2e8;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(28, 39, 51, 0.045);
+}
+
+.epc-intake-topbar > .epc-run-center-button {
+  align-self: center;
+  padding: 10px 12px;
+  border: 1px solid #d6dde4;
+  background: #f7f9fa;
+}
+
+.epc-connector-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1.25fr 1fr;
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.epc-connector-grid > label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.epc-connector-grid > label span {
+  color: #43505d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.epc-connector-grid input,
+.epc-connector-grid select {
+  height: 43px;
+  padding: 0 11px;
+  border: 1px solid #cfd7df;
+  border-radius: 9px;
+  outline: none;
+  background: #fbfcfd;
+  color: #16202a;
+  font: inherit;
+  font-size: 14px;
+}
+
+.epc-connector-grid input:focus,
+.epc-connector-grid select:focus {
+  border-color: #9aaa00;
+  box-shadow: 0 0 0 3px rgba(220, 244, 0, 0.24);
+}
+
+.epc-connector-state {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #e0e5e9;
+  border-radius: 10px;
+  background: #f4f6f8;
+}
+
+.epc-connector-state > span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.epc-connector-state b { font-size: 13px; }
+.epc-connector-state small { margin-top: 3px; color: #727e89; font-size: 12px; }
+.epc-connector-state.ready { border-color: #dbe7b5; background: #f7ffe3; }
+.epc-connector-state.ready b { color: #637400; }
+.epc-connector-state.needs_configuration b { color: #946000; }
+
+.epc-connector-state button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: #dff619;
+  color: #111800;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.epc-connector-state button:disabled {
+  background: #e5e9ec;
+  color: #89929b;
+  cursor: not-allowed;
+}
+
+.epc-connector-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px dashed #cbd4dc;
+  border-radius: 10px;
+  color: #71808d;
+}
+
+.epc-connector-empty span { display: flex; flex-direction: column; }
+.epc-connector-empty strong { color: #303c47; font-size: 13px; }
+.epc-connector-empty small { margin-top: 3px; font-size: 12px; }
+
+.epc-asset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.epc-asset-list a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #dbe2e7;
+  border-radius: 9px;
+  background: #f9fbfc;
+  color: #315a82;
+  text-decoration: none;
+}
+
+.epc-asset-list a:hover { border-color: #d5dfaa; background: #f5fbdc; }
+.epc-asset-list a span { display: flex; flex: 1; flex-direction: column; }
+.epc-asset-list a strong { color: #24313c; font-size: 13px; }
+.epc-asset-list a small { margin-top: 3px; color: #7b8791; font-size: 11px; }
+
+.epc-asset-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 11px;
+  border: 1px solid #dbe2e7;
+  border-radius: 10px;
+  background: #f9fbfc;
+}
+
+.epc-asset-row > svg { margin-top: 2px; color: #456b8e; }
+.epc-asset-row > span { min-width: 0; display: flex; flex-direction: column; }
+.epc-asset-row > span strong { color: #24313c; font-size: 14px; }
+.epc-asset-row > span small { margin-top: 4px; color: #75818c; font-size: 13px; line-height: 1.4; }
+.epc-asset-row > span em { align-self: flex-start; margin-top: 7px; padding: 4px 7px; border-radius: 999px; font-size: 12px; font-weight: 900; font-style: normal; }
+.epc-asset-row > span em.pending { color: #7b6500; background: #fff4c8; }
+.epc-asset-row > span em.mirroring { color: #315f9b; background: #e8f1ff; }
+.epc-asset-row > span em.stored { color: #087246; background: #e5f8ef; }
+.epc-asset-row > span em.failed,
+.epc-asset-row > span em.corrupt { color: #b5372b; background: #ffebe8; }
+.epc-asset-row > span em.external { color: #56626e; background: #eef2f5; }
+.epc-asset-row > span .epc-asset-error { color: #a53b32; }
+.epc-asset-row > div { display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+.epc-asset-list .epc-asset-row a {
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px;
+}
+.epc-asset-row button {
+  min-width: 88px;
+  height: 34px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: #dff619;
+  color: #182100;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.epc-asset-row button:disabled { background: #e8ecef; color: #8a949d; cursor: not-allowed; }
+
+@media (max-width: 1180px) {
+  .epc-connector-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Connector operations keeps secondary text readable on Windows desktop. */
+.epc-run-center .epc-run-workspace {
+  min-height: 440px;
+  height: calc(100vh - 462px);
+}
+
+.epc-run-center .epc-ops-tabs > span,
+.epc-run-center .epc-run-metrics small,
+.epc-run-center .epc-run-list-panel header p,
+.epc-run-center .epc-run-empty span,
+.epc-run-center .epc-run-inspector > footer span {
+  font-size: 14px !important;
+}
+
+.epc-run-center .epc-run-metrics article > span,
+.epc-run-center .epc-run-toolbar form input,
+.epc-run-center .epc-run-toolbar form button,
+.epc-run-center .epc-run-toolbar select,
+.epc-run-center .epc-run-toolbar label > input,
+.epc-run-center .epc-run-clear,
+.epc-run-center .epc-run-list strong,
+.epc-run-center .epc-run-state,
+.epc-run-center .epc-run-inspector h3,
+.epc-run-center .epc-run-inspector dd,
+.epc-run-center .epc-run-error > strong,
+.epc-run-center .epc-run-error > p,
+.epc-run-center .epc-run-inspector > footer button {
+  font-size: 14px !important;
+}
+
+.epc-run-center .epc-run-toolbar label > span,
+.epc-run-center .epc-run-table-head,
+.epc-run-center .epc-run-list small,
+.epc-run-center .epc-run-list > button > span:nth-child(3),
+.epc-run-center .epc-run-list > button > span:nth-child(5),
+.epc-run-center .epc-run-list time,
+.epc-run-center .epc-run-list-panel > footer,
+.epc-run-center .epc-run-list-panel > footer button,
+.epc-run-center .epc-run-inspector dt,
+.epc-run-center .epc-run-link,
+.epc-run-center .epc-run-link button {
+  font-size: 13px !important;
+}

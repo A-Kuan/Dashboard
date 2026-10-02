@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-5f8e5b6`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20260930-bf4e19b`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -56,6 +56,38 @@ cd /opt/dashboard-sku-api/releases/<version>
 sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku npm run migrate
 ```
 
+外部 EPC 连接器为可选服务端配置。生产凭据应通过 systemd `EnvironmentFile` 或等效密钥设施注入，不能写入 release 目录：
+
+```text
+CATALOG_EPC_CONNECTOR_URL=https://connector.example/internal/catalog/collect
+CATALOG_EPC_CONNECTOR_TOKEN=<secret>
+CATALOG_EPC_CONNECTOR_NAME=品牌 EPC
+CATALOG_EPC_CONNECTOR_TIMEOUT_MS=15000
+```
+
+未配置时 `/api/v2/catalog/epc-connectors` 返回 `needs_configuration`，手工 EPC 采集仍可用。启用前应先用非生产 VIN 验证合同版本、超时、上游错误、图组引用和“只生成预览、不直接写 SKU”的边界。
+
+迁移 `025_catalog_epc_connector_runs.sql` 增加外部采集运行账本。发布后应验证失败请求能在 `/api/v2/catalog/epc-connector-runs` 留痕，重试产生带 `retryOf` 的新记录，且 JSON 审计导出包含 `epcConnectorRuns` 计数。
+
+目录资源托管是可选的独立持久化目录，必须放在 release 目录之外并由 `dashboard-sku` 用户独占写入。来源域名白名单使用逗号分隔的主域名；子域名会被允许。
+
+```text
+CATALOG_EPC_ASSET_DIR=/opt/dashboard-sku-api/data/epc-assets
+CATALOG_EPC_ASSET_ALLOWED_HOSTS=assets.provider.example,cdn.provider.example
+CATALOG_EPC_ASSET_MAX_BYTES=12582912
+CATALOG_EPC_ASSET_TIMEOUT_MS=15000
+```
+
+```bash
+sudo install -d -o dashboard-sku -g dashboard-sku -m 0750 /opt/dashboard-sku-api/data/epc-assets
+sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku \
+  CATALOG_EPC_ASSET_DIR=/opt/dashboard-sku-api/data/epc-assets npm run assets:verify
+```
+
+迁移 `026_catalog_epc_assets.sql` 增加资源登记和追加式操作账本。数据库备份只包含资源元数据，不包含二进制文件；每次数据库备份后必须同步快照 `/opt/dashboard-sku-api/data/epc-assets`，记录对应数据库备份名，并在恢复演练后运行 `npm run assets:verify`。不得只恢复其中一侧，也不得把资源目录放在会被版本回滚替换的 `releases/<version>` 下。
+
+迁移器使用 `schema_migration` 账本和 SHA-256 校验：已执行且内容一致的脚本会跳过；缺失脚本会按文件名顺序执行；任何已执行脚本被修改都会以 `MIGRATION_CHECKSUM_MISMATCH` 终止。已发布迁移只能新增后续脚本，禁止原地改写。
+
 清空演示数据前必须先备份：
 
 ```bash
@@ -63,15 +95,52 @@ sudo -u postgres pg_dump -p 5432 -Fc dashboard_sku > /opt/dashboard-sku-api/back
 sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 ```
 
+### 可校验数据库备份
+
+API 工程提供带清单的 PostgreSQL 自定义格式备份。清单记录文件大小、SHA-256、关键业务表行数和归档可读性检查结果；备份文件与清单必须成对保存。
+
+```bash
+cd /opt/dashboard-sku-api/current
+sudo -u dashboard-sku env \
+  PGDATABASE=dashboard_sku \
+  PGUSER=dashboard-sku \
+  CATALOG_BACKUP_DIR=/opt/dashboard-sku-api/backups \
+  RELEASE_REVISION=<git-sha> \
+  npm run backup
+
+npm run backup:verify -- /opt/dashboard-sku-api/backups/<backup>.manifest.json
+```
+
+每次数据库迁移、批量导入和正式数据清理前都必须生成新备份。备份脚本不会删除旧文件；保留策略由服务器任务负责，建议至少保留最近 14 份日备份和 8 份周备份。
+
+恢复不能直接覆盖生产库。先恢复到一次性验证库，核对清单中的关键表数量并执行 API 冒烟测试：
+
+```bash
+sudo -u postgres createdb dashboard_sku_restore_check_YYYYMMDD
+sudo -u postgres pg_restore --no-owner --no-privileges \
+  -d dashboard_sku_restore_check_YYYYMMDD \
+  /opt/dashboard-sku-api/backups/<backup>.dump
+
+PGDATABASE=dashboard_sku_restore_check_YYYYMMDD PGUSER=dashboard-sku npm run migrate
+sudo -u postgres psql -d dashboard_sku_restore_check_YYYYMMDD \
+  -c 'select count(*) from catalog_sku;'
+```
+
+只有恢复验证、关键表数量、接口测试和人工抽查均通过后，才能安排生产切换。切换完成后再删除一次性验证库。
+
+页面“导出资料”生成的 JSON/CSV 用于业务交接和人工核对，不替代数据库备份。JSON 审计包包含架构版本、计数与内容校验值；CSV 是便于 Excel 阅读的扁平视图。
+
 ## 发布结构
 
 ```text
 /opt/dashboard-sku-preview/
-├── current -> releases/20260930-5f8e5b6
+├── current -> releases/20260930-bf4e19b
 └── releases/
     ├── 20260930-f364123/
     ├── 20260930-8ba701f/  # 上一前端版，可回滚
-    └── 20260930-5f8e5b6/
+    ├── 20260930-5f8e5b6/  # 上一前端版，可回滚
+    ├── 20260930-40b8bbb/  # 上一前端版，可回滚
+    └── 20260930-bf4e19b/
         ├── index.html
         ├── assets/
         └── config/dictionaries.json
@@ -88,8 +157,11 @@ nginx -t
 curl -I https://121.41.24.42/sku-preview/
 curl -I https://121.41.24.42/sku-preview/assets/<构建文件>
 curl https://121.41.24.42/sku-preview/api/health
+curl https://121.41.24.42/sku-preview/api/ready
 curl https://121.41.24.42/sku-preview/api/v1/skus
 ```
+
+`/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。发布切流前必须以 `/api/ready` 返回 `200` 和 `status=ready` 为准。
 
 浏览器验收使用：
 
@@ -134,6 +206,10 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:e2e
 `20260930-8ba701f` 前端修复版发布后已在线验证：SKU 详情中的计量单位通过共享字典显示为“片”等名称，不再泄漏 `UNIT_` 编码。线上 17 条 SKU 保持不变，页面无纵向溢出，浏览器控制台无错误；上一版 `20260930-f364123` 保留用于回滚。
 
 `20260930-5f8e5b6` 前端发布后已在线验证方案 2 的表格优先 SKU 工作区：默认显示完整 SKU 表格，右侧约 480px 检查器常驻且可收起恢复；1920×1080 下表格和检查器各自滚动，页面本身无纵向溢出，数据行正文为 16px。首页、静态资源、Nginx 配置与 API 健康检查均正常，浏览器控制台无错误或警告；线上 17 条用户 SKU 完整保留，本次未运行数据库迁移、未重启 API，上一前端版 `20260930-8ba701f` 保留用于回滚。
+
+`20260930-40b8bbb` 前端发布后已在线验证虎山行汽配个人工作台：首页、构建资源、`/skus` 与 `/vehicles` 路由均返回 200，页面标题为“虎山行 · 汽配个人工作台”，API 健康检查正常；线上 17 条用户 SKU 完整保留。本次仅创建并原子切换前端静态 release，未运行数据库迁移、未重启 API 或 Nginx，上一版 `20260930-5f8e5b6` 保留用于回滚。
+
+`20260930-bf4e19b` 前端清理版发布后已在线验证：`apps/web` 仅保留虎山行工作台入口、组件、样式与专属资产，旧 SKU、车型库、字典管理前端模块、服务层和视觉资产均已移除；`/skus`、`/vehicles` 与 `/dictionaries` 不再暴露旧业务页面，统一显示工作台。旧静态零件资产返回 404，生产 bundle 不包含旧业务页面文案。API 服务和线上 17 条 SKU 数据按约定保留但不再由当前前端调用；本次未迁移数据库、未重启 API 或 Nginx，上一版 `20260930-40b8bbb` 保留用于回滚。
 
 ## 回滚
 

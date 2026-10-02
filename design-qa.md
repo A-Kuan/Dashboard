@@ -1,42 +1,82 @@
-# SKU 管理方案 2 设计验收
+# SKU v2 视觉扩展 QA
 
-## 验收对象
+- Source visual truth: `docs/references/workbench/home-reference.png`
+- Implementation: `apps/web/qa-artifacts/implementation-sku-library-default-1680.png`
+- Comparison board: `apps/web/qa-artifacts/sku-extension-design-comparison.png`
+- Focused state: `apps/web/qa-artifacts/implementation-sku-source-modal-1680.png`
+- Collapsed navigation: `apps/web/qa-artifacts/implementation-sidebar-collapsed-1680.png`
+- Collapse comparison: `apps/web/qa-artifacts/sidebar-collapse-design-comparison.png`
+- SKU editor default: `apps/web/qa-artifacts/implementation-sku-editor-identity-1680.png`
+- SKU editor verified: `apps/web/qa-artifacts/implementation-sku-editor-verified-1680.png`
+- SKU editor incomplete: `apps/web/qa-artifacts/implementation-sku-editor-incomplete-1680.png`
+- SKU editor comparison: `apps/web/qa-artifacts/sku-editor-design-comparison.png`
+- Source pixels: 1672 × 941
+- Implementation pixels: 1680 × 945 at CSS viewport 1680 × 945, device scale factor 1
+- Normalization: both sides scaled to 1672 × 941 on a 3344 × 941 side-by-side comparison board
+- State: SKU library default list, first record selected, identity and fitment tab visible
 
-- 设计目标：`/Users/wenshihuang/.codex/generated_images/01a0de39-9245-79d2-a256-5f222224b987/exec-16f4ca0b-2167-462f-aa44-4a00c58fece2.png`
-- 实现截图：`apps/web/qa-artifacts/implementation-sku-master-detail-1920.png`
-- 同屏对照：`apps/web/qa-artifacts/sku-option-two-design-comparison.png`
-- 验收视口：1920 × 1080，设备像素比 1
-- 验收状态：表格模式、右侧检查器展开、概览标签、第 1 条 SKU 选中
+## Full-view comparison
 
-## 核心需求核对
+This is an extension comparison rather than a pixel clone: the source is the home screen and the implementation is a new SKU workspace. The comparison therefore checks the shared visual language and protected shell rather than identical content placement.
 
-- [x] 表格是默认且占主导的工作区，右侧约 480px SKU 检查器持续可见，多 SKU 不再把详情压到页面底部。
-- [x] 表格和检查器各自滚动；检查器可收起并从右侧窄入口恢复，不丢失当前 SKU。
-- [x] 表头固定，选中行高亮；筛选、排序、结果内搜索、列表备用视图、详情标签和编辑入口均保留。
-- [x] 数据行正文为 16px，检查器正文为 15–16px，并使用深色中粗字重；没有模糊字体、透光文字或浅灰微小字。
-- [x] 品牌、零件大类、状态、计量单位继续使用可维护字典的显示名称；没有把编码当名称显示。
-- [x] 图片、OE、适配、来源、库存和价格等已有状态继续来自真实字段，未制造库存或价格数据。
+- Navigation width, logo treatment, active fluorescent-lime state, cold-gray background, white working surfaces and restrained separators remain consistent with the source.
+- The new screen preserves the source's desktop-first density while using a stable list/inspector split appropriate for SKU verification.
+- The top search remains the single dominant search action. Import and new-SKU actions are visually secondary/primary in the expected order.
+- No unrelated legacy page, card system or old business component is reintroduced.
 
-## 浏览器验证
+## Focused comparison
 
-- 1920 × 1080：文档纵向溢出 0px；24 条 SKU 数据时表格和检查器均为独立滚动区域。
-- 默认模式：表格按钮 `aria-pressed=true`，SKU 列表不会先回到窄卡片模式。
-- 字号：表格数据行 16px；检查器正文 16px；标签与按钮 15px 及以上。
-- 交互：表格 / 列表切换、结果搜索、SKU 选择、六个详情标签、关闭 / 恢复检查器和打开编辑页均正常。
-- 浏览器控制台错误与警告：0。
+- Typography: final list labels use 14–15px, part names 17px, OE numbers 18px, navigation 17px and inspector headings 16–23px. Weights and contrast follow the reference's strong operational hierarchy.
+- Spacing: 12px primary gaps, 11–13px radii and lightweight row separators match the reference rhythm. The split view avoids nested card clutter.
+- Colors: cold gray `#edf2f6`, white panels, dark ink and fluorescent lime remain the dominant tokens. Status colors are reserved for meaning.
+- Images and icons: the original logo/avatar assets are reused; Phosphor icons match the existing application. No placeholder imagery, hand-drawn SVG or decorative CSS art was introduced.
+- Copy: labels are specific to SKU identity, fitment and provenance. Mock-data scope is disclosed in the list and source dialog.
+- Source dialog: the focused capture confirms a clear recommended EPC/VIN path, readable descriptions, working close action and a non-persistence disclaimer.
 
-## 对照迭代记录
+## Comparison history
 
-1. 从方案 3 的窄列表 + 大详情工作区切回方案 2 的大表格 + 右侧检查器，并将表格设为默认视图。
-2. 首轮发现表格外壳固定为 `height: 100%`，多行会被裁切而不产生真实滚动；改为内容高度驱动后，24 条数据可独立滚动。
-3. 将状态标签、品牌与分类筛选合并到同一横向控制带，减少无效纵向占用，使实现更接近方案 2 原稿。
-4. 同屏对照后保留系统现有顶部导航与真实数据语义，同时用 16px 表格正文替代原稿较小字号，满足散光阅读要求。
+### Pass 1
 
-## 严重级别结论
+- P2: table metadata, inspector labels and source-dialog supporting copy rendered too small relative to the user's readability requirement.
+- Fix: increased table headers to 14px, row body to 15px, part names to 17px, OE to 18px, inspector labels to 13–16px and dialog supporting copy to 13px; allowed the inspector to scroll rather than compress content.
+- Post-fix evidence: `implementation-sku-library-default-1680.png` and `implementation-sku-source-modal-1680.png`.
 
-- P0：0
-- P1：0
-- P2：0
-- P3：0
+### Pass 2
+
+No actionable P0, P1 or P2 visual differences remain for an existing-product extension. The large empty lower list area is expected with only five mock records and will fill naturally with paginated production data.
+
+### Collapsible navigation pass
+
+- The 72px collapsed rail preserves every icon, the lime active state, group separators and the original navigation order.
+- The boundary control clearly reverses direction between collapse and expand; both states retain accessible names and collapsed items expose native labels.
+- The content area gains the released width. Pointer activation uses a 220ms interruptible FLIP transition for spatial continuity; keyboard activation and reduced-motion mode change state immediately.
+- Refreshing and moving between Home and SKU preserve the selected rail state.
+- No actionable P0, P1 or P2 issues remain in the collapsed view.
+
+### Source-first editor pass
+
+- New and existing SKU records use one editor with four stable stages: source/identity, number relationships, fitment and release checks.
+- The form preserves the workbench shell, cold-gray/white surface hierarchy, fluorescent-lime primary action and high-contrast type. Field values remain 15–18px; helper copy is subordinate without replacing labels.
+- EPC/VIN starts with read-only provenance and complete mock data. Manual creation starts empty, uses a warm warning surface and lists five actionable validation issues.
+- The right validation panel updates from form state; clicking an issue returns to its owning stage. Successful verification and blocked verification are both represented.
+- P2 fixed during the pass: the manual source originally looked verified and the toast overlapped the footer action. The source now has a warning treatment and the toast sits above the footer.
+- No actionable P0, P1 or P2 issues remain in the editor views.
+
+## Browser verification
+
+- Search by part name and result selection: passed.
+- Inspector identity, inventory/price and history tabs: passed.
+- New-SKU source dialog open/close path: passed.
+- Home/SKU navigation and hash route: passed.
+- Existing home search, command center and todo interactions: passed.
+- Console and page errors: none in the final run.
+- Sidebar collapse, persistence, cross-page navigation and restore: passed.
+- Source selection, new draft, number/fitment navigation, mock save, successful verification, missing-field recovery and existing-record editing: passed.
+- Automated browser tests: 7 passed.
+
+## Follow-up polish
+
+- P3: add keyboard row navigation and a denser loading skeleton when the real list API is connected.
+- P3: add a compact list-column preference after real operator usage validates the default fields.
 
 final result: passed

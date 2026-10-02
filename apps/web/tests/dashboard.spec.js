@@ -1,531 +1,703 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
-const fixtureSku = {
-  id: 'sku-fixture-1', skuCode: '95B-867-288-OM8', chineseName: '行李厢内饰板（黑色）',
-  brand: 'SKU_BRAND_PORSCHE_FACTORY', category: '车身及内饰', subcategory: '内饰件',
-  manufacturerPartNumber: '95B 867 288 OM8', primaryOe: '95B 867 288 OM8', unit: 'UNIT_PIECE',
-  lifecycleStatus: '草稿', barcode: '6921734567890', imageUrl: '/assets/parts/selected-part.png',
-  dataSource: 'Porsche EPC', createdBy: '张伟', updatedBy: '张伟',
-  createdAt: '2026-09-27T06:00:00.000Z', updatedAt: '2026-09-27T06:32:00.000Z', fitmentCount: 2, version: 1,
-  changeHistory: [{ id: 'change-1', version: 1, action: '创建草稿', changedBy: '张伟', changedAt: '2026-09-27T06:00:00.000Z', details: { oeRelationCount: 1, fitmentCount: 1 } }],
-  oeRelations: [{ id: 'oe-1', type: '主 OE', oeNumber: '95B 867 288 OM8', brand: 'Porsche', relation: '', source: 'Porsche EPC', confidence: '高' }],
-  fitments: [{ id: 'fit-1', vehicle: 'Porsche Cayenne (9YA)', years: '2018–2023', engine: '全部', body: 'SUV', condition: '', source: 'Porsche EPC', verificationStatus: '已验证' }],
-  sourceEvidence: { title: 'Porsche EPC 原始记录', syncedAt: '2026-09-27', oe: '95B 867 288 OM8', originalName: 'Trim panel, luggage compartment, black', group: '867-05', position: '9', fitment: 'Cayenne (9YA), 2018–2023', referencePrice: '¥ 1,120.50', diagramUrl: '/assets/parts/epc-diagram.png', comparisons: [{ label: 'OE 号', result: '一致', note: '与 EPC 记录一致', passed: true }] },
-}
-
-async function installMockSkuApi(page) {
-  const records = [structuredClone(fixtureSku)]
-  page.__apiRecords = records
-  await page.route('**/api/v1/skus**', async (route) => {
-    const request = route.request()
-    const url = new URL(request.url())
-    const path = url.pathname
-    const method = request.method()
-    const json = (status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-    if (path.endsWith('/validate-code')) {
-      const body = request.postDataJSON()
-      return json(200, { available: !records.some((item) => item.skuCode === body.skuCode && item.id !== body.exceptId) })
-    }
-    const marker = '/api/v1/skus/'
-    const suffix = path.includes(marker) ? decodeURIComponent(path.split(marker)[1]) : ''
-    if (!suffix && method === 'GET') {
-      const query = (url.searchParams.get('q') || '').toLowerCase()
-      const items = query ? records.filter((item) => [item.skuCode, item.primaryOe, item.chineseName, item.brand, item.category, ...item.oeRelations.map((row) => row.oeNumber), ...item.fitments.map((row) => row.vehicle)].join(' ').toLowerCase().includes(query)) : records
-      return json(200, { items })
-    }
-    if (!suffix && method === 'POST') {
-      const body = request.postDataJSON()
-      const item = { id: 'created-sku-1', ...body, version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: '张伟', fitmentCount: body.fitments?.length || 0, changeHistory: [{ version: 1, action: '创建草稿', changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || 0, fitmentCount: body.fitments?.length || 0 } }] }
-      records.unshift(item)
-      return json(201, item)
-    }
-    const transition = suffix.endsWith('/publish') ? 'publish' : suffix.endsWith('/discontinue') ? 'discontinue' : ''
-    const id = suffix.replace(/\/(publish|discontinue)$/, '')
-    const index = records.findIndex((item) => item.id === id || item.skuCode === id)
-    if (index < 0) return json(404, { message: 'SKU 不存在' })
-    if (method === 'GET') return json(200, records[index])
-    if (method === 'PUT' || method === 'POST') {
-      const body = request.postDataJSON()
-      if (body.version !== records[index].version) return json(409, { error: 'SKU_VERSION_CONFLICT', message: '该 SKU 已被其他操作更新，请刷新后再编辑' })
-      const version = records[index].version + 1
-      const action = transition === 'publish' ? '发布 SKU' : transition === 'discontinue' ? '停产 SKU' : '保存草稿'
-      const lifecycleStatus = transition === 'publish' ? '在售' : transition === 'discontinue' ? '停产' : records[index].lifecycleStatus
-      const change = { version, action, changedBy: '张伟', changedAt: new Date().toISOString(), details: { oeRelationCount: body.oeRelations?.length || records[index].oeRelations?.length || 0, fitmentCount: body.fitments?.length || records[index].fitments?.length || 0 } }
-      records[index] = { ...records[index], ...body, lifecycleStatus, version, updatedAt: new Date().toISOString(), updatedBy: '张伟', changeHistory: [change, ...(records[index].changeHistory || [])] }
-      return json(200, records[index])
-    }
-    return json(405, { message: '不支持的操作' })
+test.beforeAll(async ({ request }) => {
+  const response = await request.post('/api/v1/dictionaries/reset', {
+    headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright' },
   })
-}
-
-async function installMockDictionaryApi(page) {
-  let payload = {
-    version: 1,
-    dictionaries: {
-      sku_brand: { label: '品牌', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: 'SKU_BRAND_PORSCHE_FACTORY', label: '保时捷原厂', sort: 10, enabled: true }, { value: 'BMW', label: 'BMW', sort: 20, enabled: true }, { value: 'Mercedes', label: 'Mercedes', sort: 30, enabled: true }] },
-      part_category: { label: '零件大类', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '车身及内饰', label: '车身及内饰', sort: 10, enabled: true }] },
-      unit: { label: '计量单位', items: [{ value: 'UNIT_PIECE', label: '件', sort: 0, enabled: true }, { value: '套', label: '套', sort: 10, enabled: true }, { value: '盒', label: '盒', sort: 20, enabled: true }, { value: '支', label: '支', sort: 30, enabled: true }] },
-      data_source: { label: '数据来源', items: [{ value: '人工录入', label: '人工录入', sort: 0, enabled: true }, { value: 'EPC 导入', label: 'EPC 导入', sort: 10, enabled: true }, { value: '供应商资料', label: '供应商资料', sort: 20, enabled: true }, { value: '历史系统', label: '历史系统', sort: 30, enabled: true }] },
-      oe_type: { label: 'OE 类型', items: [{ value: '主 OE', label: '主 OE', sort: 0, enabled: true }, { value: '替代号', label: '替代号', sort: 10, enabled: true }, { value: '历史号', label: '历史号', sort: 20, enabled: true }] },
-      oe_relation: { label: 'OE 替代关系', items: [{ value: '直接替代', label: '直接替代', sort: 0, enabled: true }, { value: '可互换', label: '可互换', sort: 10, enabled: true }] },
-      confidence_level: { label: '可信度', items: [{ value: '待核验', label: '待核验', sort: 0, enabled: true }, { value: '高', label: '高', sort: 10, enabled: true }] },
-      body_type: { label: '车身形式', items: [{ value: 'SUV', label: 'SUV', sort: 0, enabled: true }, { value: 'Coupe', label: '轿跑 / Coupe', sort: 10, enabled: true }] },
-      verification_status: { label: '验证状态', items: [{ value: '待验证', label: '待验证', sort: 0, enabled: true }, { value: '已验证', label: '已验证', sort: 10, enabled: true }] },
-      sku_status: { label: '状态', items: [{ value: '__all__', label: '全部', sort: 0, enabled: true }, { value: '草稿', label: '草稿', sort: 10, enabled: true }, { value: '在售', label: '在售', sort: 20, enabled: true }] },
-    },
-  }
-  const defaults = structuredClone(payload)
-  await page.route('**/api/v1/dictionaries**', async (route) => {
-    const request = route.request()
-    if (request.method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) })
-    if (request.url().endsWith('/reset')) payload = structuredClone(defaults)
-    else payload = { ...request.postDataJSON(), version: payload.version + 1 }
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) })
-  })
-}
-
-const fixtureVehicle = {
-  id: 'vehicle-95b-20t', vehicleCode: 'POR-MACAN-95B-20T-2014-2018', brand: '保时捷', series: 'Macan', platform: '95B',
-  displayName: '保时捷 Macan 95B', displacement: '2.0L', engineCode: 'CYP', transmissionCode: 'A5B03',
-  yearStart: 2014, yearEnd: 2018, market: '中国市场', bodyType: 'SUV', sampleVin: 'WP1AA2951HLB19468',
-  productionDate: '2016-09-08', dataSource: 'Porsche EPC', verificationStatus: '已验证', lifecycleStatus: '已发布',
-  imageUrl: '/assets/parts/macan-95b.png', sourceEvidence: { title: 'Porsche EPC 原始记录', diagramUrl: '/assets/parts/epc-diagram.png', fitment: 'Macan (95B), 2014–2018' },
-  version: 2, updatedAt: '2026-09-28T06:20:00.000Z', updatedBy: '张伟', requirementCount: 6, linkedRequirementCount: 5,
-  requirements: [
-    { id: 'req-oil', category: '保养滤芯', itemName: '机油格', position: '发动机', quantity: 1, partNumber: '95811556201', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-oil', skuId: 'sku-oil', role: '首选', sku: { id: 'sku-oil', skuCode: '958-115-562-01', chineseName: '机油滤清器', lifecycleStatus: '在售' } }, { id: 'candidate-oil-backup', skuId: 'sku-oil-backup', role: '备选', sku: { id: 'sku-oil-backup', skuCode: 'ALT-958-115-562', chineseName: '机油滤清器备选', lifecycleStatus: '在售' } }] },
-    { id: 'req-seal', category: '保养滤芯', itemName: '机油格密封圈', position: '发动机', quantity: 1, partNumber: '', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '待验证', candidates: [] },
-    { id: 'req-air', category: '保养滤芯', itemName: '空气格', position: '进气系统', quantity: 1, partNumber: '95B129620A', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-air', skuId: 'sku-air', role: '首选', sku: { id: 'sku-air', skuCode: '95B-129-620-A', chineseName: '空气滤清器', lifecycleStatus: '在售' } }] },
-    { id: 'req-cabin-in', category: '空调系统', itemName: '空调格内', position: '内', quantity: 1, partNumber: '8K0819439B', partNumberType: 'OE号', source: 'Porsche EPC', verificationStatus: '已验证', candidates: [{ id: 'candidate-cabin-in', skuId: 'sku-cabin-in', role: '首选', sku: { id: 'sku-cabin-in', skuCode: '8K0-819-439-B', chineseName: '空调滤清器（内）', lifecycleStatus: '在售' } }] },
-    { id: 'req-cabin-out', category: '空调系统', itemName: '空调格外', position: '外', quantity: 1, partNumber: 'PAC819441', partNumberType: '品牌号', source: '供应商资料', verificationStatus: '已验证', candidates: [{ id: 'candidate-cabin-out', skuId: 'sku-cabin-out', role: '首选', sku: { id: 'sku-cabin-out', skuCode: 'PAC-819-441', chineseName: '空调滤清器（外）', lifecycleStatus: '在售' } }] },
-    { id: 'req-brake', category: '制动系统', itemName: '前刹车片', position: '前', quantity: 1, partNumber: 'PAC698151', partNumberType: '品牌号', source: '供应商资料', verificationStatus: '已验证', candidates: [{ id: 'candidate-brake', skuId: 'sku-brake', role: '首选', sku: { id: 'sku-brake', skuCode: 'PAC-698-151', chineseName: '前刹车片', lifecycleStatus: '在售' } }] },
-  ],
-  packages: [{ id: 'package-minor', packageCode: 'MINOR-10K', name: '小保养套餐', intervalText: '10,000 km / 12个月', description: '机油保养和常用滤芯检查', lifecycleStatus: '启用', items: [{ requirementId: 'req-oil', quantity: 1 }, { requirementId: 'req-seal', quantity: 1 }, { requirementId: 'req-air', quantity: 1 }] }],
-  changeHistory: [{ id: 'vehicle-change-1', version: 2, action: '发布车型资料', changedBy: '张伟', changedAt: '2026-09-28T06:20:00.000Z' }],
-}
-
-async function installMockVehicleApi(page) {
-  let record = structuredClone(fixtureVehicle)
-  await page.route('**/api/v1/vehicles**', async (route) => {
-    const request = route.request()
-    const url = new URL(request.url())
-    const method = request.method()
-    const json = (status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-    const marker = '/api/v1/vehicles/'
-    const suffix = url.pathname.includes(marker) ? decodeURIComponent(url.pathname.split(marker)[1]) : ''
-    if (!suffix && method === 'GET') return json(200, { items: [record] })
-    if (suffix.endsWith('/auto-match')) return json(200, record)
-    if (suffix.endsWith('/publish')) return json(200, { ...record, lifecycleStatus: '已发布', version: record.version + 1 })
-    if (suffix && method === 'GET') return json(200, record)
-    if (suffix && method === 'PUT') { record = { ...record, ...request.postDataJSON(), version: record.version + 1 }; return json(200, record) }
-    if (!suffix && method === 'POST') { record = { id: 'new-vehicle', ...request.postDataJSON(), version: 1 }; return json(201, record) }
-    return json(405, { message: '不支持的操作' })
-  })
-}
+  expect(response.ok()).toBeTruthy()
+})
 
 test.beforeEach(async ({ page }) => {
   const errors = []
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
   page.on('pageerror', (error) => errors.push(error.message))
-  await installMockDictionaryApi(page)
-  await installMockSkuApi(page)
-  await page.goto('./')
-  await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
-  await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0))
   page.__consoleErrors = errors
+  await page.goto('./')
+  await expect(page.getByRole('heading', { name: '下午好，虎山行' })).toBeVisible()
+  await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0))
 })
 
 test.afterEach(async ({ page }) => {
   expect(page.__consoleErrors).toEqual([])
 })
 
-test('vehicle library supports parts, packages and quote-ready selection without creating a quote', async ({ page }) => {
-  await installMockVehicleApi(page)
-  await page.goto('./vehicles/vehicle-95b-20t')
-  await expect(page.getByRole('button', { name: '返回车型库' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /保时捷 Macan 95B/ })).toBeVisible()
-  await expect(page.getByRole('row', { name: /机油格.*95811556201/ })).toBeVisible()
-  await expect(page.getByRole('row', { name: /机油格密封圈/ })).toContainText('待补充')
-  await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-library.png', fullPage: false })
-  await page.getByRole('button', { name: '保养套餐' }).click()
-  await expect(page.getByRole('heading', { name: '小保养套餐' })).toBeVisible()
-  await page.getByRole('button', { name: '快速选品' }).last().click()
-  await expect(page.getByLabel('待报价选品')).toBeVisible()
-  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil')
-  await page.getByLabel('机油格 候选 SKU').selectOption('candidate-oil-backup')
-  await expect(page.getByLabel('机油格 候选 SKU')).toHaveValue('candidate-oil-backup')
-  await expect(page.getByLabel('待报价选品')).toContainText('本步只整理待报价商品，不生成报价单')
-  await expect(page.getByRole('button', { name: '生成报价单' })).toHaveCount(0)
-  await page.screenshot({ path: 'qa-artifacts/implementation-vehicle-selection.png', fullPage: false })
-  await page.getByRole('button', { name: '关闭快速选品' }).click()
-  await page.getByRole('button', { name: '编辑车型' }).click()
-  await page.getByRole('button', { name: '常用配件' }).click()
-  await page.getByRole('button', { name: '批量粘贴' }).click()
-  await page.getByLabel('批量配件数据').fill('后雨刮片\t97062818900\t后\t雨刮系统\n助力油\t\t转向系统\t油液与传动')
-  await page.getByRole('button', { name: '导入到配件表' }).click()
-  await expect(page.getByLabel('配件项目 7')).toHaveValue('后雨刮片')
-  await expect(page.getByLabel('零件号 8')).toHaveValue('')
+test('renders the standalone workbench home', async ({ page }) => {
+  await expect(page.getByLabel('工作台搜索')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '业务跟进' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '我的待办' })).toBeVisible()
+  await expect(page.getByText('Pi 助手', { exact: true }).last()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-workbench-home-1680.png', fullPage: false })
 })
 
-test('creates a vehicle from a VIN-recognized template and keeps imported parts selectable', async ({ page }) => {
-  await installMockVehicleApi(page)
-  await page.goto('./vehicles')
-  await page.getByRole('button', { name: '新建车型', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '新建车型' })).toBeVisible()
-  await expect(page.getByRole('tab', { name: 'VIN 识别' })).toHaveAttribute('aria-selected', 'true')
-  await page.getByLabel('VIN 码').fill('WP1AA2951HLB19468')
-  await page.getByRole('button', { name: '识别车型' }).click()
-  await expect(page.getByRole('heading', { name: '识别结果' })).toBeVisible()
-  await expect(page.getByText('将导入 6 个常用配件、1 个保养套餐')).toBeVisible()
-  await expect(page.getByLabel('选择配件 1')).toBeChecked()
-  await page.getByLabel('选择配件 6').uncheck()
-  await expect(page.getByText('将导入 5 个常用配件、1 个保养套餐')).toBeVisible()
-  await page.getByLabel('车型版本编码').fill('POR-MACAN-95B-20T-2018-NEW')
-  await page.screenshot({ path: 'qa-artifacts/implementation-new-vehicle-template.png', fullPage: false })
-  await page.getByRole('button', { name: '创建并导入模板' }).click()
-  await expect(page).toHaveURL(/\/vehicles\/new-vehicle$/)
-  await expect(page.getByRole('heading', { name: /保时捷 Macan 95B/ })).toBeVisible()
+test('supports search, command center and todo interactions', async ({ page }) => {
+  await page.getByLabel('工作台搜索').fill('Q7')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  const commandCenter = page.getByRole('dialog', { name: '命令中心' })
+  await expect(commandCenter).toBeVisible()
+  await expect(commandCenter).toContainText('Audi Q7 (4M)')
+  await page.keyboard.press('Escape')
+  await expect(commandCenter).toHaveCount(0)
+
+  await page.keyboard.press('Control+k')
+  await expect(page.getByRole('dialog', { name: '命令中心' })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  const firstTodo = page.getByRole('button', { name: /确认采购单/ })
+  await firstTodo.click()
+  await expect(firstTodo).toHaveClass(/done/)
 })
 
-test('loads persisted SKU data and captures the default state', async ({ page }) => {
-  await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toHaveClass(/selected/)
-  await expect(page.getByText('保时捷原厂').first()).toBeVisible()
-  await expect(page.locator('body')).not.toContainText('SKU_BRAND_PORSCHE_FACTORY')
-  await expect(page.locator('.detail-facts')).toContainText('件')
-  await expect(page.locator('body')).not.toContainText('UNIT_PIECE')
-  await page.screenshot({ path: 'qa-artifacts/implementation-default.png', fullPage: false })
-})
+test('opens the SKU v2 library and supports its core inspection flow', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await expect(page).toHaveURL(/#\/sku$/)
+  await expect(page.getByRole('heading', { name: 'SKU 资料库' })).toBeVisible()
+  await expect(page.getByText('95B 698 151 H', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-library-default-1680.png', fullPage: false })
 
-test('keeps a readable SKU table and persistent inspector visible together at 1920 by 1080', async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 })
-  const seed = structuredClone(page.__apiRecords[0])
-  page.__apiRecords.splice(0, page.__apiRecords.length, ...Array.from({ length: 24 }, (_, index) => ({
-    ...structuredClone(seed),
-    id: `sku-layout-${index + 1}`,
-    skuCode: `${seed.skuCode}-${String(index + 1).padStart(2, '0')}`,
-    chineseName: index % 2 === 0 ? '行李厢内饰板（黑色）' : '前制动片',
-    updatedAt: `2026-09-${String(Math.max(1, 27 - index)).padStart(2, '0')}T06:32:00.000Z`,
-  })))
-  await page.reload()
+  await page.getByPlaceholder('搜索 SKU、OE 号、配件名称、品牌或适配车型').fill('机油滤清器')
+  await expect(page.getByText('机油滤清器', { exact: true }).first()).toBeVisible()
+  await page.getByText('机油滤清器', { exact: true }).first().click()
+  await expect(page.getByText('06M 198 405 F', { exact: true }).first()).toBeVisible()
 
-  const masterPane = page.locator('.sku-master-pane')
-  const detailPane = page.locator('.sku-detail-workspace')
-  await expect(masterPane).toBeVisible()
-  await expect(detailPane).toBeVisible()
-  await expect(page.getByRole('button', { name: '表格模式' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('columnheader', { name: /SKU编码/ })).toBeVisible()
-  await expect(masterPane).toContainText('24')
-  await expect(detailPane.getByRole('heading', { level: 2 })).toContainText('95B-867-288-OM8-01')
-
-  const metrics = await page.evaluate(() => {
-    const master = document.querySelector('.sku-master-scroll')
-    const detail = document.querySelector('.sku-detail-scroll')
-    const rowText = document.querySelector('.sku-table tbody .sku-col')
-    const detailText = document.querySelector('.sku-detail-workspace')
-    return {
-      documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
-      masterScrollable: master.scrollHeight > master.clientHeight,
-      detailScrollable: detail.scrollHeight > detail.clientHeight,
-      rowFontSize: Number.parseFloat(getComputedStyle(rowText).fontSize),
-      detailFontSize: Number.parseFloat(getComputedStyle(detailText).fontSize),
-    }
-  })
-  expect(metrics.documentOverflow).toBeLessThanOrEqual(1)
-  expect(metrics.masterScrollable).toBe(true)
-  expect(metrics.detailScrollable).toBe(true)
-  expect(metrics.rowFontSize).toBeGreaterThanOrEqual(16)
-  expect(metrics.detailFontSize).toBeGreaterThanOrEqual(15)
-
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-master-detail-1920.png', fullPage: false })
-
-  await detailPane.getByRole('button', { name: '关闭' }).click()
-  await expect(page.getByRole('button', { name: '显示当前 SKU 详情' })).toBeVisible()
-  await page.getByRole('button', { name: '显示当前 SKU 详情' }).click()
-  await expect(detailPane).toBeVisible()
-
-  await page.getByRole('button', { name: '列表模式' }).click()
-  await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('前制动片')
-  await expect(page.getByRole('table', { name: 'SKU 结果列表' }).getByRole('row')).toHaveCount(12)
-  await page.getByRole('textbox', { name: '在 SKU 结果中搜索' }).fill('')
-
-})
-
-test('shows honest empty states instead of demo defaults', async ({ page }) => {
-  Object.assign(page.__apiRecords[0], { imageUrl: '', dataSource: '', sourceEvidence: null, updatedBy: '' })
-  await page.reload()
-  await expect(page.getByRole('heading', { name: 'SKU 管理' })).toBeVisible()
-  await expect(page.locator('img[src*="selected-part.png"]')).toHaveCount(0)
-  await expect(page.getByRole('img', { name: /暂无图片/ })).toHaveCount(2)
-  await expect(page.locator('.part-summary-card .chips span').last()).toHaveText('—')
-  await expect(page.locator('.detail-facts').getByText('—', { exact: true })).toBeVisible()
-  await expect(page.locator('.user-profile')).toContainText('系统操作员')
-  await expect(page.locator('.notification-count')).toHaveCount(0)
-  await page.screenshot({ path: 'qa-artifacts/implementation-empty-values.png', fullPage: false })
-})
-
-const visualStates = [
-  ['expanded', '02-focus-expanded'], ['oe', '03-oe-sku-results'], ['vin', '04-vin-fitment-results'],
-  ['empty', '05-no-results-correction'], ['loading', '06-loading'], ['error', '07-service-error-retry'],
-]
-
-for (const [state, filename] of visualStates) {
-  test(`renders ${state} command-center state without invented records`, async ({ page }) => {
-    await page.goto(`./?state=${state}`)
-    await expect(page.getByLabel('命令中枢搜索')).toHaveClass(new RegExp(`command-panel-${state}`))
-    await page.screenshot({ path: `qa-artifacts/implementation-${filename}.png`, fullPage: false })
-  })
-}
-
-test('creates a SKU through the persisted form flow', async ({ page }) => {
+  await page.getByRole('button', { name: '库存与价格' }).click()
+  await expect(page.getByText('OEM 参考价')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-library-1680.png', fullPage: false })
   await page.getByRole('button', { name: '新建 SKU' }).click()
-  await expect(page).toHaveURL(/\/skus\/new$/)
-  await expect(page.getByRole('combobox', { name: '品牌：请选择品牌' })).toBeVisible()
-  await expect(page.getByRole('combobox', { name: '零件大类：请选择零件大类' })).toBeVisible()
-  await expect(page.getByRole('combobox', { name: '计量单位：请选择计量单位' })).toBeVisible()
-  await expect(page.getByRole('combobox', { name: '数据来源：请选择数据来源' })).toBeVisible()
-  await page.getByLabel('SKU 编码 *').fill('REAL-TEST-001')
-  await page.getByLabel('中文名称 *').fill('流程测试零件')
-  await page.getByRole('combobox', { name: '品牌：请选择品牌' }).click()
-  await page.getByRole('option', { name: '保时捷原厂' }).click()
-  await page.getByRole('combobox', { name: '零件大类：请选择零件大类' }).click()
-  await page.getByRole('option', { name: '车身及内饰' }).click()
-  await expect(page.getByLabel('零件小类')).toBeVisible()
-  await expect(page.getByLabel('制造商零件号')).toBeVisible()
-  await expect(page.getByLabel('零件小类 *')).toHaveCount(0)
-  await expect(page.getByLabel('制造商零件号 *')).toHaveCount(0)
-  await page.getByLabel('主 OE 号 *').fill('REAL TEST 001')
-  await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
-  await page.getByRole('option', { name: '件', exact: true }).click()
-  await page.getByRole('combobox', { name: '数据来源：请选择数据来源' }).click()
-  await page.getByRole('option', { name: '人工录入', exact: true }).click()
-  await page.getByRole('button', { name: '添加 OE 号' }).click()
-  await expect(page.getByLabel('OE 编号 1')).toHaveValue('REAL TEST 001')
-  await expect(page.getByLabel('OE 类型 1')).toHaveValue('主 OE')
-  await expect(page.getByLabel('OE 品牌 1')).toHaveCount(0)
-  await expect(page.getByLabel('OE 来源 1')).toHaveValue('人工录入')
-  await expect(page.getByLabel('OE 可信度 1')).toHaveValue('待核验')
-  await expect(page.getByLabel('OE 关系 1', { exact: true })).toBeDisabled()
-  await page.getByRole('button', { name: '添加适配车型' }).click()
-  await expect(page.getByRole('button', { name: '添加适配车型' })).toBeDisabled()
-  await expect(page.getByLabel('适配来源 1')).toHaveValue('人工录入')
-  await expect(page.getByLabel('验证状态 1')).toHaveValue('待验证')
-  await page.getByLabel('适配车型 1').fill('测试车型')
-  await expect(page.getByRole('button', { name: '添加适配车型' })).toBeEnabled()
-  await page.getByRole('button', { name: '创建草稿' }).click()
-  await expect(page).toHaveURL(/\/skus\/created-sku-1\/edit$/)
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  expect(page.__apiRecords.find((item) => item.id === 'created-sku-1').brand).toBe('SKU_BRAND_PORSCHE_FACTORY')
+  await expect(page.getByRole('dialog', { name: '选择 SKU 创建来源' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
 })
 
-test('restricts identifier fields to Latin codes', async ({ page }) => {
+test('establishes an auditable vehicle platform master record', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '车型平台' }).click()
+  await expect(page.getByRole('heading', { name: '车型平台' })).toBeVisible()
+  await page.getByRole('button', { name: '新建平台' }).click()
+  await page.getByLabel('平台编码').fill('9YA')
+  await page.getByLabel('状态').selectOption('active')
+  await page.getByLabel('品牌名称').fill('Porsche')
+  await page.getByLabel('品牌编码').fill('POR')
+  await page.getByLabel('车系名称').fill('Cayenne')
+  await page.getByLabel('代际名称').fill('第三代')
+  await page.getByLabel('别名').fill('9Y0')
+  await page.getByLabel('起始年款').fill('2018')
+  await page.getByLabel('结束年款').fill('2025')
+  await page.getByLabel('市场代码').fill('CN, EU')
+  await page.getByLabel('车身形式').fill('SUV')
+  await page.getByLabel('来源系统').fill('Porsche PET')
+  await page.getByLabel('来源引用').fill('Cayenne 9YA model index')
+  await page.getByRole('button', { name: '保存平台' }).click()
+  await expect(page.getByText('车型平台已建立')).toBeVisible()
+  await expect(page.getByText('9YA', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-platform-governance-1680.png', fullPage: false })
+  const aliasLookup = await page.request.get('/api/v2/catalog/vehicle-platforms/9Y0')
+  expect(aliasLookup.ok()).toBeTruthy()
+  expect((await aliasLookup.json()).platformCode).toBe('9YA')
+  const duplicateAlias = await page.request.post('/api/v2/catalog/vehicle-platforms', {
+    data: { platformCode: '95B', brandLabel: 'Porsche', seriesLabel: 'Macan', aliases: ['9YA'], lifecycleStatus: 'draft' },
+  })
+  expect(duplicateAlias.status()).toBe(409)
+  expect((await duplicateAlias.json()).error).toBe('PLATFORM_ALIAS_CONFLICT')
+})
+
+test('governs structured vehicle variants under a platform', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '车型平台' }).click()
+  await page.getByRole('button', { name: '版本档案' }).click()
+  await expect(page.getByRole('heading', { name: '车型版本' })).toBeVisible()
+  await page.getByRole('button', { name: '新建版本' }).click()
+  await page.getByLabel('所属平台').selectOption({ index: 1 })
+  await page.getByLabel('状态').selectOption('active')
+  await page.getByLabel('版本编码').fill('9YA-DCBE-CN')
+  await page.getByLabel('版本名称').fill('3.0T 中国版')
+  await page.getByLabel('起始年款').fill('2018')
+  await page.getByLabel('结束年款').fill('2023')
+  await page.getByLabel('发动机代码').fill('DCBE')
+  await page.getByLabel('变速箱代码').fill('A48.00')
+  await page.getByLabel('市场代码').fill('CN')
+  await page.getByLabel('车身形式').fill('SUV')
+  await page.getByLabel('驱动形式').fill('AWD')
+  await page.getByLabel('PR 代码').fill('1ZT')
+  await page.getByLabel('来源系统').fill('Porsche PET')
+  await page.getByLabel('来源引用').fill('9YA DCBE CN model index')
+  await page.getByRole('button', { name: '保存版本' }).click()
+  await expect(page.getByText('车型版本已建立')).toBeVisible()
+  await expect(page.getByText('9YA-DCBE-CN', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-vehicle-variant-1680.png', fullPage: false })
+  const variants = await (await page.request.get('/api/v2/catalog/vehicle-variants?status=active')).json()
+  expect(variants.items[0].engineCodes).toContain('DCBE')
+  expect(variants.items[0].history).toBeUndefined()
+})
+
+test('creates a source-first SKU and submits it into the review queue', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()
-  for (const label of ['SKU 编码 *', '制造商零件号', '主 OE 号 *']) {
-    const input = page.getByLabel(label)
-    await input.fill('AB中文-123/01')
-    await expect(input).toHaveValue('AB-123/01')
-    await expect(input).toHaveAttribute('aria-invalid', 'true')
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+
+  await expect(page.getByRole('heading', { name: '从 VIN / EPC 建立资料' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '连接器采集' })).toBeVisible()
+  await expect(page.getByText('待配置', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '读取目录' })).toBeDisabled()
+  await page.getByPlaceholder('17 位 VIN').fill('WP1ZZZ9Y0KDA12345')
+  await page.getByPlaceholder('例如 Macan 95B / 601-05').fill('Cayenne 9YA / 615-05')
+  await page.getByLabel('第 1 行 OE 编号').fill('9Y0 615 301 M')
+  await page.getByLabel('第 1 行原始名称').fill('前制动盘')
+  await page.getByPlaceholder('601-05-01').fill('615-05-03')
+  await page.getByPlaceholder('位置 6').fill('位置 3')
+  await page.getByPlaceholder('平台 95B').fill('9YA')
+  await page.getByPlaceholder('版本代码').fill('9YA-DCBE-CN')
+  await page.getByPlaceholder('Porsche Macan').fill('Cayenne (9YA)')
+  await page.getByPlaceholder('发动机代码').fill('DCBE')
+  await page.getByPlaceholder('起始年款').fill('2018')
+  await page.getByPlaceholder('结束年款').fill('2023')
+  await page.getByPlaceholder('变速箱代码').fill('A48.00')
+  await page.getByPlaceholder('PR 代码').fill('1ZT')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-intake-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '生成匹配预览' }).click()
+  await expect(page.getByText('写入前匹配预览', { exact: true })).toBeVisible()
+  await expect(page.getByText('建议新建', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('9YA-DCBE-CN', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('现有人工名称、分类、价格不覆盖')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-preview-1680.png', fullPage: false })
+
+  const commitResponse = page.waitForResponse((response) => response.url().includes('/api/v2/catalog/epc-previews/') && response.url().endsWith('/commit') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '确认写入所选记录' }).click()
+  const committed = await (await commitResponse).json()
+  const skuId = committed.items[0].resultingSkuId
+  expect(skuId).toBeTruthy()
+  await expect(page.getByRole('button', { name: '完成并返回资料库' })).toBeVisible()
+  await page.getByRole('button', { name: '返回批次记录' }).click()
+  await expect(page.getByRole('heading', { name: 'EPC 批次记录' })).toBeVisible()
+  await expect(page.getByText('已完成 · 1/1')).toBeVisible()
+  await expect(page.getByText(/Cayenne 9YA \/ 615-05/)).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-history-1680.png', fullPage: false })
+
+  const created = await (await page.request.get(`/api/v2/catalog/skus/${skuId}`)).json()
+  const completed = await page.request.patch(`/api/v2/catalog/skus/${skuId}`, { data: {
+    expectedVersion: created.version,
+    identity: { ...created.identity, nameZh: '前制动盘', brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: created.evidence.map((item) => ({ ...item, clientKey: item.id })),
+    identifiers: created.identifiers.map((item) => ({ ...item, clientKey: item.id, evidenceKey: item.evidenceId })),
+    fitments: created.fitments.map((item) => ({ ...item, evidenceKey: item.evidenceId, includeConditions: { note: '标准制动', rules: [{ field: 'prCode', operator: 'in', values: ['1ZT'] }] } })),
+    interchanges: [],
+  } })
+  expect(completed.ok()).toBeTruthy()
+  const submitted = await page.request.post(`/api/v2/catalog/skus/${skuId}/transition`, { data: { expectedVersion: (await completed.json()).version, action: 'submit_review', assignee: '资料审核员' } })
+  expect(submitted.ok()).toBeTruthy()
+  await page.getByRole('button', { name: '返回资料库' }).click()
+  await expect(page.getByRole('heading', { name: 'SKU 资料库' })).toBeVisible()
+  await expect(page.getByText('前制动盘', { exact: true }).first()).toBeVisible()
+})
+
+test('resumes a partial EPC batch without repeating completed decisions', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const preview = await (await page.request.post('/api/v2/catalog/epc-previews', { headers, data: {
+    sourceSystem: 'Audi ETKA', catalogPath: 'Q7 4M / 121-05', items: [
+      { oe: 'RESUME-EPC-001', originalName: 'Source row one', sourceRecordId: '121-05-01' },
+      { oe: 'RESUME-EPC-002', originalName: 'Source row two', sourceRecordId: '121-05-02' },
+    ],
+  } })).json()
+  const partial = await page.request.post(`/api/v2/catalog/epc-previews/${preview.id}/commit`, { headers, data: { expectedVersion: preview.version, decisions: [{ itemId: preview.items[0].id, action: 'skip' }] } })
+  expect(partial.ok()).toBeTruthy()
+  expect((await partial.json()).state).toBe('partial')
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+  await page.getByRole('button', { name: /批次记录/ }).click()
+  await expect(page.getByText('处理中 · 1/2')).toBeVisible()
+  await page.getByRole('button', { name: /Audi ETKA/ }).click()
+  await expect(page.getByText('已跳过', { exact: true })).toBeVisible()
+  await expect(page.getByText('建议新建', { exact: true }).first()).toBeVisible()
+  await page.getByText('跳过本条', { exact: true }).click()
+  await page.getByRole('button', { name: '确认写入所选记录' }).click()
+  await expect(page.getByRole('button', { name: '完成并返回资料库' })).toBeVisible()
+  await page.getByRole('button', { name: '返回批次记录' }).click()
+  await expect(page.getByText('已完成 · 2/2')).toBeVisible()
+})
+
+test('operates failed EPC connector runs with filters, inspection and linked retries', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const connectors = await (await page.request.get('/api/v2/catalog/epc-connectors', { headers })).json()
+  const connector = connectors.items[0]
+  const vin = 'WP1ZZZ95ZHLB54321'
+  const failed = await page.request.post(`/api/v2/catalog/epc-connectors/${connector.id}/collect`, { headers, data: { vin, catalogPath: '95B / 601-05', groupCode: '601-05' } })
+  expect(failed.status()).toBe(503)
+  expect((await failed.json()).details.connectorRunId).toBeTruthy()
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+  await page.getByRole('button', { name: '运行中心' }).click()
+  await expect(page.getByRole('heading', { name: 'EPC 运行中心' })).toBeVisible()
+  await page.getByLabel('搜索连接器运行').fill(vin)
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByText(vin).first()).toBeVisible()
+  await expect(page.getByRole('strong').filter({ hasText: 'EPC_CONNECTOR_NOT_CONFIGURED' })).toBeVisible()
+  await expect(page.getByText('地址与密钥不会进入浏览器或运行记录')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-epc-run-center-1680.png', fullPage: false })
+
+  const retryResponse = page.waitForResponse((response) => response.url().includes('/api/v2/catalog/epc-connector-runs/') && response.url().endsWith('/retry') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '使用原条件重试' }).click()
+  expect((await retryResponse).status()).toBe(503)
+  page.__consoleErrors = page.__consoleErrors.filter((message) => !message.includes('status of 503'))
+  await expect(page.getByText(vin).first()).toBeVisible()
+  await expect(page.getByText('重试记录').first()).toBeVisible()
+  await expect(page.getByText(/连接器尚未配置/).last()).toBeVisible()
+})
+
+test('reviews a submitted SKU in the data quality workspace', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await expect(page.getByText('数据质量与审核', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '适配治理' }).click()
+  await expect(page.getByRole('heading', { name: '适配关系' })).toBeVisible()
+  await expect(page.getByText('Cayenne (9YA)', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('9YA', { exact: true }).first()).toBeVisible()
+  await page.getByLabel('适配审核结论').fill('EPC 图组、平台、年款与排除条件均已复核')
+  await page.locator('.fitment-governance-scroll').evaluate((element) => { element.scrollTop = 0 })
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-fitment-governance-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '通过适配' }).click()
+  await expect(page.getByText('适配关系已通过审核')).toBeVisible()
+  await page.getByRole('button', { name: '处理队列' }).click()
+  await expect(page.getByRole('heading', { name: '处理队列' })).toBeVisible()
+  await page.getByRole('button', { name: /前制动盘/ }).click()
+  await expect(page.getByText('全部通过', { exact: true })).toBeVisible()
+  await expect(page.getByText('资料审核员', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-review-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '通过审核', exact: true }).click()
+  await page.getByPlaceholder('可填写审核结论（选填）').fill('来源、编号与车型适配均已复核')
+  await page.getByRole('button', { name: '确认通过审核' }).click()
+  await expect(page.getByText('审核已通过')).toBeVisible()
+  await page.getByRole('button', { name: '运营洞察' }).click()
+  await expect(page.getByRole('heading', { name: '运营洞察' })).toBeVisible()
+  await expect(page.getByText('审核通过率')).toBeVisible()
+  await expect(page.getByText('平均审核耗时')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-insights-1680.png', fullPage: false })
+})
+
+test('detects and resolves overlapping fitment scopes before publication', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const created = await (await page.request.post('/api/v2/catalog/skus', { headers, data: {
+    identity: { nameZh: '适配重叠验收件', brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: 'OVERLAP-E2E-01', catalogPath: '9YA/615' }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'OVERLAP-E2E-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [
+      { vehiclePlatformId: '9YA', vehicleLabel: 'Cayenne (9YA)', years: '2018–2022', yearFrom: 2018, yearTo: 2022, position: '前轴', prCodes: ['1ZT'], includeConditions: { note: '标准制动' }, evidenceKey: 'source' },
+      { vehiclePlatformId: '9YA', vehicleLabel: 'Cayenne (9YA)', years: '2021–2025', yearFrom: 2021, yearTo: 2025, position: '前轴', prCodes: ['1ZK'], includeConditions: { note: '增强制动' }, evidenceKey: 'source' },
+    ],
+  } })).json()
+  expect(created.fitments).toHaveLength(2)
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '车型平台' }).click()
+  await page.getByRole('button', { name: /\u51b2\u7a81\u626b\u63cf/ }).click()
+  await page.getByRole('button', { name: /\u8303\u56f4\u91cd\u53e0/ }).click()
+  await expect(page.getByText('适配重叠验收件', { exact: true }).first()).toBeVisible()
+  await page.getByText('允许重叠', { exact: true }).click()
+  await page.getByLabel('适配冲突处理依据').fill('PR 1ZT 与 1ZK 对应不同制动配置，允许年款重叠')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-fitment-conflict-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '提交处理结论' }).click()
+  await expect(page.getByText('适配冲突已留痕处理')).toBeVisible()
+})
+
+test('compares historical SKU versions and restores one as a new draft', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByText('前制动盘', { exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑 SKU' }).click()
+  await page.getByLabel('中文标准名称').fill('前制动盘（误改）')
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText(/草稿已保存到 SKU 资料库/)).toBeVisible()
+  await page.getByLabel('返回 SKU 资料库').click()
+  await page.getByRole('button', { name: '变更记录' }).click()
+  await page.getByRole('button', { name: /v5 · 审核通过/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'SKU 版本对比' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('审核状态不会回退')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-version-compare-1680.png', fullPage: false })
+  await dialog.getByPlaceholder('例如：撤销错误的 OE 与车型适配修改').fill('撤销测试中的错误名称修改')
+  await dialog.getByRole('button', { name: '恢复 v5 为新草稿' }).click()
+  await expect(page.getByText(/已从 v5 恢复为新草稿/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: '前制动盘' })).toBeVisible()
+})
+
+test('previews CSV conflicts and imports only explicitly selected rows', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('先用标准模板整理')).toBeVisible()
+  const templateDownload = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: '下载标准模板' }).click()
+  expect((await templateDownload).suggestedFilename()).toBe('hushanxing-sku-import-template.csv')
+  await dialog.getByRole('button', { name: '查看字段说明' }).click()
+  await expect(dialog.getByText('来源记录ID', { exact: true })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-template-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '查看字段说明' }).click()
+  const csv = '\uFEFF中文名称,品牌,分类,单位,主 OE,车型,年款范围,来源系统\n后刹车片,Porsche OE,制动系统 / 制动片,件,TEST-IMPORT-001,Macan (95B),2014-2018,Porsche PET\n重复前制动盘,Porsche OE,制动系统 / 制动盘,件,9Y0 615 301 M,Cayenne (9YA),2018-2023,Porsche PET\n无编号件,Porsche OE,制动系统 / 制动片,件,,,,供应商资料\n文件重复件 A,Porsche OE,制动系统 / 制动片,件,FILE-DUP-001,Macan (95B),2014-2018,Porsche PET\n文件重复件 B,Porsche OE,制动系统 / 制动片,件,FILE DUP 001,Macan (95B),2014-2018,Porsche PET'
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'sku-import.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(dialog.getByRole('heading', { name: '存在阻断项' })).toBeVisible()
+  await expect(dialog.getByText('资料覆盖率')).toBeVisible()
+  await expect(dialog.getByText('问题汇总')).toBeVisible()
+  await expect(page.getByText('总行数')).toBeVisible()
+  await expect(page.getByText('疑似重复', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('不可导入', { exact: true }).first()).toBeVisible()
+  await expect(page.getByLabel('选择第 3 行')).not.toBeChecked()
+  await expect(page.getByLabel('选择第 4 行')).toBeDisabled()
+  await expect(page.getByLabel('选择第 5 行')).not.toBeChecked()
+  await expect(dialog.getByText('与文件第 6 行使用相同主 OE')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-preview-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '写入 1 条草稿' }).click()
+  await expect(page.getByRole('heading', { name: '导入批次已完成' })).toBeVisible()
+  await expect(page.getByText('成功写入 1 条，失败 0 条')).toBeVisible()
+  await page.getByRole('button', { name: '查看本次导入记录' }).click()
+  await expect(page.getByText('首次写入')).toBeVisible()
+  await expect(page.getByText('sku-import.csv', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-history-1680.png', fullPage: false })
+  await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
+  await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const repeatedDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await repeatedDialog.locator('input[type=file]').setInputFiles({ name: 'renamed-copy.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(repeatedDialog.getByText('该文件内容已导入过')).toBeVisible()
+  await expect(repeatedDialog.getByText('首次写入')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-idempotency-1680.png', fullPage: false })
+  await repeatedDialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
+})
+
+test('maps supplier CSV headers and reuses a saved supplier profile', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const supplierCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n空调滤芯,4M0 819 439 B,MANN,Audi Q7 (4M),供应商特价批次'
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a.csv', mimeType: 'text/csv', buffer: Buffer.from(supplierCsv) })
+  await expect(dialog.getByRole('heading', { name: '确认供应商字段映射' })).toBeVisible()
+  await expect(dialog.getByLabel('映射 中文名称')).toHaveValue('0')
+  await expect(dialog.getByLabel('映射 主 OE')).toHaveValue('1')
+  await expect(dialog.getByLabel('映射 品牌')).toHaveValue('2')
+  await expect(dialog.getByLabel('映射 车型')).toHaveValue('3')
+  await expect(dialog.locator('.sku-import-mapping > footer p').getByText('内部备注', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('保存为供应商方案')).toBeVisible()
+  await expect(dialog.getByLabel('映射方案名称')).toHaveValue('supplier-a 映射方案')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-mapping-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(dialog.getByText('空调滤芯', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('4M0 819 439 B', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const reuseDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const nextCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n机油滤芯,06L 115 562 B,MANN,Audi A4 (B9),常规补货'
+  await reuseDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-202610.csv', mimeType: 'text/csv', buffer: Buffer.from(nextCsv) })
+  await expect(reuseDialog.getByText('已自动套用“supplier-a 映射方案”')).toBeVisible()
+  await expect(reuseDialog.getByLabel('映射 主 OE')).toHaveValue('1')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-reuse-1680.png', fullPage: false })
+  await reuseDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(reuseDialog.getByText('机油滤芯', { exact: true })).toBeVisible()
+  await reuseDialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const driftDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const driftCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注,仓库\n空气滤芯,8W0 133 843 C,MANN,Audi A4 (B9),新版表头,华东仓'
+  await driftDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-202611.csv', mimeType: 'text/csv', buffer: Buffer.from(driftCsv) })
+  await expect(driftDialog.getByText('检测到“supplier-a 映射方案”的表头发生变化')).toBeVisible()
+  await expect(driftDialog.getByText(/新增：仓库/)).toBeVisible()
+  await driftDialog.getByRole('button', { name: '应用已有方案' }).click()
+  await expect(driftDialog.getByRole('button', { name: '已应用可匹配字段' })).toBeDisabled()
+  await expect(driftDialog.getByText('同步更新供应商方案')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-drift-1680.png', fullPage: false })
+  await driftDialog.getByRole('button', { name: '关闭' }).first().click()
+})
+
+test('manages supplier mapping profiles without deleting audit history', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await dialog.getByRole('button', { name: '映射方案' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商映射方案' })).toBeVisible()
+  await expect(dialog.getByText('supplier-a 映射方案', { exact: true }).first()).toBeVisible()
+  await expect(dialog.getByText('字段对应关系')).toBeVisible()
+  await expect(dialog.getByText('供应商品名', { exact: true }).last()).toBeVisible()
+
+  await dialog.getByRole('button', { name: '编辑导入规则' }).click()
+  await dialog.getByLabel('默认品牌').fill('MANN')
+  await dialog.getByLabel('默认单位').fill('件')
+  await dialog.getByLabel('来源系统').fill('供应商 A CSV')
+  await dialog.locator('.sku-profile-rule-editor').getByRole('button', { name: '保存规则' }).click()
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('品牌 MANN')
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('单位 件')
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('来源 供应商 A CSV')
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新导入规则', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '编辑值映射' }).click()
+  await dialog.getByRole('button', { name: '添加品牌映射' }).click()
+  await dialog.getByLabel('品牌供应商值 1').fill('MANN')
+  await dialog.getByLabel('品牌标准值 1').fill('MANN-FILTER')
+  await dialog.getByRole('button', { name: '添加品牌映射' }).click()
+  await dialog.getByLabel('品牌供应商值 2').fill('博世中国')
+  await dialog.getByLabel('品牌标准值 2').fill('BOSCH')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-editor-1680.png', fullPage: false })
+  await dialog.locator('.sku-profile-value-editor').getByRole('button', { name: '保存映射' }).click()
+  await expect(dialog.locator('.sku-profile-value-summary')).toContainText('品牌2 条')
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新值映射', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '重命名方案' }).click()
+  await dialog.getByLabel('新的方案名称').fill('供应商 A 标准映射')
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商 A 标准映射' })).toBeVisible()
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('重命名', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '复制方案' }).click()
+  await dialog.getByLabel('复制方案名称').fill('供应商 A 备用映射')
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商 A 备用映射' })).toBeVisible()
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('复制方案', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '停用方案' }).click()
+  await expect(dialog.getByText('停用后不再参与自动匹配')).toBeVisible()
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.locator('.sku-profile-inspector > header').getByText('已停用')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-manager-1680.png', fullPage: false })
+
+  await dialog.getByRole('button', { name: '恢复方案' }).click()
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.locator('.sku-profile-inspector > header').getByText('启用中')).toBeVisible()
+  await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const rulesDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const rulesCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n　燃油  滤芯　,ａb-１２３,,Audi A4 (B9),规则测试'
+  await rulesDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-rules.csv', mimeType: 'text/csv', buffer: Buffer.from(rulesCsv) })
+  await expect(rulesDialog.getByText('导入规则预览 · 第 1 行')).toBeVisible()
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('ａb-１２３')
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('AB-123')
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('MANN-FILTER')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-rule-preview-1680.png', fullPage: false })
+  await rulesDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(rulesDialog.getByText('燃油 滤芯', { exact: true }).first()).toBeVisible()
+  await expect(rulesDialog.getByText('AB-123', { exact: true })).toBeVisible()
+  await expect(rulesDialog.getByText('MANN-FILTER', { exact: true })).toBeVisible()
+  await rulesDialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const valueDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const valueCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n火花塞,VALUE-MAP-001,博世中国,Audi A4 (B9),已配置映射\n点火线圈,VALUE-MAP-002,曼牌中国,Audi A4 (B9),可映射标准品牌\n高压油泵,VALUE-MAP-003,新品牌中国,Audi A4 (B9),需要申请新标准值'
+  await valueDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-values.csv', mimeType: 'text/csv', buffer: Buffer.from(valueCsv) })
+  await expect(valueDialog.getByText('2 行值需要人工确认')).toBeVisible()
+  await expect(valueDialog.getByText('品牌 · 曼牌中国 × 1')).toBeVisible()
+  await valueDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(valueDialog.getByText('供应商值异常队列')).toBeVisible()
+  await expect(valueDialog.getByText('曼牌中国', { exact: true }).first()).toBeVisible()
+  await expect(valueDialog.getByText('新品牌中国', { exact: true }).first()).toBeVisible()
+  await expect(valueDialog.getByText('BOSCH', { exact: true })).toBeVisible()
+  await expect(valueDialog.getByLabel('选择第 2 行')).toBeChecked()
+  await expect(valueDialog.getByLabel('选择第 3 行')).not.toBeChecked()
+  await expect(valueDialog.getByLabel('选择第 4 行')).not.toBeChecked()
+  await expect(valueDialog.getByLabel('选择第 3 行')).toBeDisabled()
+  await expect(valueDialog.getByLabel('选择第 4 行')).toBeDisabled()
+  await expect(valueDialog.locator('.import-state.review')).toHaveCount(2)
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-review-1680.png', fullPage: false })
+  await valueDialog.getByLabel('品牌 曼牌中国 的标准值').selectOption('MANN-FILTER')
+  await valueDialog.getByRole('button', { name: '保存并重新检查' }).click()
+  await expect(valueDialog.locator('.sku-value-review-queue article').filter({ hasText: '曼牌中国' })).toHaveCount(0)
+  await expect(valueDialog.locator('.sku-import-table').getByText('MANN-FILTER', { exact: true })).toBeVisible()
+  await expect(valueDialog.getByLabel('选择第 3 行')).toBeChecked()
+  await expect(valueDialog.locator('.import-state.review')).toHaveCount(1)
+
+  await valueDialog.getByText('没有合适项？申请新增').click()
+  await valueDialog.getByLabel('新品牌中国 建议标准值').fill('NEW-BRAND')
+  await valueDialog.getByLabel('新品牌中国 申请原因').fill('供应商品牌证明已核对，需作为新的标准品牌')
+  await valueDialog.getByRole('button', { name: '提交审核' }).click()
+  await expect(valueDialog.getByText('已提交新增申请')).toBeVisible()
+  await valueDialog.getByRole('button', { name: '标准值治理' }).click()
+  await expect(valueDialog.getByRole('heading', { name: '标准值治理' })).toBeVisible()
+  await expect(valueDialog.getByText('NEW-BRAND', { exact: true })).toBeVisible()
+  await valueDialog.getByLabel('NEW-BRAND 审核说明').fill('品牌资料已核验，同意纳入标准字典')
+  await valueDialog.getByRole('button', { name: '通过并入字典' }).click()
+  await expect(valueDialog.getByText('当前没有待审核申请')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-standard-governance-1680.png', fullPage: false })
+
+  await valueDialog.getByRole('button', { name: '新建导入' }).click()
+  await valueDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-values.csv', mimeType: 'text/csv', buffer: Buffer.from(valueCsv) })
+  await expect(valueDialog.getByText('1 行值需要人工确认')).toBeVisible()
+  await valueDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await valueDialog.getByLabel('品牌 新品牌中国 的标准值').selectOption('NEW-BRAND')
+  await valueDialog.getByRole('button', { name: '保存并重新检查' }).click()
+  await expect(valueDialog.getByText('供应商值异常队列')).not.toBeVisible()
+  await expect(valueDialog.locator('.sku-import-table').getByText('NEW-BRAND', { exact: true })).toBeVisible()
+  await expect(valueDialog.getByLabel('选择第 4 行')).toBeChecked()
+  await expect(valueDialog.getByRole('button', { name: '写入 3 条草稿' })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-resolved-1680.png', fullPage: false })
+  await valueDialog.getByRole('button', { name: '关闭' }).first().click()
+})
+
+test('supports controlled bulk review submission with per-record results', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByLabel('选择 前制动盘').check()
+  await page.getByLabel('选择 后刹车片').check()
+  await page.getByRole('button', { name: '提交审核', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '批量提交审核' })
+  await expect(dialog).toContainText('已选择 2 条资料')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-bulk-review-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '提交审核 2 条' }).click()
+  await expect(dialog.getByRole('heading', { name: '批量操作已完成' })).toBeVisible()
+  await expect(dialog.getByText('成功 2 条，失败 0 条')).toBeVisible()
+  await dialog.getByRole('button', { name: '返回资料库' }).click()
+})
+
+test('exports a full audit package and a readable business CSV', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const payload = {
+    identity: { nameZh: '导出验收测试件', brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'FILTER', categoryLabel: '滤清器' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: 'EXPORT-E2E-01' }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'EXPORT-E2E-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: 'Macan (95B)', years: '2014-2018', evidenceKey: 'source' }], interchanges: [],
   }
-  await expect(page.getByText('仅支持英文字母、数字、空格及 - . _ / # ( ) +')).toHaveCount(3)
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload })).ok()).toBeTruthy()
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '导出资料' }).click()
+  const dialog = page.getByRole('dialog', { name: '导出 SKU 资料' })
+  await expect(dialog).toContainText('审计包自带完整性信息')
+  await expect(dialog).toContainText('业务导出不等于数据库备份')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-export-1680.png', fullPage: false })
+
+  const jsonDownloadPromise = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: '下载 JSON' }).click()
+  const jsonDownload = await jsonDownloadPromise
+  expect(jsonDownload.suggestedFilename()).toMatch(/^hushanxing-sku-\d{8}\.json$/)
+  const snapshot = JSON.parse(await readFile(await jsonDownload.path(), 'utf8'))
+  expect(snapshot.schemaVersion).toBe('catalog-export-v1')
+  expect(snapshot.checksum.value).toMatch(/^[a-f0-9]{64}$/)
+  expect(snapshot.items.some((item) => item.identity.nameZh === '导出验收测试件')).toBeTruthy()
+
+  await page.getByRole('button', { name: '导出资料' }).click()
+  const csvDialog = page.getByRole('dialog', { name: '导出 SKU 资料' })
+  await csvDialog.getByLabel(/业务表格/).check()
+  const csvDownloadPromise = page.waitForEvent('download')
+  await csvDialog.getByRole('button', { name: '下载 CSV' }).click()
+  const csvDownload = await csvDownloadPromise
+  expect(csvDownload.suggestedFilename()).toMatch(/^hushanxing-sku-\d{8}\.csv$/)
+  const csv = await readFile(await csvDownload.path(), 'utf8')
+  expect(csv).toContain('SKU 编码,中文名称')
+  expect(csv).toContain('EXPORT-E2E-001')
 })
 
-test('edits relations, fitment, dictionaries and saves to the API', async ({ page }) => {
-  await page.goto('./skus/sku-fixture-1/edit')
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  const brandDictionary = page.locator('.editor-field [data-dictionary="sku_brand"]')
-  await brandDictionary.getByRole('combobox').click()
-  await expect(brandDictionary.getByRole('option', { name: '全部' })).toHaveCount(0)
-  await brandDictionary.getByRole('option', { name: 'BMW' }).click()
-  await page.getByRole('button', { name: '添加 OE 号' }).click()
-  await expect(page.getByLabel('OE 品牌 2')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '添加 OE 号' })).toBeDisabled()
-  await page.getByLabel('OE 编号 2').fill('BMW TEST 002')
-  await page.getByLabel('OE 关系 2', { exact: true }).selectOption('直接替代')
-  await page.getByLabel('OE 类型 2').selectOption('主 OE')
-  await expect(page.getByLabel('OE 关系 2', { exact: true })).toHaveValue('')
-  await expect(page.getByLabel('OE 关系 2', { exact: true })).toBeDisabled()
-  await page.getByLabel('OE 类型 2').selectOption('替代号')
-  await page.getByLabel('OE 关系 2', { exact: true }).selectOption('直接替代')
-  await page.getByRole('button', { name: '添加适配车型' }).click()
-  await page.getByLabel('适配车型 2').fill('BMW X5 (G05)')
-  await page.getByLabel('车身形式 2').selectOption('Coupe')
-  await page.getByLabel('验证状态 2').selectOption('已验证')
-  await page.getByRole('button', { name: '发布 SKU' }).click()
-  await expect(page.getByText('SKU 已保存并发布')).toBeVisible()
-  await expect(page.getByRole('button', { name: '停产 SKU' })).toBeVisible()
-  page.once('dialog', (dialog) => dialog.accept())
-  await page.getByRole('button', { name: '停产 SKU' }).click()
-  await expect(page.getByText('SKU 已标记为停产')).toBeVisible()
-  await expect(page.getByRole('button', { name: '重新发布 SKU' })).toBeVisible()
-  await page.getByRole('button', { name: '放大 EPC 图' }).click()
-  await expect(page.getByRole('button', { name: '关闭 EPC 大图' })).toBeVisible()
+test('switches development roles and disables unauthorized operations', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '当前资料权限' }).click()
+  await expect(page.getByText('开发环境可切换角色进行验收')).toBeVisible()
+  await page.getByRole('button', { name: /只读查看/ }).click()
+  await expect(page.getByRole('button', { name: '新建 SKU' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '批量导入' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '导出资料' })).toBeDisabled()
+  await page.getByRole('button', { name: '当前资料权限' }).click()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-role-permissions-1680.png', fullPage: false })
 })
 
-test('search returns only actual database matches', async ({ page }) => {
-  await page.getByRole('button', { name: /SKU、车型/ }).click()
-  await page.getByLabel('命令搜索').fill('NO-MATCH-XYZ')
-  await page.getByLabel('命令搜索').press('Enter')
-  await expect(page.getByRole('heading', { name: '数据库中没有匹配记录' })).toBeVisible()
-  await page.locator('.empty-results').getByRole('button', { name: '关闭', exact: true }).click()
-  await page.getByRole('button', { name: /SKU、车型/ }).click()
-  await page.getByLabel('命令搜索').fill('95B 867 288')
-  await page.getByLabel('命令搜索').press('Enter')
-  await expect(page.getByText('95B-867-288-OM8', { exact: true }).first()).toBeVisible()
-})
-
-test('applies additional filters and sorting without stale details', async ({ page }) => {
-  await page.getByRole('button', { name: '更多筛选' }).click()
-  await page.getByLabel('适配车型筛选').selectOption('未配置')
-  await expect(page.getByRole('heading', { name: '当前筛选没有结果' })).toBeVisible()
-  await expect(page.getByRole('tab', { name: '基本信息' })).toHaveCount(0)
-  await page.getByRole('button', { name: '清除附加筛选' }).click()
-  await expect(page.getByRole('row', { name: /95B-867-288-OM8/ })).toBeVisible()
-  await page.getByRole('button', { name: '完成' }).click()
-  await page.getByRole('button', { name: '最近更新' }).click()
-  await page.getByRole('menuitemradio', { name: 'SKU 编码' }).click()
-  await expect(page.getByRole('button', { name: /SKU 编码/ })).toHaveAttribute('aria-expanded', 'false')
-})
-
-test('detail tabs render persisted fitment and edit opens the editor', async ({ page }) => {
-  await page.getByRole('tab', { name: '适配信息' }).click()
-  await expect(page.getByRole('tabpanel')).toContainText('Porsche Cayenne (9YA)')
-  await expect(page.getByRole('tab', { name: '适配信息' })).toHaveAttribute('aria-selected', 'true')
-  await page.getByRole('tab', { name: '变更记录' }).click()
-  await expect(page.getByRole('tabpanel')).toContainText('创建草稿')
-  await page.getByRole('button', { name: '编辑', exact: true }).click()
-  await expect(page).toHaveURL(/\/skus\/sku-fixture-1\/edit$/)
-})
-
-test('removes an uploaded SKU image after confirmation and save', async ({ page }) => {
-  await page.goto('./skus/sku-fixture-1/edit')
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  await expect(page.getByRole('img', { name: /行李厢内饰板（黑色）/ })).toBeVisible()
-  page.once('dialog', (dialog) => dialog.accept())
-  await page.getByRole('button', { name: '删除', exact: true }).click()
-  await expect(page.getByText('尚未上传图片')).toBeVisible()
-  await expect(page.getByText('图片已移除，保存后生效')).toBeVisible()
-  await expect(page.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: '保存草稿' }).click()
-  await expect(page.getByText('草稿已保存到数据库')).toBeVisible()
-  expect(page.__apiRecords[0].imageUrl).toBe('')
-  expect(page.__apiRecords[0].imageUrls).toEqual([])
-})
-
-test('uploads multiple SKU images and allows changing the primary image', async ({ page }) => {
-  await page.goto('./skus/sku-fixture-1/edit')
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  await page.locator('.identity-image input[type="file"]').setInputFiles([
-    'public/assets/parts/brake-disc.png',
-    'public/assets/parts/tail-light.png',
-  ])
-  await expect(page.getByRole('listitem')).toHaveCount(3)
-  await expect(page.getByText('已添加 2 张图片，保存后生效')).toBeVisible()
-  await expect(page.getByText('2 / 3')).toBeVisible()
-  await page.getByRole('button', { name: '主图', exact: true }).click()
-  await expect(page.getByText('主图已调整，保存后生效')).toBeVisible()
-  await expect(page.getByText('1 / 3')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-multiple-images.png', fullPage: false })
-  await page.getByRole('button', { name: '保存草稿' }).click()
-  await expect(page.getByText('草稿已保存到数据库')).toBeVisible()
-  expect(page.__apiRecords[0].imageUrls).toHaveLength(3)
-  expect(page.__apiRecords[0].imageUrl).toBe(page.__apiRecords[0].imageUrls[0])
-  await page.reload()
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(3)
-})
-
-test('adds an SKU image by dragging it into the preview', async ({ page }) => {
-  await page.goto('./skus/sku-fixture-1/edit')
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  const dataTransfer = await page.evaluateHandle(() => {
-    const content = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#075cf6"/></svg>'
-    const transfer = new DataTransfer()
-    transfer.items.add(new File([content], 'dragged-part.svg', { type: 'image/svg+xml' }))
-    return transfer
+test('reviews and resolves an identifier conflict with evidence', async ({ page }) => {
+  const payload = (name, vehicle) => ({
+    identity: { nameZh: name, brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'CONFLICT-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: vehicle, years: '2018-2023', evidenceKey: 'source' }], interchanges: [],
   })
-  const dropZone = page.getByLabel('SKU 图片拖拽上传区')
-  await dropZone.dispatchEvent('dragenter', { dataTransfer })
-  await expect(dropZone).toHaveClass(/is-dragging/)
-  await expect(page.getByText('松开即可添加图片')).toBeVisible()
-  await dropZone.dispatchEvent('drop', { dataTransfer })
-  await expect(dropZone).not.toHaveClass(/is-dragging/)
-  await expect(page.getByText('已添加 1 张图片，保存后生效')).toBeVisible()
-  await expect(page.locator('.identity-image-gallery').getByRole('listitem')).toHaveCount(2)
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload('冲突测试左', 'Cayenne (9YA)') })).ok()).toBeTruthy()
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload('冲突测试右', 'Macan (95B)') })).ok()).toBeTruthy()
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '编号冲突' }).click()
+  await page.getByRole('button', { name: /CONFLICT-001/ }).first().click()
+  await expect(page.getByText('CONFLICT001', { exact: true })).toBeVisible()
+  await page.getByLabel(/适用范围不同/).check()
+  await page.getByPlaceholder('记录品牌目录、EPC 图组、适用范围或人工复核依据').fill('两个 SKU 的适配车型不同，已依据品牌目录逐项复核')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-conflict-resolution-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '保存处理结论' }).click()
+  await expect(page.getByText('冲突结论已保存，质量阻断已解除')).toBeVisible()
+  await expect(page.getByText('适用范围不同', { exact: true }).first()).toBeVisible()
 })
 
-test('publish stays disabled until required relationships are complete', async ({ page }) => {
+test('previews and safely merges a confirmed duplicate SKU', async ({ page }) => {
+  const payload = (name, reference, vehicle) => ({
+    identity: { nameZh: name, brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: name }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'MERGE-E2E-001', isPrimary: true, evidenceKey: 'source' }, { clientKey: 'reference', type: 'reference', rawValue: reference, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: vehicle, years: '2018-2023', evidenceKey: 'source' }], interchanges: [],
+  })
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const survivor = await (await page.request.post('/api/v2/catalog/skus', { headers, data: payload('合并测试主资料', 'MERGE-REF-A', 'Cayenne (9YA)') })).json()
+  const retired = await (await page.request.post('/api/v2/catalog/skus', { headers, data: payload('合并测试重复资料', 'MERGE-REF-B', 'Touareg (CR)') })).json()
+  const resolved = await page.request.post('/api/v2/catalog/conflicts/resolve', { headers, data: {
+    normalizedValue: 'MERGEE2E001', skuIdA: survivor.id, skuIdB: retired.id, expectedVersionA: survivor.version, expectedVersionB: retired.version,
+    resolutionType: 'merge_required', note: '品牌目录和实物标签复核为同一零件',
+  } })
+  expect(resolved.ok()).toBeTruthy()
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '编号冲突' }).click()
+  await page.getByRole('button', { name: /MERGE-E2E-001/ }).click()
+  await page.getByRole('button', { name: '进入安全合并' }).click()
+  const dialog = page.getByRole('dialog', { name: '安全合并重复 SKU' })
+  await expect(dialog).toBeVisible()
+  await dialog.locator('.sku-merge-choice label').filter({ hasText: '合并测试主资料' }).getByRole('radio').check()
+  await expect(dialog.getByText('新增编号')).toBeVisible()
+  await expect(dialog.getByText('版本锁、双份快照和操作人留痕已开启')).toBeVisible()
+  await dialog.getByPlaceholder(/例如：经 Porsche EPC/).fill('经 Porsche PET 目录和实物标签复核，两条资料确认是同一零件')
+  await dialog.getByLabel(/我已核对保留项与停用项/).check()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-safe-merge-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '确认安全合并' }).click()
+  await expect(page.getByText(/已合并至 .*原 SKU 已安全停用/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /MERGE-E2E-001/ })).toHaveCount(0)
+  const survivorAfter = await (await page.request.get(`/api/v2/catalog/skus/${survivor.id}`, { headers })).json()
+  const retiredAfter = await (await page.request.get(`/api/v2/catalog/skus/${retired.id}`, { headers })).json()
+  expect(survivorAfter.lifecycleStatus).toBe('draft')
+  expect(survivorAfter.identifiers).toHaveLength(3)
+  expect(survivorAfter.fitments).toHaveLength(2)
+  expect(retiredAfter.lifecycleStatus).toBe('discontinued')
+})
+
+test('shows actionable validation issues for an incomplete manual SKU', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()
-  await page.getByLabel('SKU 编码 *').fill('PUBLISH-GATE-001')
-  await page.getByLabel('中文名称 *').fill('发布校验件')
-  await page.getByRole('combobox', { name: '品牌：请选择品牌' }).click()
-  await page.getByRole('option', { name: '保时捷原厂' }).click()
-  await page.getByRole('combobox', { name: '零件大类：请选择零件大类' }).click()
-  await page.getByRole('option', { name: '车身及内饰' }).click()
-  await page.getByLabel('主 OE 号 *').fill('PUBLISH OE 001')
-  await page.getByRole('combobox', { name: '计量单位：请选择计量单位' }).click()
-  await page.getByRole('option', { name: '件', exact: true }).click()
-  await page.getByRole('combobox', { name: '数据来源：请选择数据来源' }).click()
-  await page.getByRole('option', { name: '人工录入', exact: true }).click()
-  await page.getByRole('button', { name: '创建草稿' }).click()
-  await page.getByRole('heading', { name: '编辑 SKU' }).waitFor()
-  await expect(page.getByRole('button', { name: '发布 SKU' })).toBeDisabled()
+  await page.getByRole('button', { name: /手工建立空白 SKU/ }).click()
+
+  await expect(page.getByText('0%', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '4 发布检查' }).click()
+  await page.getByRole('button', { name: '提交审核' }).click()
+  await expect(page.getByRole('heading', { name: '来源与基本身份' })).toBeVisible()
+  await expect(page.getByText('还有 5 项需要补充')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-incomplete-1680.png', fullPage: false })
 })
 
-test('configures dictionaries and persists the result', async ({ page }) => {
-  await page.getByRole('button', { name: '更多操作' }).click()
-  await page.getByRole('menuitem', { name: /字典管理/ }).click()
-  await expect(page.getByRole('heading', { name: '字典管理' })).toBeVisible()
-  await page.getByRole('button', { name: '新增选项' }).click()
-  const newRow = page.locator('.dictionary-table-row').last()
-  await newRow.locator('input').nth(0).fill('测试品牌')
-  const systemCode = newRow.getByLabel('测试品牌 系统编码')
-  await expect(systemCode).toHaveAttribute('readonly', '')
-  await expect(systemCode).toHaveValue(/^SKU_BRAND_[0-9A-Z]+$/)
-  const generatedCode = await systemCode.inputValue()
-  await newRow.getByLabel('测试品牌 显示名称').fill('测试品牌（已修改）')
-  await expect(newRow.getByLabel('测试品牌（已修改） 系统编码')).toHaveValue(generatedCode)
-  await page.getByRole('button', { name: '保存配置' }).click()
-  await expect(page.getByText('配置已保存')).toBeVisible()
+test('collapses the navigation into a persistent icon rail', async ({ page }) => {
+  const collapseButton = page.getByRole('button', { name: '收起导航' })
+  await expect(collapseButton).toBeVisible()
+  await collapseButton.click()
+
+  await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
+  await expect(page.getByRole('button', { name: '展开导航' })).toBeVisible()
+  await expect.poll(async () => Math.round((await page.locator('.workbench-main').boundingBox()).x)).toBe(72)
+  await page.screenshot({ path: 'qa-artifacts/implementation-sidebar-collapsed-1680.png', fullPage: false })
+
   await page.reload()
-  await expect(page.getByLabel('测试品牌（已修改） 系统编码')).toHaveValue(generatedCode)
-  await page.screenshot({ path: 'qa-artifacts/implementation-dictionary-module-1920.png', fullPage: false })
+  await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await expect(page).toHaveURL(/#\/sku$/)
+  await expect.poll(async () => Math.round((await page.locator('.sku-main').boundingBox()).x)).toBe(72)
 
-  await page.getByRole('button', { name: /^计量单位/ }).click()
-  await expect(page.getByRole('heading', { name: '计量单位' })).toBeVisible()
-  await page.getByRole('button', { name: '新增选项' }).click()
-  const unitRow = page.locator('.dictionary-table-row').last()
-  await unitRow.locator('input').nth(0).fill('箱')
-  await expect(unitRow.getByLabel('箱 系统编码')).toHaveValue(/^UNIT_[0-9A-Z]+$/)
-  await page.getByRole('button', { name: '保存配置' }).click()
-  await expect(page.getByText('配置已保存')).toBeVisible()
-
-  await page.goto('./skus/new')
-  const unitDictionary = page.locator('.editor-field [data-dictionary="unit"]')
-  await unitDictionary.getByRole('combobox').click()
-  await expect(unitDictionary.getByRole('option', { name: '箱', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '展开导航' }).click()
+  await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
 })
 
-test('keeps newly added dictionary options accessible after the list overflows', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 720 })
-  await page.goto('./dictionaries')
-  await expect(page.getByRole('heading', { name: '字典管理' })).toBeVisible()
-  const addButton = page.getByRole('button', { name: '新增选项' })
-  for (let index = 0; index < 12; index += 1) await addButton.click()
-  const tableBody = page.locator('.dictionary-table-body')
-  await expect.poll(() => tableBody.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
-  await expect.poll(() => tableBody.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
-  const lastRow = page.locator('.dictionary-table-row').last()
-  const lastLabel = lastRow.locator('input').first()
-  await expect(lastRow).toBeVisible()
-  await expect(lastLabel).toBeFocused()
-  await lastLabel.fill('溢出后新增项')
-  await expect(page.getByRole('button', { name: '保存配置' })).toBeVisible()
-})
-
-test('renders the persisted editor at 1920 by 1080', async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 })
-  await page.goto('./skus/sku-fixture-1/edit')
-  await expect(page.getByRole('heading', { name: '编辑 SKU' })).toBeVisible()
-  await expect(page.getByText('保时捷原厂').first()).toBeVisible()
-  await expect(page.locator('body')).not.toContainText('SKU_BRAND_PORSCHE_FACTORY')
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-1920.png', fullPage: false })
+test('does not expose retired frontend business routes', async ({ page }) => {
+  for (const route of ['skus', 'vehicles', 'dictionaries']) {
+    await page.goto(`./${route}`)
+    await expect(page.getByRole('heading', { name: '下午好，虎山行' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'SKU 管理' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '车型库' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '字典管理' })).toHaveCount(0)
+  }
 })
