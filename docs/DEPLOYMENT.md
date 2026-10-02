@@ -37,7 +37,7 @@ npm run test:sites
 - PostgreSQL 数据库：`dashboard_sku`
 - PostgreSQL / 系统用户：`dashboard-sku`
 - 外部接口前缀：`/sku-preview/api/`
-- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002-70d21e32`
+- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002-1c69b5b`
 - 空库备份：`/opt/dashboard-sku-api/backups/20260927-pre-smoke-empty.dump`
 - 本次迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-b885538.dump`
 - 版本锁迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-3de9223.dump`
@@ -226,6 +226,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:production-sm
 `20261002-4f106413` API 与前端联合发布后已在线验证旧 SKU 迁移治理：资料员可在方案内修正品牌、分类和单位，并对排除记录填写原因；方案必须经过审核角色批准，管理员才可正式执行，旧的直接迁移接口不再允许绕过审批。迁移 `028`、`029` 新增方案账本、版本校验与单次执行占用保护。独立测试库走通提交、批准和执行，并发执行只产生一个批次；生产只读冒烟读取 17 条旧 SKU，默认 0 条选择，提交按钮和全选均不可用，控制台无错误。生产未创建方案、未执行迁移，17 条旧 SKU、46 条 OE、1 条适配保持不变，`catalog_sku`、迁移批次、方案与方案明细均为 0。API `ready` 报告 29 个迁移；回滚点为前端与 API `20261002-fb938da5`，数据库不随应用回滚自动降级。
 
 `20261002-70d21e32` API 与前端联合发布后已在线验证可信身份与迁移职责分离：生产未配置身份网关时保持 `anonymous-readonly`，直接伪造管理员请求头仍是只读会话；迁移方案和旧 `/api/v1/skus` 写入均返回 403。迁移 `030` 增加稳定用户 ID、角色与方案审计事件，独立数据库验证了禁止自审、审核员不可执行、管理员执行及 4 条完整事件轨迹。生产只读浏览器冒烟、Nginx 和 API `ready` 均通过，控制台无错误。发布前后 17 条旧 SKU、46 条 OE、1 条适配保持不变，`catalog_sku`、迁移批次、方案、方案明细与身份审计事件均为 0。API `ready` 报告 30 个迁移；前端与 API 回滚点为 `20261002-4f106413`，数据库不随应用回滚自动降级。
+
+`20261002-1c69b5b` 仅发布 API 的 PostgreSQL 连接兼容性修复：同一个事务连接上的旧 SKU 子记录与导入批次子记录改为顺序读取，避免 `pg` 下一大版本移除并发 `client.query()` 兼容行为后发生故障。发布前回归在旧实现上稳定复现两个并发点，修复后 API 59 项与隔离浏览器 22 项通过且不再出现弃用告警。生产未执行新迁移、未改前端；发布前后 17 条旧 SKU、46 条 OE、1 条适配保持不变，`catalog_sku`、迁移批次、方案、方案明细与身份审计事件均为 0。匿名及伪造管理员身份仍为只读，线上浏览器冒烟和服务日志检查通过；API 回滚点为 `20261002-70d21e32`。
 
 ## 回滚
 
