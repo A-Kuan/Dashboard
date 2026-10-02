@@ -36,6 +36,6 @@ export function CatalogOperatorMenu({ onSession }) {
 
   return <div className="catalog-operator-menu" ref={root}>
     <button type="button" aria-label="当前资料权限" aria-expanded={open} onClick={() => setOpen((value) => !value)}><span><strong>{displayName}</strong><small>{session?.roleLabel || '正在确认权限'}</small></span><CaretDown size={14} weight="bold" /></button>
-    {open ? <div className="catalog-role-popover"><header><ShieldCheck size={18} weight="duotone" /><div><strong>当前资料权限</strong><span>{session?.development ? '开发环境可切换角色进行验收' : '权限由登录身份决定'}</span></div></header>{session?.availableRoles?.length ? <div>{session.availableRoles.map((role) => <button type="button" key={role.id} onClick={() => choose(role.id)}><span><strong>{role.label}</strong><small>{role.capabilities.length} 项能力</small></span>{session.role === role.id ? <Check size={17} weight="bold" /> : null}</button>)}</div> : null}</div> : null}
+    {open ? <div className="catalog-role-popover"><header><ShieldCheck size={18} weight="duotone" /><div><strong>当前资料权限</strong><span>{session?.development ? '开发环境可切换角色进行验收' : session?.authenticated ? `身份来自 ${session.identityProvider || '企业登录'}` : '尚未连接可信身份，系统保持只读'}</span></div></header>{session?.availableRoles?.length ? <div>{session.availableRoles.map((role) => <button type="button" key={role.id} onClick={() => choose(role.id)}><span><strong>{role.label}</strong><small>{role.capabilities.length} 项能力</small></span>{session.role === role.id ? <Check size={17} weight="bold" /> : null}</button>)}</div> : null}</div> : null}
   </div>
 }

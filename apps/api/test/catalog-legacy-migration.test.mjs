@@ -65,18 +65,18 @@ test('legacy migration routes are read-visible but writes require import capabil
     preview: async () => ({ items: [], total: 0, summary: { pending: 0 } }),
     commit: async (_input, actor) => ({ id: 'batch-1', state: 'succeeded', createdBy: actor }),
     getBatch: async (id) => id === 'batch-1' ? { id, state: 'succeeded' } : null,
-    createPlan: async (_input, actor) => ({ id: 'plan-1', state: 'submitted', version: 1, createdBy: actor }),
+    createPlan: async (_input, actor) => ({ id: 'plan-1', state: 'submitted', version: 1, createdBy: actor.name, createdById: actor.id }),
     listPlans: async () => ({ items: [], total: 0 }),
     getPlan: async (id) => id === 'plan-1' ? { id, state: 'submitted', version: 1 } : null,
-    reviewPlan: async (id, input, actor) => ({ id, state: input.decision === 'approve' ? 'approved' : 'rejected', reviewedBy: actor }),
-    commitPlan: async (id, _input, actor) => ({ id, state: 'committed', committedBy: actor }),
+    reviewPlan: async (id, input, actor) => ({ id, state: input.decision === 'approve' ? 'approved' : 'rejected', reviewedBy: actor.name }),
+    commitPlan: async (id, _input, actor) => ({ id, state: 'committed', committedBy: actor.name }),
   }
   const app = buildApp({ catalogLegacyMigrationRepository: repository, logger: false })
   const preview = await app.inject('/api/v2/catalog/legacy-migration-preview')
   assert.equal(preview.statusCode, 200)
   const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { items: [], reason: '测试' } })
   assert.equal(denied.statusCode, 403)
-  const directCommit = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '迁移员' }, payload: { items: [{ legacySkuId: 'legacy-1', sourceHash: 'hash' }], reason: '经审核迁移' } })
+  const directCommit = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': '管理员' }, payload: { items: [{ legacySkuId: 'legacy-1', sourceHash: 'hash' }], reason: '经审核迁移' } })
   assert.equal(directCommit.statusCode, 409)
   assert.equal(directCommit.json().error, 'LEGACY_MIGRATION_PLAN_REQUIRED')
   const planDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { items: [], reason: '测试' } })
@@ -89,5 +89,10 @@ test('legacy migration routes are read-visible but writes require import capabil
   const reviewed = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/review', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '审核员' }, payload: { expectedVersion: 1, decision: 'approve' } })
   assert.equal(reviewed.statusCode, 200)
   assert.equal(reviewed.json().reviewedBy, '审核员')
+  const reviewerCommitDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/commit', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '审核员' }, payload: { expectedVersion: 2 } })
+  assert.equal(reviewerCommitDenied.statusCode, 403)
+  const committed = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/commit', headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': '资料管理员' }, payload: { expectedVersion: 2 } })
+  assert.equal(committed.statusCode, 200)
+  assert.equal(committed.json().committedBy, '资料管理员')
   await app.close()
 })

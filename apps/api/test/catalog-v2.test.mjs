@@ -196,13 +196,23 @@ function createCatalogRepository() {
 }
 
 test('catalog production identity is fail-closed unless a trusted proxy is configured', () => {
-  const request = { headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'forged-admin' } }
+  const request = { headers: { 'x-operator-id': 'user-42', 'x-operator-role': 'catalog_admin', 'x-operator-name': encodeURIComponent('管理员甲'), 'x-catalog-identity-secret': 'correct-secret', 'x-identity-provider': 'company-sso' } }
   const untrusted = resolveCatalogActor(request, { NODE_ENV: 'production' })
   assert.equal(untrusted.role, 'catalog_viewer')
   assert.equal(untrusted.name, '只读访客')
-  const trusted = resolveCatalogActor(request, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1' })
+  assert.equal(untrusted.authenticated, false)
+  const missingSecret = resolveCatalogActor(request, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1' })
+  assert.equal(missingSecret.role, 'catalog_viewer')
+  const wrongSecret = resolveCatalogActor(request, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1', TRUST_PROXY_IDENTITY_SECRET: 'wrong-secret' })
+  assert.equal(wrongSecret.role, 'catalog_viewer')
+  const trusted = resolveCatalogActor(request, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1', TRUST_PROXY_IDENTITY_SECRET: 'correct-secret' })
   assert.equal(trusted.role, 'catalog_admin')
-  assert.equal(trusted.name, 'forged-admin')
+  assert.equal(trusted.id, 'user-42')
+  assert.equal(trusted.name, '管理员甲')
+  assert.equal(trusted.identityProvider, 'company-sso')
+  assert.equal(trusted.authenticated, true)
+  const incomplete = resolveCatalogActor({ headers: { ...request.headers, 'x-operator-id': '' } }, { NODE_ENV: 'production', TRUST_PROXY_IDENTITY: '1', TRUST_PROXY_IDENTITY_SECRET: 'correct-secret' })
+  assert.equal(incomplete.role, 'catalog_viewer')
 })
 
 function createCatalogImportRepository() {
