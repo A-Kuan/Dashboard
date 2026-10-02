@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { createReadStream } from 'node:fs'
-import { access, chmod, mkdir, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { createPool } from '../src/db.mjs'
 
@@ -16,6 +16,8 @@ const dumpPath = resolve(outputDirectory, `${backupName}.dump`)
 const manifestPath = resolve(outputDirectory, `${backupName}.manifest.json`)
 const assetDirectory = String(process.env.CATALOG_EPC_ASSET_DIR || '').trim()
 const assetArchivePath = assetDirectory ? resolve(outputDirectory, `${backupName}.epc-assets.tar.gz`) : ''
+const backupPurpose = String(process.env.BACKUP_PURPOSE || 'manual').trim().toLowerCase()
+if (!/^[a-z][a-z0-9_-]{0,31}$/.test(backupPurpose)) throw new Error('BACKUP_PURPOSE must be a short machine-readable label')
 
 async function sha256File(path) {
   const hash = createHash('sha256')
@@ -79,6 +81,7 @@ if (assetDirectory) {
 const manifest = {
   manifestVersion: 'dashboard-postgres-backup-v1',
   createdAt: new Date().toISOString(),
+  purpose: backupPurpose,
   database,
   releaseRevision: process.env.RELEASE_REVISION || '',
   postgres: { serverMajorVersion, pgDump, pgRestore },
@@ -88,6 +91,8 @@ const manifest = {
   schemaMigrations,
   verification: { pgRestoreList: 'passed', objectCount: listedObjects },
 }
-await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o640 })
-await chmod(manifestPath, 0o640)
+const temporaryManifestPath = `${manifestPath}.tmp`
+await writeFile(temporaryManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o640 })
+await chmod(temporaryManifestPath, 0o640)
+await rename(temporaryManifestPath, manifestPath)
 process.stdout.write(`${JSON.stringify({ dumpPath, manifestPath, assetArchivePath: assetArchive ? assetArchivePath : '', bytes: file.size, counts })}\n`)

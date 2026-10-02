@@ -1,0 +1,29 @@
+[Unit]
+Description=Dashboard SKU verified database and EPC backup
+After=postgresql.service
+RequiresMountsFor=/opt/dashboard-sku-api/backups
+ConditionPathIsDirectory=/opt/dashboard-sku-api/current
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30min
+User=dashboard-sku
+Group=dashboard-sku
+WorkingDirectory=/opt/dashboard-sku-api/current
+Environment=NODE_ENV=production
+Environment=PGHOST=/var/run/postgresql
+Environment=PGPORT=5432
+Environment=PGDATABASE=dashboard_sku
+Environment=PGUSER=dashboard-sku
+Environment=CATALOG_BACKUP_DIR=/opt/dashboard-sku-api/backups
+Environment=CATALOG_EPC_ASSET_DIR=/opt/dashboard-sku-api/data/epc-assets
+ExecStart=/usr/bin/flock -w 300 /opt/dashboard-sku-api/backups/.backup.lock /usr/bin/node scripts/run-scheduled-backup.mjs
+UMask=0027
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dashboard-sku-api/backups

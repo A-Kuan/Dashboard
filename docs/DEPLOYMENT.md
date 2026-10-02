@@ -139,7 +139,29 @@ sudo -u dashboard-sku env \
 npm run backup:verify -- /opt/dashboard-sku-api/backups/<backup>.manifest.json
 ```
 
-每次数据库迁移、批量导入和正式数据清理前都必须生成新备份。备份脚本不会删除旧文件；保留策略由服务器任务负责，建议至少保留最近 14 份日备份和 8 份周备份。
+每次数据库迁移、批量导入和正式数据清理前都必须生成新备份。发布工具使用共享文件锁，避免发布备份和每日备份同时占用 PostgreSQL 与磁盘；清单先写临时文件并原子改名，巡检不会读到半份清单。
+
+### 每日备份与保留策略
+
+`dashboard-sku-backup.timer` 每天 03:20（服务器本地时间，附加最多 15 分钟随机延迟）生成并立即验证数据库归档、EPC 快照和清单。保留程序只管理清单明确标记为 `purpose=scheduled`、三件文件齐全且名称相互匹配的每日备份；发布备份、手工备份、旧格式备份、不完整文件和孤立文件永不自动删除。
+
+默认保留最近 14 份每日备份，以及最近 8 个 ISO 周各一份备份；创建不足 24 小时的备份始终保留，单次最多删除 30 组。`backup:prune` 默认为只读预览，只有明确传入 `--apply` 才会逐个删除已列入计划的普通文件：
+
+```bash
+cd /opt/dashboard-sku-api/current
+sudo -u dashboard-sku env CATALOG_BACKUP_DIR=/opt/dashboard-sku-api/backups npm run backup:prune
+
+# 回到受保护主分支的仓库根目录安装 systemd 单元
+cd <Dashboard 仓库目录>
+sudo install -m 0644 deploy/dashboard-sku-backup.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dashboard-sku-backup.timer
+sudo systemctl start dashboard-sku-backup.service
+systemctl status dashboard-sku-backup.service dashboard-sku-backup.timer
+```
+
+首次启用必须手动运行一次 service，确认输出 `status=ok`、新清单 `purpose=scheduled`、配套文件校验通过且 `deletedSets=0`。不得用通配符或独立的系统清理任务删除备份目录。
 
 恢复不能直接覆盖生产库。仓库内的恢复演练工具只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
 
@@ -187,7 +209,6 @@ curl https://121.41.24.42/sku-preview/api/v1/skus
 `/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。两者都返回 `releaseRevision`：本地无 release 元数据时为 `development`，正式 release 必须是受保护主分支的 40 位 Git SHA。发布切流前必须以 `/api/ready` 返回 `200`、`status=ready` 且版本等于目标提交为准。
 
 每个响应都带 `X-Request-Id`。调用方提供的编号仅在字符集和长度校验通过时沿用，否则服务端生成 UUID；错误响应同时返回 `requestId`，便于与 systemd JSON 日志关联。日志会隐藏授权、Cookie 和可信身份头。
-
 `GET /api/metrics` 提供 Prometheus 文本格式的请求量、状态码、耗时、进程内存、版本和数据库连接池指标。该入口默认只允许 API 主机本机访问；远程运维采集必须配置 `API_OPERATIONS_TOKEN` 并使用 Bearer 令牌，不能通过 Nginx 公开匿名访问。
 
 仓库中的 `dashboard-sku-operations-check.service` 与 `.timer` 每五分钟核对 readiness 与 release、指标、数据库连接池排队、最近备份完整性、备份年龄和磁盘余量。默认要求备份不超过 26 小时、可用空间不少于 1 GiB；失败会让 oneshot 单元进入失败状态并写入 journal。安装后验证：
