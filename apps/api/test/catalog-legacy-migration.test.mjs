@@ -67,6 +67,7 @@ test('builds a deterministic pilot cohort with workload and scenario coverage', 
     migrated,
     blocking,
     legacy: { skuCode: `SKU-${id}`, name: `零件 ${id}`, brand: id === '6' ? 'Audi' : 'Porsche', category, identifierCount: identifiers, fitmentCount: fitments },
+    target: { identity: { brandLabel: id === '6' ? '奥迪' : '保时捷', categoryLabel: `${category}标准分类` } },
     mapping: { images: issues.some((issue) => issue.code === 'imagesPreservedInEvidence') ? ['old.jpg'] : [] },
     issues,
   })
@@ -89,6 +90,8 @@ test('builds a deterministic pilot cohort with workload and scenario coverage', 
   assert.ok(pilot.summary.tasks.fitmentResearch >= 1)
   assert.ok(pilot.summary.tasks.fitmentReview >= 1)
   assert.ok(pilot.summary.estimatedMinutes > 0)
+  assert.ok(pilot.items.every((candidate) => candidate.brand === '保时捷' || candidate.brand === '奥迪'))
+  assert.ok(pilot.items.every((candidate) => candidate.category.endsWith('标准分类')))
   assert.deepEqual(pilot.items.map((candidate) => candidate.legacySkuId), repeated.items.map((candidate) => candidate.legacySkuId))
   assert.throws(() => buildLegacyMigrationPilot(items, 4), /5 至 10/)
   assert.throws(() => buildLegacyMigrationPilot(items, 11), /5 至 10/)
