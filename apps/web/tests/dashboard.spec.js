@@ -137,6 +137,9 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
 
   await expect(page.getByRole('heading', { name: '从 VIN / EPC 建立资料' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '连接器采集' })).toBeVisible()
+  await expect(page.getByText('待配置', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '读取目录' })).toBeDisabled()
   await page.getByPlaceholder('17 位 VIN').fill('WP1ZZZ9Y0KDA12345')
   await page.getByPlaceholder('例如 Macan 95B / 601-05').fill('Cayenne 9YA / 615-05')
   await page.getByLabel('第 1 行 OE 编号').fill('9Y0 615 301 M')

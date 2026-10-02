@@ -781,7 +781,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcPreviews, epcPreviewItems, epcDecisions] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -796,6 +796,9 @@ export function createCatalogRepository(pool) {
         pool.query(`SELECT * FROM catalog_fitment_scope_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
+        pool.query(`SELECT i.* FROM catalog_intake i
+          WHERE EXISTS (SELECT 1 FROM catalog_epc_preview p WHERE p.intake_id=i.id)
+          ORDER BY i.created_at,i.id`),
         pool.query('SELECT * FROM catalog_epc_preview ORDER BY created_at,id'),
         pool.query('SELECT * FROM catalog_epc_preview_item ORDER BY preview_id,row_number'),
         pool.query('SELECT * FROM catalog_epc_publish_decision ORDER BY decided_at,id'),
@@ -837,6 +840,11 @@ export function createCatalogRepository(pool) {
           resolutionType: row.resolution_type, note: row.note, conflictSnapshot: row.conflict_snapshot,
           active: row.active, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at,
         })),
+        epcIntakes: epcIntakes.rows.map((row) => ({
+          id: row.id, sourceType: row.source_type, state: row.state, sourceContext: row.source_context,
+          rawPayload: row.raw_payload, version: row.version, createdBy: row.created_by,
+          createdAt: row.created_at, updatedAt: row.updated_at,
+        })),
         epcPreviews: epcPreviews.rows.map((row) => ({
           id: row.id, intakeId: row.intake_id, state: row.state, vin: row.vin, sourceSystem: row.source_system,
           catalogPath: row.catalog_path, summary: row.summary, version: row.version, createdBy: row.created_by,
@@ -871,6 +879,7 @@ export function createCatalogRepository(pool) {
           vehicleVariants: relations.vehicleVariants.length,
           vehicleVariantChanges: relations.vehicleVariantChanges.length,
           fitmentScopeResolutions: relations.fitmentScopeResolutions.length,
+          epcIntakes: relations.epcIntakes.length,
           epcPreviews: relations.epcPreviews.length,
           epcPreviewItems: relations.epcPreviewItems.length,
           epcPublishDecisions: relations.epcPublishDecisions.length,

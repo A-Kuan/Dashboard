@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, CheckCircle, ClockCounterClockwise, Database, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
-import { commitCatalogEpcPreview, createCatalogEpcPreview, getCatalogEpcPreview, listCatalogEpcPreviews } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, Check, CheckCircle, ClockCounterClockwise, CloudArrowDown, Database, ImageSquare, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
+import { collectCatalogEpcConnector, commitCatalogEpcPreview, createCatalogEpcPreview, getCatalogEpcPreview, listCatalogEpcConnectors, listCatalogEpcPreviews } from '../services/catalogApi'
 import '../sku-epc-intake.css'
+import '../sku-epc-connector.css'
 
 const emptyRow = () => ({ oe: '', originalName: '', sourceRecordId: '', figurePosition: '', platformCode: '', variantCode: '', vehicleLabel: '', yearFrom: '', yearTo: '', engineCodesText: '', transmissionCodesText: '', prCodesText: '', position: '' })
 const splitCodes = (value) => String(value || '').split(/[,，/]/).map((item) => item.trim()).filter(Boolean)
@@ -42,8 +43,12 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState({ items: [], total: 0 })
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [connectors, setConnectors] = useState([])
+  const [connectorInput, setConnectorInput] = useState({ connectorId: '', vin: '', catalogPath: '', groupCode: '' })
+  const [connectorBusy, setConnectorBusy] = useState(false)
   const selected = preview?.items.find((item) => item.id === selectedId) || preview?.items[0]
   const selectedDecisions = useMemo(() => preview?.items.filter((item) => decisions[item.id]?.selected && item.decisionState === 'pending') || [], [decisions, preview])
+  const selectedAssets = useMemo(() => preview?.assets?.filter((asset) => !asset.sourceRecordId || asset.sourceRecordId === selected?.sourceRecordId) || [], [preview, selected])
 
   const updateRow = (index, key, value) => setForm((current) => ({ ...current, rows: current.rows.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row) }))
 
@@ -52,7 +57,13 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
     try { setHistory(await listCatalogEpcPreviews()) } catch (nextError) { setError(nextError.message) } finally { setHistoryLoading(false) }
   }, [])
 
-  useEffect(() => { loadHistory() }, [loadHistory])
+  useEffect(() => {
+    loadHistory()
+    listCatalogEpcConnectors().then((result) => {
+      setConnectors(result.items || [])
+      setConnectorInput((current) => ({ ...current, connectorId: current.connectorId || result.items?.[0]?.id || '' }))
+    }).catch(() => setConnectors([]))
+  }, [loadHistory])
 
   const openHistory = async (id) => {
     setBusy(true); setError('')
@@ -70,6 +81,15 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
       setPreview(result); setSelectedId(result.items[0]?.id || '')
       setDecisions(previewDecisions(result)); loadHistory()
     } catch (nextError) { setError(nextError.message) } finally { setBusy(false) }
+  }
+
+  const collectFromConnector = async () => {
+    setConnectorBusy(true); setError('')
+    try {
+      const result = await collectCatalogEpcConnector(connectorInput.connectorId, connectorInput)
+      setPreview(result); setSelectedId(result.items[0]?.id || ''); setDecisions(previewDecisions(result)); loadHistory()
+      onNotify?.(`已读取 ${result.items.length} 条目录记录，写入前仍需人工确认`)
+    } catch (nextError) { setError(nextError.message) } finally { setConnectorBusy(false) }
   }
 
   const commit = async () => {
@@ -104,6 +124,16 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
     <main className="epc-intake epc-intake-form">
       <header className="epc-intake-topbar"><button type="button" onClick={onBack}><ArrowLeft size={20} weight="bold" />返回资料库</button><div><span>来源证据接入</span><h1>从 VIN / EPC 建立资料</h1><p>录入原始目录事实，系统只生成匹配预览，不会直接写入 SKU。</p></div><button className="epc-history-button" type="button" onClick={() => setHistoryOpen(true)}><ClockCounterClockwise size={19} weight="bold" /><span><strong>批次记录</strong><small>{historyLoading ? '正在读取' : `${history.total} 个批次`}</small></span></button><div className="epc-safety"><ShieldCheck size={22} weight="fill" /><span><strong>写入前人工确认</strong><small>原始证据永久保留</small></span></div></header>
       <div className="epc-form-body">
+        <section className="epc-connector-card">
+          <div className="epc-section-title"><span>00</span><div><h2>连接器采集</h2><p>从已授权目录服务读取 VIN、图组和 OE；结果仍进入人工匹配预览。</p></div></div>
+          {connectors.length ? <div className="epc-connector-grid">
+            <label><span>目录连接器</span><select aria-label="目录连接器" value={connectorInput.connectorId} onChange={(event) => setConnectorInput({ ...connectorInput, connectorId: event.target.value })}>{connectors.map((connector) => <option key={connector.id} value={connector.id}>{connector.label}</option>)}</select></label>
+            <label><span>VIN</span><input value={connectorInput.vin} maxLength={17} onChange={(event) => setConnectorInput({ ...connectorInput, vin: event.target.value.toUpperCase() })} placeholder="连接器查询 VIN" /></label>
+            <label><span>目录路径</span><input value={connectorInput.catalogPath} onChange={(event) => setConnectorInput({ ...connectorInput, catalogPath: event.target.value })} placeholder="例如 95B / 601-05" /></label>
+            <label><span>图组编码</span><input value={connectorInput.groupCode} onChange={(event) => setConnectorInput({ ...connectorInput, groupCode: event.target.value })} placeholder="例如 601-05" /></label>
+            {(() => { const connector = connectors.find((item) => item.id === connectorInput.connectorId) || connectors[0]; return <div className={`epc-connector-state ${connector?.state || 'needs_configuration'}`}><span><b>{connector?.state === 'ready' ? '已连接' : '待配置'}</b><small>{connector?.description}</small></span><button type="button" disabled={connectorBusy || connector?.state !== 'ready'} onClick={collectFromConnector}><CloudArrowDown size={18} weight="bold" />{connectorBusy ? '正在读取…' : '读取目录'}</button></div> })()}
+          </div> : <div className="epc-connector-empty"><CloudArrowDown size={24} /><span><strong>连接器服务暂不可用</strong><small>仍可使用下方手工证据录入，不影响现有流程。</small></span></div>}
+        </section>
         <section className="epc-source-card"><div className="epc-section-title"><span>01</span><div><h2>来源上下文</h2><p>VIN 可为空，但来源系统与目录路径应尽量完整。</p></div></div><div className="epc-source-fields"><label><span>VIN</span><input value={form.vin} maxLength={17} onChange={(event) => setForm({ ...form, vin: event.target.value.toUpperCase() })} placeholder="17 位 VIN" /></label><label><span>EPC 来源系统</span><input value={form.sourceSystem} onChange={(event) => setForm({ ...form, sourceSystem: event.target.value })} placeholder="例如 Porsche PET" /></label><label><span>目录 / 图组路径</span><input value={form.catalogPath} onChange={(event) => setForm({ ...form, catalogPath: event.target.value })} placeholder="例如 Macan 95B / 601-05" /></label></div></section>
         <section className="epc-lines-card"><div className="epc-section-title"><span>02</span><div><h2>EPC 零件记录</h2><p>原始名称、图例位置与车型条件会作为只读证据保存。</p></div><button type="button" onClick={() => setForm((current) => ({ ...current, rows: [...current.rows, emptyRow()] }))}><Plus size={17} />添加一行</button></div>
           <div className="epc-lines-head"><span>OE 编号 *</span><span>EPC 原始名称 *</span><span>记录 / 图例位置</span><span>车型与条件</span><span /></div>
@@ -136,7 +166,7 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
       <header className="epc-intake-topbar"><button type="button" onClick={() => { setPreview(null); setHistoryOpen(true); loadHistory() }}><ArrowLeft size={20} weight="bold" />返回批次记录</button><div><span>写入前匹配预览</span><h1>{preview.sourceSystem} · {preview.catalogPath || '未填写目录路径'}</h1><p>{preview.vin ? `VIN ${preview.vin}` : '无 VIN 上下文'} · 共 {preview.summary.total} 条 · v{preview.version}</p></div><div className="epc-summary-pills"><span className="exact">{preview.summary.exact} 精确</span><span className="new">{preview.summary.new} 新建</span><span className="ambiguous">{preview.summary.ambiguous} 待判断</span></div></header>
       <div className="epc-review-grid">
         <section className="epc-review-list"><header><div><h2>来源记录</h2><p>逐条选择是否写入</p></div><strong>{selectedDecisions.length} 已选</strong></header>{preview.items.map((item) => { const meta = statusMeta[item.matchState]; const decision = decisions[item.id] || {}; return <button type="button" className={`${selected?.id === item.id ? 'active' : ''} ${item.decisionState !== 'pending' ? 'done' : ''}`} key={item.id} onClick={() => setSelectedId(item.id)}><input type="checkbox" aria-label={`选择 ${item.oe}`} disabled={item.decisionState !== 'pending' || item.matchState === 'ambiguous'} checked={Boolean(decision.selected)} onClick={(event) => event.stopPropagation()} onChange={(event) => setDecisions((current) => ({ ...current, [item.id]: { ...current[item.id], selected: event.target.checked } }))} /><span><b>{item.oe}</b><strong>{item.originalName}</strong><small>{item.figurePosition || '无图例位置'}</small></span><em className={meta.className}>{item.decisionState === 'pending' ? meta.label : item.decisionState === 'created' ? '已新建' : item.decisionState === 'attached' ? '已附加' : '已跳过'}</em></button> })}</section>
-        <section className="epc-match-detail">{selected ? <><header><div><span>规范 OE</span><h2>{selected.oe}</h2><p>{selected.originalName}</p></div><span className={`epc-match-badge ${statusMeta[selected.matchState].className}`}><FileSearch size={20} weight="duotone" />{statusMeta[selected.matchState].label}</span></header><div className="epc-detail-scroll"><section><div className="epc-detail-title"><h3>来源快照</h3><span>只读</span></div><dl><div><dt>来源记录</dt><dd>{selected.sourceRecordId || '—'}</dd></div><div><dt>图例位置</dt><dd>{selected.figurePosition || '—'}</dd></div><div><dt>平台提示</dt><dd>{selected.vehicleContext.platformCode || '—'}</dd></div><div><dt>车型版本</dt><dd>{selected.vehicleContext.variantCode || '—'}</dd></div><div><dt>发动机</dt><dd>{selected.vehicleContext.engineCodes?.join(' / ') || '—'}</dd></div><div><dt>PR 码</dt><dd>{selected.vehicleContext.prCodes?.join(' / ') || '—'}</dd></div></dl></section><section><div className="epc-detail-title"><h3>SKU 匹配解释</h3><span>{selected.matchCandidates.length} 个候选</span></div>{selected.matchCandidates.length ? selected.matchCandidates.map((candidate) => <article className="epc-candidate" key={candidate.id}><CheckCircle size={20} weight="fill" /><span><strong>{candidate.name || '未命名 SKU'}</strong><small>{candidate.skuCode} · v{candidate.version}</small></span><em>OE 完全一致</em></article>) : <div className="epc-no-candidate"><Database size={24} /><span><strong>没有相同 OE</strong><small>可建立草稿，名称仍需人工标准化。</small></span></div>}</section><section><div className="epc-detail-title"><h3>车型匹配解释</h3><span>{selected.platformMatch.id ? '平台已识别' : '未识别平台'}</span></div>{selected.platformMatch.id ? <article className="epc-platform-match"><ShieldCheck size={21} weight="fill" /><span><strong>{selected.platformMatch.label}</strong><small>{selected.platformMatch.code} · {selected.platformMatch.yearFrom || '—'}–{selected.platformMatch.yearTo || '—'}</small></span></article> : <div className="epc-no-candidate warning"><WarningCircle size={24} /><span><strong>平台未进入主数据</strong><small>仍可保存来源证据，但不会自动建立适配关系。</small></span></div>}{selected.variantCandidates.map((candidate) => <article className="epc-variant" key={candidate.id}><div><strong>{candidate.label}</strong><small>{candidate.code}</small></div><b>{candidate.score} 分</b><p>{candidate.reasons.join(' · ')}</p></article>)}</section></div></> : null}</section>
+        <section className="epc-match-detail">{selected ? <><header><div><span>规范 OE</span><h2>{selected.oe}</h2><p>{selected.originalName}</p></div><span className={`epc-match-badge ${statusMeta[selected.matchState].className}`}><FileSearch size={20} weight="duotone" />{statusMeta[selected.matchState].label}</span></header><div className="epc-detail-scroll"><section><div className="epc-detail-title"><h3>来源快照</h3><span>只读</span></div><dl><div><dt>来源记录</dt><dd>{selected.sourceRecordId || '—'}</dd></div><div><dt>图例位置</dt><dd>{selected.figurePosition || '—'}</dd></div><div><dt>平台提示</dt><dd>{selected.vehicleContext.platformCode || '—'}</dd></div><div><dt>车型版本</dt><dd>{selected.vehicleContext.variantCode || '—'}</dd></div><div><dt>发动机</dt><dd>{selected.vehicleContext.engineCodes?.join(' / ') || '—'}</dd></div><div><dt>PR 码</dt><dd>{selected.vehicleContext.prCodes?.join(' / ') || '—'}</dd></div></dl></section>{selectedAssets.length ? <section><div className="epc-detail-title"><h3>图组资源</h3><span>{selectedAssets.length} 项留痕</span></div><div className="epc-asset-list">{selectedAssets.map((asset, index) => <a key={`${asset.sourceUrl}-${index}`} href={asset.sourceUrl} target="_blank" rel="noreferrer"><ImageSquare size={21} weight="duotone" /><span><strong>{asset.title || asset.figureCode || '目录资源'}</strong><small>{asset.type} · {asset.contentType || '类型待识别'}{asset.checksum ? ' · 已带校验值' : ''}</small></span><ArrowRight size={16} /></a>)}</div></section> : null}<section><div className="epc-detail-title"><h3>SKU 匹配解释</h3><span>{selected.matchCandidates.length} 个候选</span></div>{selected.matchCandidates.length ? selected.matchCandidates.map((candidate) => <article className="epc-candidate" key={candidate.id}><CheckCircle size={20} weight="fill" /><span><strong>{candidate.name || '未命名 SKU'}</strong><small>{candidate.skuCode} · v{candidate.version}</small></span><em>OE 完全一致</em></article>) : <div className="epc-no-candidate"><Database size={24} /><span><strong>没有相同 OE</strong><small>可建立草稿，名称仍需人工标准化。</small></span></div>}</section><section><div className="epc-detail-title"><h3>车型匹配解释</h3><span>{selected.platformMatch.id ? '平台已识别' : '未识别平台'}</span></div>{selected.platformMatch.id ? <article className="epc-platform-match"><ShieldCheck size={21} weight="fill" /><span><strong>{selected.platformMatch.label}</strong><small>{selected.platformMatch.code} · {selected.platformMatch.yearFrom || '—'}–{selected.platformMatch.yearTo || '—'}</small></span></article> : <div className="epc-no-candidate warning"><WarningCircle size={24} /><span><strong>平台未进入主数据</strong><small>仍可保存来源证据，但不会自动建立适配关系。</small></span></div>}{selected.variantCandidates.map((candidate) => <article className="epc-variant" key={candidate.id}><div><strong>{candidate.label}</strong><small>{candidate.code}</small></div><b>{candidate.score} 分</b><p>{candidate.reasons.join(' · ')}</p></article>)}</section></div></> : null}</section>
         <aside className="epc-decision-panel">
           <header><span>03</span><h2>写入决定</h2><p>系统不会自动覆盖现有名称、分类或价格。</p></header>
           {selected ? <div className="epc-decision-options">

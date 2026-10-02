@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
+import { createServer } from 'node:http'
 import test from 'node:test'
 import { buildApp } from '../src/app.mjs'
+import { createCatalogEpcConnectorService, createHttpEpcConnector } from '../src/catalog-epc-connector-service.mjs'
 
 function fakeRepository() {
   const previews = []
@@ -11,7 +14,7 @@ function fakeRepository() {
         originalName: item.originalName, rawPayload: item.rawPayload, matchState: index ? 'new' : 'exact',
         matchedSkuId: index ? '' : 'sku-existing', matchCandidates: index ? [] : [{ id: 'sku-existing' }], decisionState: 'pending',
       }))
-      const preview = { id: 'preview-1', state: 'preview', version: 1, sourceSystem: input.sourceSystem, vin: input.vin, items, summary: { total: items.length, exact: 1, new: items.length - 1, ambiguous: 0 }, createdBy: actor }
+      const preview = { id: 'preview-1', state: 'preview', version: 1, sourceSystem: input.sourceSystem, vin: input.vin, sourceContext: input.sourceContext || {}, assets: input.assets || [], items, summary: { total: items.length, exact: 1, new: items.length - 1, ambiguous: 0 }, createdBy: actor }
       previews.push(preview)
       return preview
     },
@@ -70,4 +73,92 @@ test('EPC preview routes respect catalog permissions', async () => {
   assert.equal(denied.statusCode, 403)
   assert.equal(denied.json().error, 'CATALOG_PERMISSION_DENIED')
   await app.close()
+})
+
+test('collects a normalized connector response without bypassing the write preview', async () => {
+  const catalogEpcConnectorService = createCatalogEpcConnectorService({ connectors: [{
+    id: 'test-epc', label: 'Test EPC', description: 'contract fixture', configured: true,
+    capabilities: ['vin_lookup', 'diagram_reference'],
+    async collect(input) {
+      return {
+        schemaVersion: 'hushanxing-epc-connector-v1', requestId: 'request-1', collectedAt: '2026-10-02T05:00:00.000Z',
+        vin: input.vin, sourceSystem: 'Porsche PET', catalogPath: '95B / 601-05',
+        items: [{ oe: '95B 698 151 H', originalName: 'Brake pad set', sourceRecordId: '601-05-01', rawPayload: { quantity: 1 } }],
+        assets: [{ type: 'diagram', sourceUrl: 'https://assets.example.test/601-05.png', sourceRecordId: '601-05-01', figureCode: '601-05', checksum: 'sha256:fixture' }],
+      }
+    },
+  }] })
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const connectors = await app.inject('/api/v2/catalog/epc-connectors')
+  assert.equal(connectors.statusCode, 200)
+  assert.equal(connectors.json().items[0].state, 'ready')
+
+  const collected = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/test-epc/collect', payload: { vin: 'WP1ZZZ95ZHLB12345' } })
+  assert.equal(collected.statusCode, 201)
+  assert.equal(collected.json().state, 'preview')
+  assert.equal(collected.json().sourceContext.connectorRequestId, 'request-1')
+  assert.equal(collected.json().assets[0].figureCode, '601-05')
+  assert.equal(collected.json().items[0].decisionState, 'pending')
+  await app.close()
+})
+
+test('reports an unconfigured connector without exposing credentials', async () => {
+  const catalogEpcConnectorService = createCatalogEpcConnectorService({ connectors: [{
+    id: 'external-epc', label: 'External EPC', description: 'pending', configured: false, capabilities: [],
+  }] })
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const listed = (await app.inject('/api/v2/catalog/epc-connectors')).json().items[0]
+  assert.deepEqual(Object.keys(listed).sort(), ['capabilities', 'description', 'id', 'label', 'schemaVersion', 'state'])
+  const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/external-epc/collect', payload: { vin: 'WP1ZZZ95ZHLB12345' } })
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.json().error, 'EPC_CONNECTOR_NOT_CONFIGURED')
+  await app.close()
+})
+
+test('rejects unsafe connector assets before creating a preview', async () => {
+  const catalogEpcConnectorService = createCatalogEpcConnectorService({ connectors: [{
+    id: 'unsafe-epc', label: 'Unsafe EPC', description: 'fixture', configured: true, capabilities: [],
+    async collect() {
+      return {
+        schemaVersion: 'hushanxing-epc-connector-v1', sourceSystem: 'Fixture',
+        items: [{ oe: 'TEST-001', originalName: 'Fixture part' }],
+        assets: [{ type: 'diagram', sourceUrl: 'file:///private/catalog.png' }],
+      }
+    },
+  }] })
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/unsafe-epc/collect', payload: { catalogPath: 'fixture' } })
+  assert.equal(response.statusCode, 400)
+  assert.equal(response.json().error, 'INVALID_EPC_CONNECTOR_RESPONSE')
+  await app.close()
+})
+
+test('HTTP connector sends the versioned contract and server-only authorization', async () => {
+  let received
+  const upstream = createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    received = { authorization: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({ schemaVersion: 'hushanxing-epc-connector-v1', sourceSystem: 'Fixture EPC', items: [{ oe: 'HTTP-001', originalName: 'HTTP fixture part' }] }))
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const { port } = upstream.address()
+  try {
+    const connector = createHttpEpcConnector({
+      CATALOG_EPC_CONNECTOR_URL: `http://127.0.0.1:${port}/collect`,
+      CATALOG_EPC_CONNECTOR_TOKEN: 'server-secret',
+      CATALOG_EPC_CONNECTOR_NAME: 'Fixture connector',
+    })
+    const service = createCatalogEpcConnectorService({ connectors: [connector] })
+    const result = await service.collect('external-epc', { catalogPath: 'fixture / 001' })
+    assert.equal(result.previewInput.items[0].rawOe, 'HTTP-001')
+    assert.equal(received.authorization, 'Bearer server-secret')
+    assert.equal(received.body.schemaVersion, 'hushanxing-epc-connector-v1')
+    assert.equal(service.list().items[0].token, undefined)
+  } finally {
+    upstream.close()
+    await once(upstream, 'close')
+  }
 })

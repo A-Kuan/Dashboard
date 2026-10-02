@@ -36,7 +36,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -186,6 +186,20 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'catalog.edit')
     if (!actor) return
     return reply.code(201).send(await catalogEpcIntakeRepository.createPreview(normalizeEpcPreviewInput(request.body), actor.name))
+  })
+  app.get('/api/v2/catalog/epc-connectors', async (request, reply) => {
+    if (!catalogEpcConnectorService) return reply.code(503).send({ error: 'EPC_CONNECTOR_SERVICE_UNAVAILABLE', message: 'EPC 连接器服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogEpcConnectorService.list()
+  })
+  app.post('/api/v2/catalog/epc-connectors/:id/collect', async (request, reply) => {
+    if (!catalogEpcConnectorService || !catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_SERVICE_UNAVAILABLE', message: 'EPC 连接器服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    const result = await catalogEpcConnectorService.collect(request.params.id, request.body)
+    const preview = await catalogEpcIntakeRepository.createPreview(result.previewInput, actor.name)
+    return reply.code(201).send({ ...preview, connector: result.connector })
   })
   app.get('/api/v2/catalog/epc-previews', async (request, reply) => {
     if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
@@ -576,9 +590,10 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.setErrorHandler((error, _request, reply) => {
     if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在' })
     if (error.code === '23503') return reply.code(400).send({ error: 'INVALID_REFERENCE', message: '关联的数据不存在或已经失效' })
-    const status = error.statusCode && error.statusCode < 500 ? error.statusCode : 500
+    const safeConnectorError = /^EPC_CONNECTOR_(NOT_CONFIGURED|UPSTREAM_ERROR|UNAVAILABLE|TIMEOUT)$/.test(error.errorCode || '')
+    const status = error.statusCode && (error.statusCode < 500 || safeConnectorError) ? error.statusCode : 500
     const payload = { error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message }
-    if (status < 500 && error.details) payload.details = error.details
+    if (status !== 500 && error.details) payload.details = error.details
     return reply.code(status).send(payload)
   })
   return app

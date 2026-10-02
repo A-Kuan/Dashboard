@@ -25,7 +25,8 @@ function mapItem(row) {
 }
 
 async function getPreview(client, id) {
-  const preview = (await client.query('SELECT * FROM catalog_epc_preview WHERE id=$1', [id])).rows[0]
+  const preview = (await client.query(`SELECT p.*,i.source_context,i.raw_payload AS intake_raw_payload
+    FROM catalog_epc_preview p JOIN catalog_intake i ON i.id=p.intake_id WHERE p.id=$1`, [id])).rows[0]
   if (!preview) return null
   const items = (await client.query('SELECT * FROM catalog_epc_preview_item WHERE preview_id=$1 ORDER BY row_number', [id])).rows.map(mapItem)
   const decisions = (await client.query('SELECT * FROM catalog_epc_publish_decision WHERE preview_id=$1 ORDER BY decided_at', [id])).rows.map((row) => ({
@@ -34,7 +35,8 @@ async function getPreview(client, id) {
   return {
     id: preview.id, intakeId: preview.intake_id, state: preview.state, vin: preview.vin, sourceSystem: preview.source_system,
     catalogPath: preview.catalog_path, summary: preview.summary || {}, version: preview.version, createdBy: preview.created_by,
-    createdAt: preview.created_at, updatedAt: preview.updated_at, items, decisions,
+    createdAt: preview.created_at, updatedAt: preview.updated_at, sourceContext: preview.source_context || {},
+    assets: preview.intake_raw_payload?.assets || [], items, decisions,
   }
 }
 
@@ -66,7 +68,7 @@ export function createCatalogEpcIntakeRepository(pool) {
         const intakeId = randomUUID()
         const previewId = randomUUID()
         await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
-          VALUES ($1,'vin_epc','received',$2::jsonb,$3::jsonb,$4)`, [intakeId, JSON.stringify({ vin: input.vin, sourceSystem: input.sourceSystem, catalogPath: input.catalogPath, ...input.sourceContext }), JSON.stringify({ items: input.items }), actor])
+          VALUES ($1,'vin_epc','received',$2::jsonb,$3::jsonb,$4)`, [intakeId, JSON.stringify({ vin: input.vin, sourceSystem: input.sourceSystem, catalogPath: input.catalogPath, ...input.sourceContext }), JSON.stringify({ items: input.items, assets: input.assets || [] }), actor])
         const prepared = []
         for (let index = 0; index < input.items.length; index += 1) {
           const item = input.items[index]
