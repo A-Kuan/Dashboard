@@ -684,6 +684,88 @@ test('shows actionable validation issues for an incomplete manual SKU', async ({
   await capture(page, 'implementation-sku-editor-incomplete-1680.png')
 })
 
+test('preflights and atomically executes an approved legacy SKU migration plan', async ({ page }) => {
+  const headers = (role, id, name) => ({
+    'x-operator-role': role,
+    'x-operator-id': id,
+    'x-operator-name': encodeURIComponent(name),
+    'content-type': 'application/json',
+  })
+  const editorHeaders = headers('catalog_editor', 'e2e:migration-editor', '迁移资料员')
+  const reviewerHeaders = headers('catalog_reviewer', 'e2e:migration-reviewer', '独立审核员')
+  const adminHeaders = headers('catalog_admin', 'e2e:migration-admin', '迁移管理员')
+  const legacyInput = (suffix) => ({
+    skuCode: `LEGACY-PILOT-${suffix}`,
+    chineseName: `迁移试运行零件 ${suffix}`,
+    brand: 'Porsche', category: '保养件', subcategory: '滤清器', manufacturerPartNumber: '',
+    primaryOe: `PILOT-OE-${suffix}`, unit: '件', lifecycleStatus: '在售', dataSource: '迁移隔离测试',
+    sourceEvidence: { source: 'e2e', reference: suffix }, oeRelations: [], fitments: [],
+  })
+  const createLegacy = async (suffix) => {
+    const response = await page.request.post('/api/v1/skus', { headers: editorHeaders, data: legacyInput(suffix) })
+    expect(response.ok()).toBeTruthy()
+    return response.json()
+  }
+  const previewItem = async (code) => {
+    const response = await page.request.get(`/api/v2/catalog/legacy-migration-preview?q=${encodeURIComponent(code)}`, { headers: editorHeaders })
+    expect(response.ok()).toBeTruthy()
+    return (await response.json()).items[0]
+  }
+
+  const staleLegacy = await createLegacy('STALE')
+  const stalePreview = await previewItem(staleLegacy.skuCode)
+  const stalePlanResponse = await page.request.post('/api/v2/catalog/legacy-migration-plans', { headers: editorHeaders, data: {
+    reason: '验证来源变化会阻止批准', items: [{ legacySkuId: stalePreview.legacySkuId, sourceHash: stalePreview.sourceHash, decision: 'migrate', overrides: {} }],
+  } })
+  expect(stalePlanResponse.status()).toBe(201)
+  const stalePlan = await stalePlanResponse.json()
+  const changedLegacy = await page.request.put(`/api/v1/skus/${staleLegacy.id}`, { headers: adminHeaders, data: { ...legacyInput('STALE'), chineseName: '迁移试运行零件 STALE 已更新', version: staleLegacy.version } })
+  expect(changedLegacy.ok()).toBeTruthy()
+  const staleCheck = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${stalePlan.id}/preflight`, { headers: reviewerHeaders })).json()
+  expect(staleCheck.ready).toBe(false)
+  expect(staleCheck.summary.changed).toBe(1)
+  const staleApproval = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${stalePlan.id}/review`, { headers: reviewerHeaders, data: { expectedVersion: stalePlan.version, decision: 'approve' } })
+  expect(staleApproval.status()).toBe(409)
+  expect((await staleApproval.json()).error).toBe('LEGACY_MIGRATION_PREFLIGHT_FAILED')
+
+  const first = await createLegacy('ATOMIC-A')
+  const second = await createLegacy('ATOMIC-B')
+  const firstPreview = await previewItem(first.skuCode)
+  const secondPreview = await previewItem(second.skuCode)
+  const planResponse = await page.request.post('/api/v2/catalog/legacy-migration-plans', { headers: editorHeaders, data: {
+    reason: '首批真实流程隔离试运行',
+    items: [firstPreview, secondPreview].map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, decision: 'migrate', overrides: {} })),
+  } })
+  expect(planResponse.status()).toBe(201)
+  const plan = await planResponse.json()
+  const preflight = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${plan.id}/preflight`, { headers: reviewerHeaders })).json()
+  expect(preflight.ready).toBe(true)
+  expect(preflight.summary.ready).toBe(2)
+  const approvedResponse = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/review`, { headers: reviewerHeaders, data: { expectedVersion: plan.version, decision: 'approve', note: '来源与编号复核通过' } })
+  expect(approvedResponse.ok()).toBeTruthy()
+  const approved = await approvedResponse.json()
+  const committedResponse = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/commit`, { headers: adminHeaders, data: { expectedVersion: approved.version } })
+  expect(committedResponse.ok()).toBeTruthy()
+  const committed = await committedResponse.json()
+  expect(committed.state).toBe('committed')
+  expect(committed.execution.summary).toEqual({ total: 2, migrated: 2, skipped: 0, failed: 0 })
+  const persisted = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${plan.id}`, { headers: adminHeaders })).json()
+  expect(persisted.execution.summary.migrated).toBe(2)
+  expect(persisted.execution.items).toHaveLength(2)
+  for (const result of persisted.execution.items) {
+    const catalogSku = await (await page.request.get(`/api/v2/catalog/skus/${result.catalogSkuId}`, { headers: adminHeaders })).json()
+    expect(catalogSku.lifecycleStatus).toBe('draft')
+    expect(catalogSku.verificationLevel).toBe('unverified')
+  }
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '旧资料迁移' }).click()
+  await page.getByRole('button', { name: /审批记录/ }).click()
+  await page.getByRole('button', { name: /首批真实流程隔离试运行/ }).click()
+  await expect(page.getByRole('heading', { name: '执行结果' })).toBeVisible()
+  await expect(page.getByText('2生成草稿')).toBeVisible()
+})
+
 test('collapses the navigation into a persistent icon rail', async ({ page }) => {
   const collapseButton = page.getByRole('button', { name: '收起导航' })
   await expect(collapseButton).toBeVisible()

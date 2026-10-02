@@ -56,6 +56,10 @@ export function getLegacyMigrationPlan(id) {
   return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(id)}`)
 }
 
+export function getLegacyMigrationPlanPreflight(id) {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(id)}/preflight`)
+}
+
 export function reviewLegacyMigrationPlan(plan, decision, note = '') {
   return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(plan.id)}/review`, {
     method: 'POST', body: JSON.stringify({ expectedVersion: plan.version, decision, note }),
