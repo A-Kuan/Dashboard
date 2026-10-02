@@ -222,7 +222,20 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_RUN_SERVICE_UNAVAILABLE', message: 'EPC 连接器运行记录服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.read')
     if (!actor) return
-    return catalogEpcConnectorRunRepository.list({ state: request.query?.state, connectorId: request.query?.connectorId, page: request.query?.page, pageSize: request.query?.pageSize })
+    const filters = request.query || {}
+    const validDate = (value) => !value || (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)))
+    if (filters.state && !['running', 'succeeded', 'failed'].includes(filters.state)) return reply.code(400).send({ error: 'INVALID_EPC_CONNECTOR_RUN_FILTER', message: '运行状态筛选无效' })
+    if (String(filters.q || '').trim().length > 120) return reply.code(400).send({ error: 'INVALID_EPC_CONNECTOR_RUN_FILTER', message: '搜索条件不能超过 120 个字符' })
+    if (!validDate(filters.from) || !validDate(filters.to) || (filters.from && filters.to && filters.from > filters.to)) return reply.code(400).send({ error: 'INVALID_EPC_CONNECTOR_RUN_FILTER', message: '日期范围无效' })
+    return catalogEpcConnectorRunRepository.list({
+      state: filters.state,
+      connectorId: filters.connectorId,
+      query: String(filters.q || '').trim(),
+      from: filters.from,
+      to: filters.to,
+      page: filters.page,
+      pageSize: filters.pageSize,
+    })
   })
   app.get('/api/v2/catalog/epc-connector-runs/:id', async (request, reply) => {
     if (!catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_RUN_SERVICE_UNAVAILABLE', message: 'EPC 连接器运行记录服务未配置' })

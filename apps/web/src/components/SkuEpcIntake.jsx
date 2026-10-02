@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, CheckCircle, ClockCounterClockwise, CloudArrowDown, Database, ImageSquare, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, Check, CheckCircle, ClockCounterClockwise, CloudArrowDown, Database, ImageSquare, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
 import { collectCatalogEpcConnector, commitCatalogEpcPreview, createCatalogEpcPreview, getCatalogEpcPreview, listCatalogEpcConnectors, listCatalogEpcPreviews } from '../services/catalogApi'
+import { EpcConnectorRunCenter } from './EpcConnectorRunCenter'
 import '../sku-epc-intake.css'
 import '../sku-epc-connector.css'
 
@@ -41,6 +42,7 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyView, setHistoryView] = useState('batches')
   const [history, setHistory] = useState({ items: [], total: 0 })
   const [historyLoading, setHistoryLoading] = useState(true)
   const [connectors, setConnectors] = useState([])
@@ -102,10 +104,20 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
     } catch (nextError) { setError(nextError.message) } finally { setBusy(false) }
   }
 
+  if (!preview && historyOpen && historyView === 'runs') return <EpcConnectorRunCenter
+    connectors={connectors}
+    onBack={onBack}
+    onShowBatches={() => setHistoryView('batches')}
+    onNewBatch={() => { setHistoryView('batches'); setHistoryOpen(false) }}
+    onOpenPreview={openHistory}
+    onNotify={onNotify}
+  />
+
   if (!preview && historyOpen) return (
     <main className="epc-intake epc-history-workspace">
-      <header className="epc-intake-topbar"><button type="button" onClick={onBack}><ArrowLeft size={20} weight="bold" />返回资料库</button><div><span>来源证据接入</span><h1>EPC 批次记录</h1><p>恢复未完成批次，核对每一次写入决定与结果 SKU。</p></div><button className="epc-new-batch" type="button" onClick={() => setHistoryOpen(false)}><Plus size={18} weight="bold" />新建采集</button></header>
+      <header className="epc-intake-topbar"><button type="button" onClick={onBack}><ArrowLeft size={20} weight="bold" />返回资料库</button><div><span>来源证据接入</span><h1>EPC 批次记录</h1><p>恢复未完成批次，核对每一次写入决定与结果 SKU。</p></div><button className="epc-run-center-button" type="button" onClick={() => setHistoryView('runs')}><ArrowsClockwise size={18} weight="bold" />运行中心</button><button className="epc-new-batch" type="button" onClick={() => setHistoryOpen(false)}><Plus size={18} weight="bold" />新建采集</button></header>
       <div className="epc-history-body">
+        <nav className="epc-ops-tabs" aria-label="EPC 记录类型"><button className="active" type="button" aria-current="page">证据批次</button><button type="button" onClick={() => setHistoryView('runs')}>连接器运行</button><span>证据批次记录逐条匹配和写入决定，连接器运行记录外部调用结果。</span></nav>
         <section className="epc-history-panel">
           <header><div><h2>证据处理队列</h2><p>原始来源不会因批次完成而删除，未选择行可继续处理。</p></div><button type="button" disabled={historyLoading} onClick={loadHistory}><ClockCounterClockwise size={17} />刷新</button></header>
           <div className="epc-history-heading"><span>来源 / 目录</span><span>匹配摘要</span><span>处理状态</span><span>建立时间</span><span /></div>
@@ -122,10 +134,10 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
 
   if (!preview) return (
     <main className="epc-intake epc-intake-form">
-      <header className="epc-intake-topbar"><button type="button" onClick={onBack}><ArrowLeft size={20} weight="bold" />返回资料库</button><div><span>来源证据接入</span><h1>从 VIN / EPC 建立资料</h1><p>录入原始目录事实，系统只生成匹配预览，不会直接写入 SKU。</p></div><button className="epc-history-button" type="button" onClick={() => setHistoryOpen(true)}><ClockCounterClockwise size={19} weight="bold" /><span><strong>批次记录</strong><small>{historyLoading ? '正在读取' : `${history.total} 个批次`}</small></span></button><div className="epc-safety"><ShieldCheck size={22} weight="fill" /><span><strong>写入前人工确认</strong><small>原始证据永久保留</small></span></div></header>
+      <header className="epc-intake-topbar"><button type="button" onClick={onBack}><ArrowLeft size={20} weight="bold" />返回资料库</button><div><span>来源证据接入</span><h1>从 VIN / EPC 建立资料</h1><p>录入原始目录事实，系统只生成匹配预览，不会直接写入 SKU。</p></div><button className="epc-history-button" type="button" onClick={() => { setHistoryView('batches'); setHistoryOpen(true) }}><ClockCounterClockwise size={19} weight="bold" /><span><strong>批次记录</strong><small>{historyLoading ? '正在读取' : `${history.total} 个批次`}</small></span></button><div className="epc-safety"><ShieldCheck size={22} weight="fill" /><span><strong>写入前人工确认</strong><small>原始证据永久保留</small></span></div></header>
       <div className="epc-form-body">
         <section className="epc-connector-card">
-          <div className="epc-section-title"><span>00</span><div><h2>连接器采集</h2><p>从已授权目录服务读取 VIN、图组和 OE；结果仍进入人工匹配预览。</p></div></div>
+          <div className="epc-section-title"><span>00</span><div><h2>连接器采集</h2><p>从已授权目录服务读取 VIN、图组和 OE；结果仍进入人工匹配预览。</p></div><button type="button" onClick={() => { setHistoryView('runs'); setHistoryOpen(true) }}><ArrowsClockwise size={17} />运行中心</button></div>
           {connectors.length ? <div className="epc-connector-grid">
             <label><span>目录连接器</span><select aria-label="目录连接器" value={connectorInput.connectorId} onChange={(event) => setConnectorInput({ ...connectorInput, connectorId: event.target.value })}>{connectors.map((connector) => <option key={connector.id} value={connector.id}>{connector.label}</option>)}</select></label>
             <label><span>VIN</span><input value={connectorInput.vin} maxLength={17} onChange={(event) => setConnectorInput({ ...connectorInput, vin: event.target.value.toUpperCase() })} placeholder="连接器查询 VIN" /></label>

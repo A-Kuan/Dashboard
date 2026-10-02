@@ -160,6 +160,20 @@ export function collectCatalogEpcConnector(id, input) {
   return request(`/api/v2/catalog/epc-connectors/${encodeURIComponent(id)}/collect`, { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function listCatalogEpcConnectorRuns({ state = '', connectorId = '', query = '', from = '', to = '', page = 1, pageSize = 30 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (state) params.set('state', state)
+  if (connectorId) params.set('connectorId', connectorId)
+  if (query.trim()) params.set('q', query.trim())
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  return request(`/api/v2/catalog/epc-connector-runs?${params}`)
+}
+
+export function retryCatalogEpcConnectorRun(id) {
+  return request(`/api/v2/catalog/epc-connector-runs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
+}
+
 export function listCatalogEpcPreviews({ state = '', page = 1, pageSize = 50 } = {}) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (state) params.set('state', state)

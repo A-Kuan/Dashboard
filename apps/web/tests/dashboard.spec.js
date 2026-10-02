@@ -218,6 +218,36 @@ test('resumes a partial EPC batch without repeating completed decisions', async 
   await expect(page.getByText('已完成 · 2/2')).toBeVisible()
 })
 
+test('operates failed EPC connector runs with filters, inspection and linked retries', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const connectors = await (await page.request.get('/api/v2/catalog/epc-connectors', { headers })).json()
+  const connector = connectors.items[0]
+  const vin = 'WP1ZZZ95ZHLB54321'
+  const failed = await page.request.post(`/api/v2/catalog/epc-connectors/${connector.id}/collect`, { headers, data: { vin, catalogPath: '95B / 601-05', groupCode: '601-05' } })
+  expect(failed.status()).toBe(503)
+  expect((await failed.json()).details.connectorRunId).toBeTruthy()
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+  await page.getByRole('button', { name: '运行中心' }).click()
+  await expect(page.getByRole('heading', { name: 'EPC 运行中心' })).toBeVisible()
+  await page.getByLabel('搜索连接器运行').fill(vin)
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByText(vin).first()).toBeVisible()
+  await expect(page.getByRole('strong').filter({ hasText: 'EPC_CONNECTOR_NOT_CONFIGURED' })).toBeVisible()
+  await expect(page.getByText('地址与密钥不会进入浏览器或运行记录')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-epc-run-center-1680.png', fullPage: false })
+
+  const retryResponse = page.waitForResponse((response) => response.url().includes('/api/v2/catalog/epc-connector-runs/') && response.url().endsWith('/retry') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '使用原条件重试' }).click()
+  expect((await retryResponse).status()).toBe(503)
+  page.__consoleErrors = page.__consoleErrors.filter((message) => !message.includes('status of 503'))
+  await expect(page.getByText(vin).first()).toBeVisible()
+  await expect(page.getByText('重试记录').first()).toBeVisible()
+  await expect(page.getByText(/连接器尚未配置/).last()).toBeVisible()
+})
+
 test('reviews a submitted SKU in the data quality workspace', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '质量审核' }).click()

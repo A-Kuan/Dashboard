@@ -91,7 +91,7 @@ VIN、目录路径或图组编码至少填写一项。服务可以按自身能�
 
 每次外部采集都会先建立不可删除的运行记录，再调用上游：
 
-- `GET /api/v2/catalog/epc-connector-runs?state=&connectorId=&page=&pageSize=`：分页读取运行历史。
+- `GET /api/v2/catalog/epc-connector-runs?state=&connectorId=&q=&from=&to=&page=&pageSize=`：按状态、连接器、VIN/目录关键字与日期分页读取运行历史。
 - `GET /api/v2/catalog/epc-connector-runs/:id`：读取查询上下文、结果摘要、错误和关联预览。
 - `POST /api/v2/catalog/epc-connector-runs/:id/retry`：仅允许重试 `failed` 记录；使用原查询上下文创建新的运行记录。
 

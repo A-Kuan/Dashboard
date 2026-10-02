@@ -54,7 +54,14 @@ function fakeRunRepository() {
       return { ...run }
     },
     async get(id) { return runs.find((item) => item.id === id) || null },
-    async list() { return { items: runs.map((item) => ({ ...item })), total: runs.length, page: 1, pageSize: 20 } },
+    async list({ state = '', connectorId = '', query = '', page = 1, pageSize = 20 } = {}) {
+      const matchesBase = (item) => (!connectorId || item.connectorId === connectorId) && (!query || JSON.stringify(item.requestContext).toLowerCase().includes(String(query).toLowerCase()) || item.connectorId.toLowerCase().includes(String(query).toLowerCase()))
+      const base = runs.filter(matchesBase)
+      const filtered = base.filter((item) => !state || item.state === state)
+      const summary = { total: base.length, running: 0, succeeded: 0, failed: 0 }
+      for (const item of base) summary[item.state] += 1
+      return { items: filtered.map((item) => ({ ...item })), total: filtered.length, summary, page: Number(page), pageSize: Number(pageSize) }
+    },
   }
 }
 
@@ -189,6 +196,13 @@ test('retains failed connector runs and retries them as a linked attempt', async
   const history = (await app.inject('/api/v2/catalog/epc-connector-runs')).json()
   assert.equal(history.total, 2)
   assert.deepEqual(history.items.map((item) => item.state), ['failed', 'succeeded'])
+  const failedOnly = (await app.inject('/api/v2/catalog/epc-connector-runs?state=failed&connectorId=retry-epc&q=fixture')).json()
+  assert.equal(failedOnly.total, 1)
+  assert.equal(failedOnly.summary.total, 2)
+  assert.equal(failedOnly.summary.failed, 1)
+  const invalidRange = await app.inject('/api/v2/catalog/epc-connector-runs?from=2026-10-03&to=2026-10-02')
+  assert.equal(invalidRange.statusCode, 400)
+  assert.equal(invalidRange.json().error, 'INVALID_EPC_CONNECTOR_RUN_FILTER')
   await app.close()
 })
 

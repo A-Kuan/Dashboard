@@ -7,6 +7,13 @@
   box-shadow: 0 8px 24px rgba(28, 39, 51, 0.045);
 }
 
+.epc-intake-topbar > .epc-run-center-button {
+  align-self: center;
+  padding: 10px 12px;
+  border: 1px solid #d6dde4;
+  background: #f7f9fa;
+}
+
 .epc-connector-grid {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1.25fr 1fr;
@@ -128,4 +135,48 @@
 
 @media (max-width: 1180px) {
   .epc-connector-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Connector operations keeps secondary text readable on Windows desktop. */
+.epc-run-center .epc-run-workspace {
+  min-height: 440px;
+  height: calc(100vh - 462px);
+}
+
+.epc-run-center .epc-ops-tabs > span,
+.epc-run-center .epc-run-metrics small,
+.epc-run-center .epc-run-list-panel header p,
+.epc-run-center .epc-run-empty span,
+.epc-run-center .epc-run-inspector > footer span {
+  font-size: 14px !important;
+}
+
+.epc-run-center .epc-run-metrics article > span,
+.epc-run-center .epc-run-toolbar form input,
+.epc-run-center .epc-run-toolbar form button,
+.epc-run-center .epc-run-toolbar select,
+.epc-run-center .epc-run-toolbar label > input,
+.epc-run-center .epc-run-clear,
+.epc-run-center .epc-run-list strong,
+.epc-run-center .epc-run-state,
+.epc-run-center .epc-run-inspector h3,
+.epc-run-center .epc-run-inspector dd,
+.epc-run-center .epc-run-error > strong,
+.epc-run-center .epc-run-error > p,
+.epc-run-center .epc-run-inspector > footer button {
+  font-size: 14px !important;
+}
+
+.epc-run-center .epc-run-toolbar label > span,
+.epc-run-center .epc-run-table-head,
+.epc-run-center .epc-run-list small,
+.epc-run-center .epc-run-list > button > span:nth-child(3),
+.epc-run-center .epc-run-list > button > span:nth-child(5),
+.epc-run-center .epc-run-list time,
+.epc-run-center .epc-run-list-panel > footer,
+.epc-run-center .epc-run-list-panel > footer button,
+.epc-run-center .epc-run-inspector dt,
+.epc-run-center .epc-run-link,
+.epc-run-center .epc-run-link button {
+  font-size: 13px !important;
 }

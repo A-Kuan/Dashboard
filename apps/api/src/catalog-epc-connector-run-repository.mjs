@@ -44,19 +44,31 @@ export function createCatalogEpcConnectorRunRepository(pool) {
       return mapRun((await pool.query('SELECT * FROM catalog_epc_connector_run WHERE id=$1', [id])).rows[0])
     },
 
-    async list({ state = '', connectorId = '', page = 1, pageSize = 20 } = {}) {
+    async list({ state = '', connectorId = '', query = '', from = '', to = '', page = 1, pageSize = 20 } = {}) {
       const safePage = Math.max(1, Number(page) || 1)
       const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 20))
-      const values = []
-      const filters = []
+      const baseValues = []
+      const baseFilters = []
+      if (connectorId) { baseValues.push(connectorId); baseFilters.push(`connector_id=$${baseValues.length}`) }
+      if (query) {
+        baseValues.push(`%${String(query).trim()}%`)
+        baseFilters.push(`(connector_id ILIKE $${baseValues.length} OR request_context->>'vin' ILIKE $${baseValues.length} OR request_context->>'catalogPath' ILIKE $${baseValues.length} OR request_context->>'groupCode' ILIKE $${baseValues.length})`)
+      }
+      if (from) { baseValues.push(from); baseFilters.push(`started_at >= $${baseValues.length}::date`) }
+      if (to) { baseValues.push(to); baseFilters.push(`started_at < ($${baseValues.length}::date + interval '1 day')`) }
+      const values = [...baseValues]
+      const filters = [...baseFilters]
       if (state) { values.push(state); filters.push(`state=$${values.length}`) }
-      if (connectorId) { values.push(connectorId); filters.push(`connector_id=$${values.length}`) }
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
       const total = Number((await pool.query(`SELECT count(*)::int AS total FROM catalog_epc_connector_run ${where}`, values)).rows[0].total)
+      const summaryWhere = baseFilters.length ? `WHERE ${baseFilters.join(' AND ')}` : ''
+      const summaryRows = (await pool.query(`SELECT state,count(*)::int AS count FROM catalog_epc_connector_run ${summaryWhere} GROUP BY state`, baseValues)).rows
+      const summary = { total: 0, running: 0, succeeded: 0, failed: 0 }
+      for (const item of summaryRows) { summary[item.state] = Number(item.count); summary.total += Number(item.count) }
       values.push(safeSize, (safePage - 1) * safeSize)
       const rows = (await pool.query(`SELECT * FROM catalog_epc_connector_run ${where}
         ORDER BY started_at DESC,id LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
-      return { items: rows.map(mapRun), total, page: safePage, pageSize: safeSize }
+      return { items: rows.map(mapRun), total, summary, page: safePage, pageSize: safeSize }
     },
   }
 }
