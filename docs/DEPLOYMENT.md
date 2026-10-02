@@ -171,7 +171,7 @@ systemctl status dashboard-sku-backup.service dashboard-sku-backup.timer
 
 OSS Bucket 必须启用版本控制，并使用独立、最小权限的 RAM 身份，只授予目标前缀的 PutObject、HeadObject/GetObject 权限，不授予 DeleteObject、Bucket 管理或其他业务 Bucket 权限。生产首选把该 RAM 角色绑定到 ECS，设置 `OSS_ECS_RAM_ROLE` 后由官方凭据组件通过 IMDSv2 获取短期 STS 凭据；不在服务器落长期 AccessKey。静态密钥只作为兼容回退，两种凭据来源不能同时启用。建议使用不同地域的专用 Bucket，并在 OSS 侧配置生命周期；仓库和 journal 中不得保存或输出访问密钥。
 
-先从 `deploy/backup-offsite.env.example` 创建只允许 root 读取的配置。首次启用时保留 `OFFSITE_BACKUP_REQUIRED=0`，手动生成一份每日备份并确认 `offsite.status=complete`、三项对象和本机 receipt 均存在；再设为 `1`。设为 required 后，每五分钟巡检会把“最新每日备份缺少完整异地凭据”视为故障。
+先从 `deploy/backup-offsite.env.example` 创建只允许 root 读取的配置。首次启用时保留 `OFFSITE_BACKUP_REQUIRED=0` 与 `OFFSITE_RESTORE_DRILL_ENABLED=0`，手动生成一份每日备份并确认 `offsite.status=complete`、三项对象和本机 receipt 均存在；再设为 `1`。设为 required 后，每五分钟巡检会把“最新每日备份缺少完整异地凭据”视为故障。
 
 ```bash
 sudo install -d -o root -g root -m 0750 /etc/dashboard-sku
@@ -182,7 +182,12 @@ sudo install -o root -g root -m 0600 deploy/notifications.env.example /etc/dashb
 sudo install -m 0644 deploy/dashboard-sku-alert@.service /etc/systemd/system/
 sudo install -m 0644 deploy/dashboard-sku-backup.service /etc/systemd/system/
 sudo install -m 0644 deploy/dashboard-sku-operations-check.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-offsite-restore-drill.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-offsite-restore-drill.timer /etc/systemd/system/
+sudo install -d -o root -g dashboard-sku -m 0750 /opt/dashboard-sku-api/offsite-restore-drills
+sudo install -d -o dashboard-sku -g dashboard-sku -m 0750 /opt/dashboard-sku-api/restore-drills
 sudo systemctl daemon-reload
+sudo systemctl enable --now dashboard-sku-offsite-restore-drill.timer
 sudo systemctl start dashboard-sku-backup.service
 sudo systemctl start dashboard-sku-alert@manual-test.service
 journalctl -u dashboard-sku-backup.service -u dashboard-sku-alert@manual-test.service --since '-10 minutes' --no-pager
@@ -190,7 +195,7 @@ journalctl -u dashboard-sku-backup.service -u dashboard-sku-alert@manual-test.se
 
 备份或五分钟巡检失败时，systemd 会调用统一通知单元。通知支持钉钉签名机器人、企业微信机器人和普通 JSON webhook；内容只包含来源、主机、时间和故障提示，不包含密钥、数据库内容或请求头。同一来源默认 30 分钟只通知一次，防止持续故障造成消息风暴；通知发送失败不会递归触发自身。
 
-恢复不能直接覆盖生产库。仓库内的恢复演练工具只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
+恢复不能直接覆盖生产库。仓库内的恢复演练工具默认只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
 
 ```bash
 cd /opt/dashboard-sku-api/current
@@ -199,6 +204,8 @@ sudo ./scripts/run-api-restore-drill.sh \
 ```
 
 自动发布会把受保护主分支中的恢复演练脚本一并安装到 release。演练成功输出单行 JSON 证据；任何步骤失败都返回非零状态。只有恢复验证、关键表数量、接口测试和人工抽查均通过后，才能安排生产切换。
+
+每月异地恢复 timer 在每月第一个星期日 04:10 后随机 30 分钟内运行。任务只识别目标前缀下形如 `<备份名>/<备份名>.manifest.json` 的完整提交，分页查找最新清单，在独立 `download.*` 目录下载三件对象并核对远端元数据、文件大小与 SHA-256，再调用同一套隔离数据库恢复演练。该受控入口是恢复脚本唯一允许的第二种备份根目录；无论成功失败，下载目录、一次性数据库和恢复资源都会清理，不复制回本机长期备份区，也不修改或删除 OSS 对象。真实 OSS 尚未启用时任务返回 `status=disabled`；首次真实手动演练通过后才能把 `OFFSITE_RESTORE_DRILL_ENABLED` 设为 `1`，失败由统一告警单元通知。
 
 页面“导出资料”生成的 JSON/CSV 用于业务交接和人工核对，不替代数据库备份。JSON 审计包包含架构版本、计数与内容校验值；CSV 是便于 Excel 阅读的扁平视图。
 

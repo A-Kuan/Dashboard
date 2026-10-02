@@ -1,0 +1,27 @@
+[Unit]
+Description=Dashboard SKU monthly offsite backup restore drill
+After=network-online.target postgresql.service dashboard-sku-api.service
+Wants=network-online.target
+Requires=dashboard-sku-api.service
+RequiresMountsFor=/opt/dashboard-sku-api/offsite-restore-drills /opt/dashboard-sku-api/restore-drills
+OnFailure=dashboard-sku-alert@offsite-restore-drill.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=60min
+User=root
+Group=root
+WorkingDirectory=/opt/dashboard-sku-api/current
+Environment=NODE_ENV=production
+Environment=API_RESTORE_DEPLOY_ROOT=/opt/dashboard-sku-api
+EnvironmentFile=-/etc/dashboard-sku/backup-offsite.env
+ExecStart=/opt/dashboard-sku-api/current/scripts/run-offsite-restore-drill.sh
+UMask=0027
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dashboard-sku-api/offsite-restore-drills /opt/dashboard-sku-api/restore-drills
