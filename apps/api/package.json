@@ -9,6 +9,8 @@
     "migrate": "node src/migrate.mjs",
     "backup": "node scripts/backup-database.mjs",
     "backup:verify": "node scripts/verify-backup.mjs",
+    "backup:scheduled": "node scripts/run-scheduled-backup.mjs",
+    "backup:prune": "node scripts/prune-backups.mjs",
     "restore:verify": "node scripts/verify-restored-database.mjs",
     "operations:check": "node scripts/check-operations.mjs",
     "assets:verify": "node scripts/verify-epc-assets.mjs",

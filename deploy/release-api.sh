@@ -108,11 +108,12 @@ cd "$release_path"
 sudo -u dashboard-sku npm ci --omit=dev
 sudo -u dashboard-sku npm test
 
-backup_json="$(sudo -u dashboard-sku env \
+backup_json="$(sudo -u dashboard-sku flock -w 300 "$deploy_root/backups/.backup.lock" env \
   PGDATABASE=dashboard_sku PGUSER=dashboard-sku \
   CATALOG_BACKUP_DIR="$deploy_root/backups" \
   CATALOG_EPC_ASSET_DIR="$deploy_root/data/epc-assets" \
   RELEASE_REVISION="$revision_sha" \
+  BACKUP_PURPOSE=release \
   npm run --silent backup)"
 manifest_path="$(printf '%s' "$backup_json" | node -e "let value='';process.stdin.on('data',(chunk)=>value+=chunk);process.stdin.on('end',()=>process.stdout.write(JSON.parse(value).manifestPath))")"
 sudo -u dashboard-sku npm run --silent backup:verify -- "$manifest_path"
