@@ -5,7 +5,7 @@ import {
 } from '@phosphor-icons/react'
 import {
   commitLegacyMigrationPlan, createLegacyMigrationPlan, getCatalogDictionaries, getLegacyMigrationPlan,
-  getLegacySkuMigrationPreview, listLegacyMigrationPlans, reviewLegacyMigrationPlan,
+  getLegacyMigrationPlanPreflight, getLegacySkuMigrationPreview, listLegacyMigrationPlans, reviewLegacyMigrationPlan,
 } from '../services/catalogApi'
 import '../sku-legacy-migration.css'
 
@@ -36,6 +36,8 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
   const [preview, setPreview] = useState({ items: [], summary: {} })
   const [plans, setPlans] = useState([])
   const [planDetail, setPlanDetail] = useState(null)
+  const [planPreflight, setPlanPreflight] = useState(null)
+  const [preflightLoading, setPreflightLoading] = useState(false)
   const [dictionaries, setDictionaries] = useState({})
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -93,13 +95,19 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
     try {
       const created = await createLegacyMigrationPlan(planItems, reason.trim())
       setDecisions({}); setPlans((current) => [created, ...current]); setPlanDetail(created); setSurface('plans')
+      setPreflightLoading(true)
+      try { setPlanPreflight(await getLegacyMigrationPlanPreflight(created.id)) } finally { setPreflightLoading(false) }
       onNotify?.(`迁移方案已提交：${created.migrateCount} 条待审核`)
     } catch (requestError) { setError(requestError.message || '迁移方案提交失败') } finally { setSubmitting(false) }
   }
 
   const openPlan = async (plan) => {
-    setError('')
-    try { setPlanDetail(await getLegacyMigrationPlan(plan.id)) } catch (requestError) { setError(requestError.message || '方案详情加载失败') }
+    setError(''); setPlanPreflight(null); setPreflightLoading(true)
+    try {
+      const detail = await getLegacyMigrationPlan(plan.id)
+      setPlanDetail(detail)
+      if (['submitted', 'approved'].includes(detail.state)) setPlanPreflight(await getLegacyMigrationPlanPreflight(plan.id))
+    } catch (requestError) { setError(requestError.message || '方案详情加载失败') } finally { setPreflightLoading(false) }
   }
 
   const reviewPlan = async (decision) => {
@@ -108,8 +116,12 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
     try {
       const next = await reviewLegacyMigrationPlan(planDetail, decision, reviewNote.trim())
       setPlanDetail(next); setPlans((current) => current.map((item) => item.id === next.id ? next : item)); setReviewNote('')
+      setPlanPreflight(decision === 'approve' ? await getLegacyMigrationPlanPreflight(next.id) : null)
       onNotify?.(decision === 'approve' ? '迁移方案已批准，等待管理员执行' : '迁移方案已退回')
-    } catch (requestError) { setError(requestError.message || '审核失败') } finally { setSubmitting(false) }
+    } catch (requestError) {
+      if (requestError.details?.preflight) setPlanPreflight(requestError.details.preflight)
+      setError(requestError.message || '审核失败')
+    } finally { setSubmitting(false) }
   }
 
   const commitPlan = async () => {
@@ -119,7 +131,11 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
       const next = await commitLegacyMigrationPlan(planDetail)
       setPlanDetail(next); setPlans((current) => current.map((item) => item.id === next.id ? next : item)); await load()
       onNotify?.(`方案已执行：${next.batch.summary.migrated} 条生成草稿`); onCompleted?.(next.batch)
-    } catch (requestError) { setError(requestError.message || '方案执行失败') } finally { setSubmitting(false) }
+    } catch (requestError) {
+      await openPlan(planDetail)
+      if (requestError.details?.preflight) setPlanPreflight(requestError.details.preflight)
+      setError(requestError.message || '方案执行失败')
+    } finally { setSubmitting(false) }
   }
 
   const renderMappingSelect = (label, code, currentLabel, originalLabel) => {
@@ -134,7 +150,7 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
     <div className="legacy-migration-content">
       <section className="legacy-migration-metrics" aria-label="迁移概览"><div><span>旧资料总数</span><strong>{preview.summary.total ?? '—'}</strong><small>当前迁移范围</small></div><div className="accent"><span>建议迁移</span><strong>{preview.summary.recommended ?? '—'}</strong><small>无阻断风险</small></div><div><span>需先处理</span><strong>{preview.summary.blocked ?? '—'}</strong><small>编号或字段冲突</small></div><div><span>待审核方案</span><strong>{plans.filter((item) => item.state === 'submitted').length}</strong><small>等待审核角色处理</small></div><div><span>已迁移</span><strong>{preview.summary.migrated ?? '—'}</strong><small>已生成草稿</small></div></section>
       <section className="legacy-migration-toolbar"><div className="legacy-surface-tabs"><button type="button" className={surface === 'preview' ? 'active' : ''} onClick={() => setSurface('preview')}>资料治理</button><button type="button" className={surface === 'plans' ? 'active' : ''} onClick={() => setSurface('plans')}>审批记录 <b>{plans.filter((item) => item.state === 'submitted').length}</b></button></div>{surface === 'preview' ? <><label><MagnifyingGlass size={20} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索旧 SKU、OE、名称、品牌" /></label><nav>{filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? 'active' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</nav><button type="button" className="legacy-select-recommended" disabled={!canPlan || !preview.summary.recommended} onClick={() => setDecisions(Object.fromEntries(preview.items.filter((item) => item.recommended).map((item) => [item.legacySkuId, { decision: 'migrate', exclusionReason: '', overrides: {} }])))}><Check size={17} weight="bold" />选择全部建议项</button></> : null}</section>
-      {surface === 'preview' ? <PreviewWorkspace {...{ visibleItems, selected, decisions, selectedDecision, canPlan, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }} /> : <PlanWorkspace {...{ plans, planDetail, canReview, canExecute, isSelfReview: Boolean(planDetail?.createdById && planDetail.createdById === session?.id), submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }} />}
+      {surface === 'preview' ? <PreviewWorkspace {...{ visibleItems, selected, decisions, selectedDecision, canPlan, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }} /> : <PlanWorkspace {...{ plans, planDetail, planPreflight, preflightLoading, canReview, canExecute, isSelfReview: Boolean(planDetail?.createdById && planDetail.createdById === session?.id), submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }} />}
       {surface === 'preview' ? <footer className="legacy-migration-footer"><div><strong>方案内 {migrationCount} 条迁移 · {planItems.length - migrationCount} 条排除</strong><span>提交后由审核角色批准，不会立即写入新资料库。</span></div><label><span>方案说明</span><input value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canPlan || submitting} /></label><button type="button" disabled={!canPlan || !migrationCount || !reason.trim() || invalidExclusion || submitting} onClick={submitPlan}>{submitting ? '正在提交…' : `提交审核 ${migrationCount} 条`}</button></footer> : <footer className="legacy-migration-footer legacy-plan-footer"><div><strong>迁移审批与执行已分离</strong><span>审核人确认方案，管理员执行后只生成待核验草稿。</span></div></footer>}
       {error ? <div className="legacy-migration-error"><XCircle size={18} weight="fill" />{error}</div> : null}
     </div>
@@ -146,6 +162,43 @@ function PreviewWorkspace({ visibleItems, selected, decisions, selectedDecision,
     <aside className="legacy-migration-inspector">{selected ? <><header><span className="legacy-migration-inspector-state">{stateLabel(selected)}</span><h2>{selected.legacy.name}</h2><p>{selected.legacy.skuCode} · 更新于 {formatTime(selected.legacy.updatedAt)}</p></header><div className="legacy-migration-inspector-body"><section><h3><ArrowsLeftRight size={18} />字段映射</h3><dl>{renderMappingSelect('品牌', 'brand', selected.target.identity.brandLabel, selected.legacy.brand)}{renderMappingSelect('分类', 'category', selected.target.identity.categoryLabel, selected.legacy.category)}{renderMappingSelect('单位', 'unit', selected.target.identity.unitLabel, selected.legacy.unit)}<div><dt>状态</dt><dd><span>{selected.legacy.lifecycleStatus}</span><b>→</b><strong>草稿 · 未核验</strong></dd></div></dl></section><section className="legacy-decision"><h3><ShieldCheck size={18} />方案决定</h3><div><button type="button" disabled={!canPlan || selected.migrated || selected.blocking} className={selectedDecision?.decision === 'migrate' ? 'active' : ''} onClick={() => updateDecision(selected.legacySkuId, { decision: 'migrate', exclusionReason: '' })}>纳入迁移</button><button type="button" disabled={!canPlan || selected.migrated} className={selectedDecision?.decision === 'exclude' ? 'active danger' : ''} onClick={() => updateDecision(selected.legacySkuId, { decision: 'exclude' })}>从本方案排除</button></div>{selectedDecision?.decision === 'exclude' ? <textarea aria-label="排除原因" value={selectedDecision.exclusionReason || ''} onChange={(event) => updateDecision(selected.legacySkuId, { exclusionReason: event.target.value })} placeholder="必填：说明为什么暂不迁移这条资料" /> : null}</section><section><h3><WarningCircle size={18} />检查结果</h3>{selected.issues.length ? <div className="legacy-issue-list">{selected.issues.map((issue) => <div className={issue.blocking ? 'blocking' : ''} key={issue.code}>{issue.blocking ? <XCircle size={17} weight="fill" /> : <WarningCircle size={17} weight="fill" />}<span><strong>{issue.blocking ? '阻止迁移' : '迁移后复核'}</strong><small>{issue.label}</small></span></div>)}</div> : <div className="legacy-all-clear"><CheckCircle size={20} weight="fill" /><span><strong>未发现风险项</strong><small>仍将以草稿状态进入资料库。</small></span></div>}</section><section className="legacy-preservation-note"><ShieldCheck size={20} weight="fill" /><span><strong>旧资料不会被修改</strong><small>字段修正和排除决定只保存在迁移方案中。</small></span></section></div></> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一条旧资料</strong><span>在这里核对映射和风险。</span></div>}</aside></section>
 }
 
-function PlanWorkspace({ plans, planDetail, canReview, canExecute, isSelfReview, submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }) {
-  return <section className="legacy-migration-workspace legacy-plan-workspace"><article className="legacy-migration-list"><div className="legacy-plan-head"><span>状态</span><span>方案说明</span><span>范围</span><span>提交信息</span></div><div className="legacy-migration-rows">{plans.map((plan) => <button type="button" className={`legacy-plan-row ${planDetail?.id === plan.id ? 'active' : ''}`} key={plan.id} onClick={() => openPlan(plan)}><em className={plan.state}>{planStateLabels[plan.state] || plan.state}</em><span><strong>{plan.reason}</strong><small>{plan.id.slice(0, 8)}</small></span><span><strong>{plan.migrateCount} 条迁移</strong><small>{plan.excludeCount} 条排除</small></span><span><strong>{plan.createdBy}</strong><small>{formatTime(plan.createdAt)}</small></span></button>)}{!plans.length ? <div className="legacy-migration-empty"><Database size={34} /><strong>还没有迁移方案</strong><span>在资料治理中选择记录后提交。</span></div> : null}</div></article><aside className="legacy-migration-inspector legacy-plan-inspector">{planDetail ? <><header><span className="legacy-migration-inspector-state">{planStateLabels[planDetail.state]}</span><h2>{planDetail.reason}</h2><p>版本 {planDetail.version} · {formatTime(planDetail.createdAt)}</p></header><div className="legacy-migration-inspector-body"><section><h3>方案范围</h3><div className="legacy-plan-counts"><span><strong>{planDetail.migrateCount}</strong>迁移</span><span><strong>{planDetail.excludeCount}</strong>排除</span></div></section><section><h3>处理记录</h3><div className="legacy-plan-items">{planDetail.items?.map((item) => <div key={item.id}><span><strong>{item.preview?.legacy?.name || item.legacySkuId}</strong><small>{item.preview?.legacy?.skuCode}</small></span><em className={item.decision}>{item.decision === 'migrate' ? '迁移' : '排除'}</em>{item.exclusionReason ? <small>{item.exclusionReason}</small> : null}</div>)}</div></section>{planDetail.events?.length ? <section><h3>审批轨迹</h3><div className="legacy-plan-events">{planDetail.events.map((event) => <div key={event.id}><span>{planEventLabels[event.action] || event.action}</span><strong>{event.actorName}</strong><small>{event.actorRole || event.identityProvider} · {formatTime(event.createdAt)}</small>{event.note ? <p>{event.note}</p> : null}</div>)}</div></section> : null}{planDetail.reviewedAt ? <section><h3>审核结果</h3><p className="legacy-review-copy">{planDetail.reviewedBy} · {formatTime(planDetail.reviewedAt)}<br />{planDetail.reviewNote || '审核通过'}</p></section> : null}{planDetail.state === 'submitted' ? <section className="legacy-review-actions"><h3>审核决定</h3>{isSelfReview ? <p className="legacy-self-review">提交人不能审核自己的方案，请切换至独立审核角色。</p> : null}<textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="通过可选填；退回时必须说明原因" /><div><button type="button" disabled={!canReview || isSelfReview || submitting || !reviewNote.trim()} onClick={() => reviewPlan('reject')}>退回</button><button type="button" className="primary" disabled={!canReview || isSelfReview || submitting} onClick={() => reviewPlan('approve')}>批准方案</button></div></section> : null}{planDetail.state === 'approved' ? <section className="legacy-commit-panel"><ShieldCheck size={20} weight="fill" /><span><strong>方案已获批准</strong><small>只有资料管理员可执行；执行前会再次检查来源版本和编号冲突。</small></span><button type="button" disabled={!canExecute || submitting} onClick={commitPlan}>正式执行迁移</button></section> : null}</div></> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一个方案</strong><span>查看处理记录、审核和执行状态。</span></div>}</aside></section>
+function PlanWorkspace({ plans, planDetail, planPreflight, preflightLoading, canReview, canExecute, isSelfReview, submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }) {
+  const execution = planDetail?.execution || planDetail?.batch || null
+  const preflightReady = Boolean(planPreflight?.ready) && !preflightLoading
+  return <section className="legacy-migration-workspace legacy-plan-workspace">
+    <article className="legacy-migration-list">
+      <div className="legacy-plan-head"><span>状态</span><span>方案说明</span><span>范围</span><span>提交信息</span></div>
+      <div className="legacy-migration-rows">
+        {plans.map((plan) => <button type="button" className={`legacy-plan-row ${planDetail?.id === plan.id ? 'active' : ''}`} key={plan.id} onClick={() => openPlan(plan)}>
+          <em className={plan.state}>{planStateLabels[plan.state] || plan.state}</em>
+          <span><strong>{plan.reason}</strong><small>{plan.id.slice(0, 8)}</small></span>
+          <span><strong>{plan.migrateCount} 条迁移</strong><small>{plan.excludeCount} 条排除</small></span>
+          <span><strong>{plan.createdBy}</strong><small>{formatTime(plan.createdAt)}</small></span>
+        </button>)}
+        {!plans.length ? <div className="legacy-migration-empty"><Database size={34} /><strong>还没有迁移方案</strong><span>在资料治理中选择记录后提交。</span></div> : null}
+      </div>
+    </article>
+    <aside className="legacy-migration-inspector legacy-plan-inspector">
+      {planDetail ? <>
+        <header><span className="legacy-migration-inspector-state">{planStateLabels[planDetail.state]}</span><h2>{planDetail.reason}</h2><p>版本 {planDetail.version} · {formatTime(planDetail.createdAt)}</p></header>
+        <div className="legacy-migration-inspector-body">
+          <section><h3>方案范围</h3><div className="legacy-plan-counts"><span><strong>{planDetail.migrateCount}</strong>迁移</span><span><strong>{planDetail.excludeCount}</strong>排除</span></div></section>
+          {['submitted', 'approved'].includes(planDetail.state) ? <section className={`legacy-preflight ${preflightLoading ? 'loading' : preflightReady ? 'ready' : 'blocked'}`}>
+            <h3>{preflightReady ? <CheckCircle size={18} weight="fill" /> : <WarningCircle size={18} weight="fill" />}执行前复核</h3>
+            {preflightLoading ? <p>正在重新比对来源版本、编号冲突和字段映射…</p> : planPreflight ? <>
+              <div className="legacy-preflight-summary"><span><strong>{planPreflight.summary.ready}</strong>可执行</span><span><strong>{planPreflight.summary.blocked}</strong>阻断</span><small>{formatTime(planPreflight.checkedAt)}</small></div>
+              {planPreflight.items.filter((item) => !item.ready).map((item) => <div className="legacy-preflight-item" key={item.legacySkuId}><strong>{item.name || item.skuCode || item.legacySkuId}</strong>{item.issues.filter((issue) => issue.blocking).map((issue) => <small key={issue.code}>{issue.label}</small>)}</div>)}
+              {planPreflight.ready ? <p>当前来源和目标资料均未发现阻断，批准与执行时仍会再次复核。</p> : <p>方案已停止在写入前，请修正旧资料或重新提交方案。</p>}
+            </> : <p>未取得复核结果，暂不允许批准或执行。</p>}
+          </section> : null}
+          <section><h3>处理记录</h3><div className="legacy-plan-items">{planDetail.items?.map((item) => <div key={item.id}><span><strong>{item.preview?.legacy?.name || item.legacySkuId}</strong><small>{item.preview?.legacy?.skuCode}</small></span><em className={item.decision}>{item.decision === 'migrate' ? '迁移' : '排除'}</em>{item.exclusionReason ? <small>{item.exclusionReason}</small> : null}</div>)}</div></section>
+          {execution ? <section className="legacy-execution-result"><h3><CheckCircle size={18} weight="fill" />执行结果</h3><div className="legacy-plan-counts"><span><strong>{execution.summary?.migrated || 0}</strong>生成草稿</span><span><strong>{execution.summary?.skipped || 0}</strong>安全跳过</span></div><p>批次 {execution.id?.slice(0, 8)} · {formatTime(execution.completedAt)}</p></section> : null}
+          {planDetail.events?.length ? <section><h3>审批轨迹</h3><div className="legacy-plan-events">{planDetail.events.map((event) => <div key={event.id}><span>{planEventLabels[event.action] || event.action}</span><strong>{event.actorName}</strong><small>{event.actorRole || event.identityProvider} · {formatTime(event.createdAt)}</small>{event.note ? <p>{event.note}</p> : null}</div>)}</div></section> : null}
+          {planDetail.reviewedAt ? <section><h3>审核结果</h3><p className="legacy-review-copy">{planDetail.reviewedBy} · {formatTime(planDetail.reviewedAt)}<br />{planDetail.reviewNote || '审核通过'}</p></section> : null}
+          {planDetail.state === 'submitted' ? <section className="legacy-review-actions"><h3>审核决定</h3>{isSelfReview ? <p className="legacy-self-review">提交人不能审核自己的方案，请切换至独立审核角色。</p> : null}<textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="通过可选填；退回时必须说明原因" /><div><button type="button" disabled={!canReview || isSelfReview || submitting || !reviewNote.trim()} onClick={() => reviewPlan('reject')}>退回</button><button type="button" className="primary" disabled={!canReview || isSelfReview || submitting || !preflightReady} onClick={() => reviewPlan('approve')}>批准方案</button></div></section> : null}
+          {planDetail.state === 'approved' ? <section className="legacy-commit-panel"><ShieldCheck size={20} weight="fill" /><span><strong>方案已获批准</strong><small>本批次采用全成全退写入；任何一条失效都不会留下半批数据。</small></span><button type="button" disabled={!canExecute || submitting || !preflightReady} onClick={commitPlan}>正式执行迁移</button></section> : null}
+        </div>
+      </> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一个方案</strong><span>查看处理记录、审核和执行状态。</span></div>}
+    </aside>
+  </section>
 }

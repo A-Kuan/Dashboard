@@ -68,6 +68,7 @@ test('legacy migration routes are read-visible but writes require import capabil
     createPlan: async (_input, actor) => ({ id: 'plan-1', state: 'submitted', version: 1, createdBy: actor.name, createdById: actor.id }),
     listPlans: async () => ({ items: [], total: 0 }),
     getPlan: async (id) => id === 'plan-1' ? { id, state: 'submitted', version: 1 } : null,
+    preflightPlan: async (id) => id === 'plan-1' ? { planId: id, ready: true, summary: { total: 1, ready: 1, blocked: 0 } } : null,
     reviewPlan: async (id, input, actor) => ({ id, state: input.decision === 'approve' ? 'approved' : 'rejected', reviewedBy: actor.name }),
     commitPlan: async (id, _input, actor) => ({ id, state: 'committed', committedBy: actor.name }),
   }
@@ -84,6 +85,9 @@ test('legacy migration routes are read-visible but writes require import capabil
   const planCreated = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '迁移员' }, payload: { items: [{ legacySkuId: 'legacy-1' }], reason: '提交审核' } })
   assert.equal(planCreated.statusCode, 201)
   assert.equal(planCreated.json().state, 'submitted')
+  const preflight = await app.inject({ method: 'GET', url: '/api/v2/catalog/legacy-migration-plans/plan-1/preflight', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(preflight.statusCode, 200)
+  assert.equal(preflight.json().ready, true)
   const reviewDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/review', headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedVersion: 1, decision: 'approve' } })
   assert.equal(reviewDenied.statusCode, 403)
   const reviewed = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/review', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '审核员' }, payload: { expectedVersion: 1, decision: 'approve' } })

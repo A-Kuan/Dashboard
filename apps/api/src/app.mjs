@@ -155,6 +155,14 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!plan) return reply.code(404).send({ error: 'LEGACY_MIGRATION_PLAN_NOT_FOUND', message: '迁移方案不存在' })
     return plan
   })
+  app.get('/api/v2/catalog/legacy-migration-plans/:id/preflight', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.preflightPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案复核服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const preflight = await catalogLegacyMigrationRepository.preflightPlan(request.params.id)
+    if (!preflight) return reply.code(404).send({ error: 'LEGACY_MIGRATION_PLAN_NOT_FOUND', message: '迁移方案不存在' })
+    return preflight
+  })
   app.post('/api/v2/catalog/legacy-migration-plans/:id/review', async (request, reply) => {
     if (!catalogLegacyMigrationRepository?.reviewPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.migration.review')
