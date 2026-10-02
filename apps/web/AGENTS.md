@@ -8,4 +8,4 @@
 
 可复用结构、字典和未来接口应从新工作台业务模型出发设计，不依赖旧前端实现。首页当前模拟数据只用于视觉与交互原型，不得写入服务器数据库，也不得伪装为真实库存、价格或订单。
 
-保留 `.openai/hosting.json`、`worker/index.js`、`scripts/prepare-sites-build.mjs` 和 `tests/sites-worker.test.mjs`。交付前运行 `npm run build`、`npm run test:sites` 和工作台浏览器测试；服务器发布使用 `npm run build:server`。
+保留 `.openai/hosting.json`、`worker/index.js`、`scripts/prepare-sites-build.mjs` 和 `tests/sites-worker.test.mjs`。交付前运行 `npm run build`、`npm run test:sites` 和 `npm run test:e2e`；浏览器回归会自动创建一次性 PostgreSQL 数据库并在结束后删除，不得改回连接长期开发库。服务器发布使用 `npm run build:server`。
