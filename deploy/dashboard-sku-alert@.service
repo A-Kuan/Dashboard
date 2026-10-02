@@ -1,0 +1,19 @@
+[Unit]
+Description=Dashboard SKU operational alert for %i
+
+[Service]
+Type=oneshot
+User=dashboard-sku
+Group=dashboard-sku
+WorkingDirectory=/opt/dashboard-sku-api/current
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/dashboard-sku/notifications.env
+ExecStart=/usr/bin/node scripts/send-operational-alert.mjs %i
+UMask=0077
+StateDirectory=dashboard-sku-alert
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/dashboard-sku-api

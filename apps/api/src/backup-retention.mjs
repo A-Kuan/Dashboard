@@ -36,7 +36,8 @@ async function scheduledSet(directory, manifestName) {
   const assetPath = resolve(directory, manifest.assetArchive.filename)
   if (![manifestPath, archivePath, assetPath].every((path) => resolve(path).startsWith(`${resolve(directory)}/`))) return null
   if (!(await regularFile(manifestPath)) || !(await regularFile(archivePath)) || !(await regularFile(assetPath))) return null
-  return { base, createdAt, manifestPath, archivePath, assetPath }
+  const receiptPath = resolve(directory, `${base}.offsite.json`)
+  return { base, createdAt, manifestPath, archivePath, assetPath, receiptPath: await regularFile(receiptPath) ? receiptPath : null }
 }
 
 function integerSetting(value, name, minimum) {
@@ -72,7 +73,7 @@ export async function planScheduledBackupRetention({ directory, keepRecent = 14,
     policy: { keepRecent: recentCount, keepWeekly: weeklyCount, minimumAgeHours: minimumAge / 3600000 },
     managedSets: sets.length,
     kept: sets.filter((set) => protectedBases.has(set.base)).map((set) => serialize(set, sets.indexOf(set) < recentCount ? 'recent' : 'weekly_or_minimum_age')),
-    deletable: sets.filter((set) => !protectedBases.has(set.base)).map((set) => ({ ...serialize(set), files: [set.archivePath, set.assetPath, set.manifestPath] })),
+    deletable: sets.filter((set) => !protectedBases.has(set.base)).map((set) => ({ ...serialize(set), files: [set.archivePath, set.assetPath, set.manifestPath, set.receiptPath].filter(Boolean) })),
   }
 }
 
