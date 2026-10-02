@@ -355,6 +355,17 @@ export function commitCatalogImport(jobId, expectedVersion, rowIds) {
   return request(`/api/v2/catalog/imports/${jobId}/commit`, { method: 'POST', body: JSON.stringify({ expectedVersion, rowIds }) })
 }
 
+export function resolveCatalogImportValues(job, resolutions) {
+  return request(`/api/v2/catalog/imports/${job.id}/resolve-values`, {
+    method: 'POST',
+    body: JSON.stringify({
+      expectedVersion: job.version,
+      expectedProfileVersion: job.mappingSnapshot?.version,
+      resolutions,
+    }),
+  })
+}
+
 export function listCatalogImports({ state = '', page = 1, pageSize = 20 } = {}) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (state) params.set('state', state)

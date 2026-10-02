@@ -101,7 +101,7 @@ CatalogSku
 
 ### `catalog_import_mapping_profile`
 
-供应商字段映射方案保存方案名称、文件名特征、稳定的表头签名、原始字段快照、标准字段映射、默认值 `default_values`、转换规则 `transform_rules`、品牌/分类/单位值映射 `value_mappings`、使用次数、启用状态和版本。默认值仅允许品牌、分类、单位和来源系统；转换规则覆盖全角转半角、首尾空白、连续空白和主 OE 大写。完全一致的表头可以自动复用；疑似同一供应商但表头增删时只提供差异提示和可匹配字段，不允许无提示覆盖。`catalog_import_mapping_profile_change` 以 `update_rules`、`update_value_mappings` 记录规则版本，`catalog_import_job` 关联方案并冻结包含映射与规则的 `mapping_snapshot`，保证后续方案变更不会改写历史导入依据。无法命中已有值映射的行计入 `review_rows` 并以 `review` 状态保存，操作员必须显式选择才能写入。标准化仅作用于规范字段，供应商原值继续保存在 `_sourceRow`。
+供应商字段映射方案保存方案名称、文件名特征、稳定的表头签名、原始字段快照、标准字段映射、默认值 `default_values`、转换规则 `transform_rules`、品牌/分类/单位值映射 `value_mappings`、使用次数、启用状态和版本。默认值仅允许品牌、分类、单位和来源系统；转换规则覆盖全角转半角、首尾空白、连续空白和主 OE 大写。完全一致的表头可以自动复用；疑似同一供应商但表头增删时只提供差异提示和可匹配字段，不允许无提示覆盖。`catalog_import_mapping_profile_change` 以 `update_rules`、`update_value_mappings` 和 `resolve_value_mapping` 记录规则版本，`catalog_import_job` 关联方案并冻结包含映射与规则的 `mapping_snapshot`，保证后续方案变更不会改写历史导入依据。无法命中已有值映射的行计入 `review_rows` 并以 `review` 状态保存；就地处理后使用新的方案版本重算当前批次。`catalog_import_value_resolution` 追加保存批次、方案、字段、来源值、标准值、方案版本、处理人和时间。标准化仅作用于规范字段，供应商原值继续保存在 `_sourceRow`。
 
 `catalog_import_mapping_profile_change` 以追加记录保存创建、字段更新、重命名、停用、恢复和复制事件。方案不提供物理删除；停用方案不再参与自动匹配，但历史批次、方案快照和变更记录仍可读取。
 

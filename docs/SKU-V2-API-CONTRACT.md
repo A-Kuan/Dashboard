@@ -78,6 +78,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `POST /api/v2/catalog/imports`：提交 `sourceName` 和最多 500 行结构化数据，创建只读预检查批次。
 - `GET /api/v2/catalog/imports?state=&page=&pageSize=`：分页读取历史批次，支持按状态筛选。
 - `GET /api/v2/catalog/imports/:id`：读取批次、逐行问题、重复匹配和写入结果。
+- `POST /api/v2/catalog/imports/:id/resolve-values`：提交批次版本、方案版本和异常值映射，在当前预检批次中学习标准值并原地重新检查；只允许处理当前批次仍未识别的品牌、分类或单位值。
 - `POST /api/v2/catalog/imports/:id/commit`：提交 `expectedVersion` 与明确选中的 `rowIds`，只写入 `ready` 或用户主动选择的 `duplicate` 行。
 - `POST /api/v2/catalog/imports/:id/retry`：对 `partial` 批次中失败的行重新执行写入；可提交 `rowIds` 进一步缩小范围，并继续使用 `expectedVersion` 防止并发重复操作。
 - `GET /api/v2/catalog/import-mappings?q=&active=`：读取供应商字段映射方案及使用次数，支持名称检索和启用状态筛选。
@@ -89,7 +90,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `PATCH /api/v2/catalog/import-mappings/:id/value-mappings`：按 `expectedVersion` 更新品牌、分类和单位的“供应商写法 → 标准值”映射；每个字段最多保留 200 条去重后的别名规则。
 - `POST /api/v2/catalog/import-mappings/:id/clone`：复制方案为独立的新版本起点，使用次数从零开始。
 
-导入行状态为 `ready`、`review`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。未知供应商值进入 `review`，与疑似重复项一样默认不选择；操作员勾选后才表示确认按原值写入。不可导入项不能选择。预检查响应包含 `catalog-import-preflight-v1` 质量报告，汇总阻断项、值映射异常、警告、重复匹配以及品牌、分类、适配和来源字段覆盖率。文件内相同主 OE 会进入人工确认状态；结构化行内容经规范化后生成 SHA-256 指纹，重复上传时返回原批次而不新建任务。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
+导入行状态为 `ready`、`review`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。未知供应商值进入 `review` 且默认不选择；操作员可以就地填写标准值，将其写入供应商方案的新版本并重新检查当前批次，也可以显式勾选后按原值写入。就地处理同时校验批次和方案版本，记录来源值、标准值、方案版本、处理人和时间，且不会改写原始供应商行。不可导入项不能选择。预检查响应包含 `catalog-import-preflight-v1` 质量报告，汇总阻断项、值映射异常、警告、重复匹配以及品牌、分类、适配和来源字段覆盖率。文件内相同主 OE 会进入人工确认状态；结构化行内容经规范化后生成 SHA-256 指纹，重复上传时返回原批次而不新建任务。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
 
 前端导入中心会对供应商非标准表头做别名匹配，并在预检查前要求操作员确认字段映射。操作员可将确认结果保存为供应商方案；相同表头再次上传时自动套用，文件名属于同一来源但表头发生变化时展示新增/缺少列并要求人工确认。映射方案管理器采用列表与详情检查器，支持检索、重命名、复制、停用、恢复、最近使用、版本历史、供应商级标准化规则和值映射。规则应用前显示首行“原值 → 标准值”对比；默认值只补空字段，文本清理只改变标准字段，`_sourceRow` 始终保留供应商原值。有值映射表的字段会检查未知值，并在映射页和预检查页形成聚合异常队列。方案更新使用版本锁，避免多人同时修改时静默覆盖。服务器会依据冻结的方案版本重新构建标准字段，避免只依赖客户端转换。未映射列不写入 SKU 标准字段，但会作为 `_sourceRow` 保留在原始来源证据中；导入批次同时冻结本次使用的字段映射、默认值、转换规则和值映射，后续调整规则时仍可还原当时依据。
 

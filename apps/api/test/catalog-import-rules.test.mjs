@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCatalogImportProfile, normalizeCatalogValueMappings } from '../src/catalog-import-rules.mjs'
+import { applyCatalogImportProfile, mergeCatalogValueMappings, normalizeCatalogValueMappings } from '../src/catalog-import-rules.mjs'
 
 test('normalizes profile value mappings and ignores duplicate supplier aliases', () => {
   assert.deepEqual(normalizeCatalogValueMappings({
@@ -28,4 +28,18 @@ test('applies canonical supplier values and reports unresolved aliases without t
     valueMappings: { brand: [{ source: '博世中国', target: 'BOSCH' }] },
   })
   assert.deepEqual(unknown._valueMappingIssues, [{ field: 'brand', value: '未知品牌' }])
+})
+
+test('learns new supplier aliases without losing or duplicating existing mappings', () => {
+  assert.deepEqual(mergeCatalogValueMappings({
+    brand: [{ source: '博世中国', target: 'BOSCH' }],
+    unit: [{ source: 'PCS', target: '件' }],
+  }, [
+    { field: 'brand', source: '神秘品牌', target: 'MYSTERY' },
+    { field: 'brand', source: ' 博世中国 ', target: 'BOSCH CN' },
+  ]), {
+    brand: [{ source: '博世中国', target: 'BOSCH CN' }, { source: '神秘品牌', target: 'MYSTERY' }],
+    category: [],
+    unit: [{ source: 'PCS', target: '件' }],
+  })
 })

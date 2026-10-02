@@ -198,6 +198,14 @@ function createCatalogImportRepository() {
       return job
     },
     async get(id) { return jobs.find((job) => job.id === id) || null },
+    async resolveValues(id, input, actor) {
+      const job = jobs.find((item) => item.id === id)
+      if (!job) return null
+      job.version += 1
+      job.mappingSnapshot = { version: input.expectedProfileVersion + 1 }
+      job.valueResolutions = input.resolutions.map((item, index) => ({ id: `resolution-${index + 1}`, ...item, profileVersion: input.expectedProfileVersion + 1, resolvedBy: actor }))
+      return job
+    },
     async commit(id, input) {
       const job = jobs.find((item) => item.id === id)
       if (!job) return null
@@ -534,6 +542,11 @@ test('catalog v2 previews and commits explicitly selected import rows', async ()
   assert.equal(committed.json().rows[1].state, 'skipped')
   assert.equal((await app.inject(`/api/v2/catalog/imports/${job.id}`)).statusCode, 200)
   assert.equal((await app.inject('/api/v2/catalog/imports')).json().total, 1)
+  const resolved = await app.inject({ method: 'POST', url: `/api/v2/catalog/imports/${job.id}/resolve-values`, payload: {
+    expectedVersion: job.version, expectedProfileVersion: 3, resolutions: [{ field: 'brand', source: '神秘品牌', target: 'MYSTERY' }],
+  } })
+  assert.equal(resolved.statusCode, 200)
+  assert.equal(resolved.json().valueResolutions[0].target, 'MYSTERY')
   await app.close()
 })
 

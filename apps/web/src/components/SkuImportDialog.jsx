@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, Copy, DownloadSimple, FileCsv, FingerprintSimple, MagnifyingGlass, PencilSimple, Plus, Power, ShieldCheck, SlidersHorizontal, Trash, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules, updateCatalogImportValueMappings } from '../services/catalogApi'
+import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, resolveCatalogImportValues, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules, updateCatalogImportValueMappings } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
@@ -26,7 +26,7 @@ const jobState = {
   retrying: { label: '重试中', className: 'duplicate' }, completed: { label: '已完成', className: 'ready' }, partial: { label: '部分失败', className: 'invalid' },
 }
 
-const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', update_rules: '更新导入规则', update_value_mappings: '更新值映射', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
+const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', update_rules: '更新导入规则', update_value_mappings: '更新值映射', resolve_value_mapping: '批次异常学习', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
 const transformRuleLabel = { normalizeFullWidth: '全角转半角', trimText: '清理首尾空白', collapseWhitespace: '合并连续空白', uppercaseOe: 'OE 编号转大写' }
 const valueMappingFieldLabel = { brand: '品牌', category: '分类', unit: '单位' }
 
@@ -92,6 +92,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [profileRulesDraft, setProfileRulesDraft] = useState(null)
   const [profileValueMappingsDraft, setProfileValueMappingsDraft] = useState(null)
   const [profileBusy, setProfileBusy] = useState(false)
+  const [valueResolutionDraft, setValueResolutionDraft] = useState({})
 
   useEffect(() => {
     let active = true
@@ -337,6 +338,28 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     }
   }
 
+  const resolveValueExceptions = async () => {
+    const resolutions = valueReviewQueue.flatMap((item) => {
+      const target = String(valueResolutionDraft[`${item.field}:${item.value}`] || '').trim()
+      return target ? [{ field: item.field, source: item.value, target }] : []
+    })
+    if (!resolutions.length) return setError('请至少填写一个标准值')
+    setBusy(true)
+    setError('')
+    try {
+      const result = await resolveCatalogImportValues(job, resolutions)
+      setJob(result)
+      setSelected(new Set(result.rows.filter((row) => row.state === 'ready').map((row) => row.id)))
+      setValueResolutionDraft({})
+      onNotify?.(`已学习 ${resolutions.length} 条供应商值，并重新检查当前批次`)
+    } catch (reason) {
+      if (['IMPORT_VERSION_CONFLICT', 'IMPORT_MAPPING_VERSION_CONFLICT'].includes(reason.code)) setJob(await getCatalogImport(job.id).catch(() => job))
+      setError(reason.message || '异常值处理失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const mappingFields = catalogImportFieldDefinitions.map((field) => ({ ...field, ...(templateSpec?.fields?.find((item) => item.key === field.key) || {}) }))
   const mapping = mappingContext?.mapping || {}
   const mappedIndexes = Object.values(mapping).map(Number).filter((index) => index >= 0)
@@ -425,7 +448,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             {job.preflight ? (() => { const decision = job.preflight.reviewRows && !job.preflight.duplicateMatches ? { title: '需要确认未识别的供应商值', note: '异常行默认不选中，请核对映射或明确按原值写入。', className: 'warning' } : preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>值待映射</dt><dd>{job.preflight.reviewRows || 0} 条</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
             <div className="sku-import-summary has-review"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="review"><span>值待映射</span><strong>{job.reviewRows || 0}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
             {job.preflight ? <div className="sku-preflight-grid"><section><header><strong>资料覆盖率</strong><span>不阻断导入，但会影响后续核验</span></header><div className="sku-preflight-coverage">{job.preflight.coverage.map((item) => <div key={item.field}><span><b>{item.label}</b><em>{item.present}/{item.total} · {item.percent}%</em></span><i><b style={{ width: `${item.percent}%` }} /></i></div>)}</div></section><section><header><strong>问题汇总</strong><span>按严重程度与影响行数排序</span></header><div className="sku-preflight-issues">{job.preflight.issueSummary.slice(0, 5).map((issue) => <div className={issue.severity} key={issue.code}><span>{issue.severity === 'error' ? <WarningCircle size={16} weight="fill" /> : <WarningCircle size={16} />}</span><p><strong>{issue.message}</strong><small>{issue.count} 行受影响</small></p></div>)}{!job.preflight.issueSummary.length ? <div className="clear"><span><CheckCircle size={17} weight="fill" /></span><p><strong>未发现字段问题</strong><small>可继续检查逐行结果</small></p></div> : null}</div></section></div> : null}
-            {valueReviewQueue.length ? <section className="sku-value-review-queue"><header><div><span><WarningCircle size={19} weight="fill" /></span><div><strong>供应商值异常队列</strong><small>默认不选中；确认按原值写入前，请核对是否应该补充映射。</small></div></div><b>{valueReviewQueue.length} 个未识别值</b></header><div>{valueReviewQueue.map((item) => <article key={`${item.field}:${item.value}`}><span>{valueMappingFieldLabel[item.field] || item.field}</span><strong>{item.value}</strong><small>文件第 {item.rows.join('、')} 行</small></article>)}</div></section> : null}
+            {valueReviewQueue.length ? <section className="sku-value-review-queue"><header><div><span><WarningCircle size={19} weight="fill" /></span><div><strong>供应商值异常队列</strong><small>填写标准值后会保存到“{job.mappingSnapshot?.name || '当前供应商方案'}”，并立即重新检查当前批次。</small></div></div><div className="sku-value-review-actions"><b>{valueReviewQueue.length} 个未识别值</b><button type="button" disabled={busy || !Object.values(valueResolutionDraft).some((value) => String(value).trim())} onClick={resolveValueExceptions}>{busy ? '正在重新检查…' : '保存并重新检查'}</button></div></header><div>{valueReviewQueue.map((item) => { const key = `${item.field}:${item.value}`; return <article key={key}><div><span>{valueMappingFieldLabel[item.field] || item.field}</span><strong>{item.value}</strong><small>文件第 {item.rows.join('、')} 行</small></div><ArrowRight size={15} /><label><span>标准值</span><input aria-label={`${valueMappingFieldLabel[item.field] || item.field} ${item.value} 的标准值`} value={valueResolutionDraft[key] || ''} onChange={(event) => setValueResolutionDraft((current) => ({ ...current, [key]: event.target.value }))} placeholder="输入资料库标准值" /></label></article> })}</div><footer><CheckCircle size={16} weight="fill" /><span>本次保存会生成方案 v{Number(job.mappingSnapshot?.version || 0) + 1}，原始供应商值仍保留在来源证据中。</span></footer></section> : null}
             <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? duplicateMessage(row) : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
             <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>疑似重复项默认不选中。勾选表示你已确认它应作为独立 SKU 写入，系统不会自动覆盖已有资料。</span></div>
           </> : null}

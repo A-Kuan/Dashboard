@@ -401,6 +401,14 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
     return job
   })
+  app.post('/api/v2/catalog/imports/:id/resolve-values', async (request, reply) => {
+    if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const job = await catalogImportRepository.resolveValues(request.params.id, request.body, actor.name)
+    if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
+    return job
+  })
   app.post('/api/v2/catalog/imports/:id/commit', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.import')

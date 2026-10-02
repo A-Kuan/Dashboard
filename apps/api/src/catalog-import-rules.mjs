@@ -23,6 +23,21 @@ export function normalizeCatalogValueMappings(input = {}) {
   }))
 }
 
+export function mergeCatalogValueMappings(current = {}, resolutions = []) {
+  const next = normalizeCatalogValueMappings(current)
+  for (const resolution of resolutions) {
+    const field = String(resolution?.field || '')
+    const source = String(resolution?.source ?? '').trim()
+    const target = String(resolution?.target ?? '').trim()
+    if (!ruleFields.includes(field) || !source || !target) continue
+    const key = normalizeValueMappingKey(source)
+    const existingIndex = next[field].findIndex((entry) => normalizeValueMappingKey(entry.source) === key)
+    if (existingIndex >= 0) next[field][existingIndex] = { source, target }
+    else next[field].push({ source, target })
+  }
+  return normalizeCatalogValueMappings(next)
+}
+
 export function applyCatalogImportProfile(row = {}, profile = {}) {
   const next = { ...row }
   const defaults = profile.defaultValues || {}

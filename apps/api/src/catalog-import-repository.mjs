@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { normalizeCatalogInput, normalizeIdentifierValue } from './catalog-validation.mjs'
 import { buildImportPreflightReport, catalogImportFields, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
-import { applyCatalogImportProfile } from './catalog-import-rules.mjs'
+import { applyCatalogImportProfile, mergeCatalogValueMappings, normalizeValueMappingKey } from './catalog-import-rules.mjs'
 
 function text(value) {
   return String(value ?? '').trim()
@@ -76,7 +76,14 @@ function mapAttempt(row) {
   }
 }
 
-function mapJob(row, rows = [], attempts = []) {
+function mapResolution(row) {
+  return {
+    id: row.id, field: row.field, source: row.source_value, target: row.target_value,
+    profileVersion: row.profile_version, resolvedBy: row.resolved_by, createdAt: row.created_at,
+  }
+}
+
+function mapJob(row, rows = [], attempts = [], resolutions = []) {
   return {
     id: row.id, intakeId: row.intake_id, sourceName: row.source_name, state: row.state, totalRows: row.total_rows,
     readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows,
@@ -87,7 +94,7 @@ function mapJob(row, rows = [], attempts = []) {
     mappingProfileId: row.mapping_profile_id || '', mappingSnapshot: row.mapping_snapshot || {},
     attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
     preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, reviewRows: row.review_rows, invalidRows: row.invalid_rows }),
-    rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
+    rows: rows.map(mapRow), attempts: attempts.map(mapAttempt), valueResolutions: resolutions.map(mapResolution),
   }
 }
 
@@ -102,11 +109,12 @@ export function createCatalogImportRepository(pool, catalogRepository) {
   async function getJobWith(client, id) {
     const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1', [id])).rows[0]
     if (!job) return null
-    const [rows, attempts] = await Promise.all([
+    const [rows, attempts, resolutions] = await Promise.all([
       client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id]),
       client.query('SELECT * FROM catalog_import_attempt WHERE job_id=$1 ORDER BY attempt_number DESC', [id]),
+      client.query('SELECT * FROM catalog_import_value_resolution WHERE job_id=$1 ORDER BY created_at DESC', [id]),
     ])
-    return mapJob(job, rows.rows, attempts.rows)
+    return mapJob(job, rows.rows, attempts.rows, resolutions.rows)
   }
 
   return {
@@ -237,6 +245,96 @@ export function createCatalogImportRepository(pool, catalogRepository) {
 
     get(id) {
       return getJobWith(pool, id)
+    },
+
+    async resolveValues(id, input, actor = '系统操作员') {
+      const expectedVersion = Number(input?.expectedVersion)
+      const expectedProfileVersion = Number(input?.expectedProfileVersion)
+      const resolutions = (Array.isArray(input?.resolutions) ? input.resolutions : []).map((item) => ({
+        field: text(item?.field), source: text(item?.source), target: text(item?.target),
+      }))
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      if (!Number.isInteger(expectedProfileVersion) || expectedProfileVersion < 1) throw invalid('expectedProfileVersion 必须是正整数')
+      if (!resolutions.length) throw invalid('至少填写一个标准值')
+      if (resolutions.length > 100) throw invalid('单次最多处理 100 个异常值')
+      if (resolutions.some((item) => !['brand', 'category', 'unit'].includes(item.field) || !item.source || !item.target)) throw invalid('异常值映射不完整')
+      const resolutionKeys = resolutions.map((item) => `${item.field}:${normalizeValueMappingKey(item.source)}`)
+      if (new Set(resolutionKeys).size !== resolutionKeys.length) throw invalid('同一个异常值不能重复提交')
+
+      return withTransaction(pool, async (client) => {
+        const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!job) return null
+        if (job.state !== 'preview') {
+          const error = new Error('只有待确认批次可以处理异常值')
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_NOT_PREVIEW'
+          throw error
+        }
+        if (job.version !== expectedVersion) {
+          const error = new Error(`导入批次已更新（当前版本 v${job.version}）`)
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_VERSION_CONFLICT'
+          throw error
+        }
+        if (!job.mapping_profile_id) throw invalid('该批次没有可学习的供应商映射方案')
+        const profile = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 FOR UPDATE', [job.mapping_profile_id])).rows[0]
+        if (!profile || !profile.active) throw invalid('供应商映射方案不存在或已停用')
+        if (profile.version !== expectedProfileVersion || Number(job.mapping_snapshot?.version) !== expectedProfileVersion) {
+          const error = new Error('映射方案已更新，请重新打开批次后再试')
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
+          throw error
+        }
+        const currentRows = (await client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id])).rows
+        const unresolved = new Set(currentRows.flatMap((row) => (row.issues || []).flatMap((issue) => issue.severity === 'review' ? [`${issue.field}:${normalizeValueMappingKey(issue.value)}`] : [])))
+        if (resolutions.some((item) => !unresolved.has(`${item.field}:${normalizeValueMappingKey(item.source)}`))) throw invalid('包含当前批次中不存在或已经处理的异常值')
+
+        const valueMappings = mergeCatalogValueMappings(profile.value_mappings, resolutions)
+        if (resolutions.some((item) => !valueMappings[item.field].some((entry) => normalizeValueMappingKey(entry.source) === normalizeValueMappingKey(item.source) && entry.target === item.target))) throw invalid('供应商值映射已达到每个字段 200 条的上限')
+        const updatedProfile = (await client.query(`UPDATE catalog_import_mapping_profile SET value_mappings=$2::jsonb,version=version+1,updated_by=$3,updated_at=now() WHERE id=$1 RETURNING *`,
+          [profile.id, JSON.stringify(valueMappings), actor])).rows[0]
+        const nextSnapshot = {
+          ...(job.mapping_snapshot || {}), version: updatedProfile.version,
+          defaultValues: updatedProfile.default_values || {}, transformRules: updatedProfile.transform_rules || {}, valueMappings,
+        }
+        await client.query(`INSERT INTO catalog_import_mapping_profile_change (id,profile_id,action,version,snapshot,actor)
+          VALUES ($1,$2,'resolve_value_mapping',$3,$4::jsonb,$5)`, [randomUUID(), profile.id, updatedProfile.version, JSON.stringify({ jobId: id, resolutions, valueMappings }), actor])
+        for (const item of resolutions) await client.query(`INSERT INTO catalog_import_value_resolution
+          (id,job_id,mapping_profile_id,field,source_value,target_value,profile_version,resolved_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [randomUUID(), id, profile.id, item.field, item.source, item.target, updatedProfile.version, actor])
+
+        const intake = (await client.query('SELECT raw_payload FROM catalog_intake WHERE id=$1', [job.intake_id])).rows[0]
+        const submittedRows = Array.isArray(intake?.raw_payload?.rows) ? intake.raw_payload.rows : []
+        if (submittedRows.length !== currentRows.length) throw invalid('导入批次原始行与预检行不一致')
+        const fieldMapping = nextSnapshot.fieldMapping || {}
+        const processedRows = submittedRows.map((submitted) => {
+          const sourceRow = submitted?._sourceRow && typeof submitted._sourceRow === 'object' ? submitted._sourceRow : {}
+          const reconstructed = { ...submitted, ...Object.fromEntries(Object.entries(fieldMapping).map(([field, sourceKey]) => [field, sourceRow[sourceKey] ?? ''])), _sourceRow: sourceRow }
+          return applyCatalogImportProfile(reconstructed, { defaultValues: updatedProfile.default_values, transformRules: updatedProfile.transform_rules, valueMappings })
+        })
+        const analysis = analyzeCatalogImportRows(processedRows)
+        const normalizedRows = processedRows.map((row, index) => normalizeRow(row, index + 2, job.source_name, job.intake_id))
+        normalizedRows.forEach((row, index) => {
+          const duplicateRows = analysis.inFileDuplicates[row.normalizedPrimaryOe] || []
+          if (duplicateRows.length > 1) row.issues.push({ code: 'DUPLICATE_IN_FILE', severity: 'warning', message: `主 OE 与文件第 ${duplicateRows.filter((rowNumber) => rowNumber !== index + 2).join('、')} 行重复` })
+        })
+        const duplicateMap = await catalogRepository.findDuplicatesMany(normalizedRows.map((row) => row.normalizedPrimaryOe).filter(Boolean))
+        const counts = { ready: 0, duplicate: 0, review: 0, invalid: 0 }
+        for (let index = 0; index < normalizedRows.length; index += 1) {
+          const item = normalizedRows[index]
+          const fileMatches = (analysis.inFileDuplicates[item.normalizedPrimaryOe] || []).filter((rowNumber) => rowNumber !== index + 2).map((rowNumber) => ({ scope: 'file', rowNumber }))
+          const duplicates = item.normalizedPrimaryOe ? [...(duplicateMap[item.normalizedPrimaryOe] || []), ...fileMatches] : []
+          const state = item.issues.some((issue) => issue.severity === 'error') ? 'invalid' : duplicates.length ? 'duplicate' : item.issues.some((issue) => issue.severity === 'review') ? 'review' : 'ready'
+          counts[state] += 1
+          const existingRow = currentRows[index]
+          if (!existingRow) throw invalid('导入批次原始行与预检行不一致')
+          await client.query(`UPDATE catalog_import_row SET normalized_payload=$2::jsonb,state=$3,issues=$4::jsonb,duplicate_matches=$5::jsonb,error_message='',updated_at=now() WHERE id=$1`,
+            [existingRow.id, JSON.stringify(item.payload), state, JSON.stringify(item.issues), JSON.stringify(duplicates)])
+        }
+        await client.query(`UPDATE catalog_import_job SET ready_rows=$2,duplicate_rows=$3,review_rows=$4,invalid_rows=$5,mapping_snapshot=$6::jsonb,version=version+1 WHERE id=$1`,
+          [id, counts.ready, counts.duplicate, counts.review, counts.invalid, JSON.stringify(nextSnapshot)])
+        return getJobWith(client, id)
+      })
     },
 
     async commit(id, input, actor = '系统操作员') {
