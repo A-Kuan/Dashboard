@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createPool } from '../src/db.mjs'
 
@@ -18,7 +18,10 @@ await mkdir(outputDirectory, { recursive: true, mode: 0o750 })
 const pool = createPool({ max: 1 })
 const counts = {}
 let schemaMigrations = []
+let serverMajorVersion = ''
 try {
+  const versionNumber = Number((await pool.query('SHOW server_version_num')).rows[0].server_version_num)
+  serverMajorVersion = String(Math.trunc(versionNumber / 10000))
   for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_fitment_review_event', 'catalog_vehicle_platform', 'catalog_vehicle_platform_change_event', 'catalog_vehicle_variant', 'catalog_vehicle_variant_change_event', 'catalog_fitment_scope_resolution', 'catalog_source_evidence', 'catalog_change_log', 'catalog_intake', 'catalog_epc_preview', 'catalog_epc_preview_item', 'catalog_epc_publish_decision', 'catalog_epc_connector_run', 'catalog_epc_asset', 'catalog_epc_asset_attempt', 'catalog_import_job', 'catalog_import_mapping_profile', 'catalog_import_mapping_profile_change', 'catalog_import_value_resolution', 'catalog_dictionary_proposal', 'catalog_identifier_resolution', 'catalog_sku_merge', 'catalog_legacy_migration_batch', 'catalog_legacy_sku_migration', 'catalog_legacy_migration_item']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
@@ -28,9 +31,23 @@ try {
   await pool.end()
 }
 
-const dump = spawnSync('pg_dump', ['--format=custom', '--compress=6', '--no-owner', '--no-privileges', '--host', host, '--port', port, '--username', user, '--file', dumpPath, database], { env: process.env, encoding: 'utf8' })
+async function postgresBinary(environmentKey, name) {
+  if (process.env[environmentKey]) return process.env[environmentKey]
+  const versioned = `/usr/lib/postgresql/${serverMajorVersion}/bin/${name}`
+  try {
+    await access(versioned)
+    return versioned
+  } catch {
+    return name
+  }
+}
+
+const pgDump = await postgresBinary('PG_DUMP_BIN', 'pg_dump')
+const pgRestore = await postgresBinary('PG_RESTORE_BIN', 'pg_restore')
+const dump = spawnSync(pgDump, ['--format=custom', '--compress=6', '--no-owner', '--no-privileges', '--host', host, '--port', port, '--username', user, '--file', dumpPath, database], { env: process.env, encoding: 'utf8' })
 if (dump.status !== 0) throw new Error(`pg_dump failed: ${(dump.stderr || dump.stdout || 'unknown error').trim()}`)
-const listing = spawnSync('pg_restore', ['--list', dumpPath], { env: process.env, encoding: 'utf8' })
+await chmod(dumpPath, 0o640)
+const listing = spawnSync(pgRestore, ['--list', dumpPath], { env: process.env, encoding: 'utf8' })
 const listedObjects = listing.stdout.split('\n').filter((line) => /^\d+;/.test(line)).length
 if (listing.status !== 0 || !listing.stdout.includes('; Archive created at') || !listedObjects) throw new Error(`pg_restore validation failed: ${(listing.stderr || listing.stdout || 'invalid archive').trim()}`)
 
@@ -47,4 +64,5 @@ const manifest = {
   verification: { pgRestoreList: 'passed', objectCount: listedObjects },
 }
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o640 })
+await chmod(manifestPath, 0o640)
 process.stdout.write(`${JSON.stringify({ dumpPath, manifestPath, bytes: file.size, counts })}\n`)

@@ -102,6 +102,8 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 API 工程提供带清单的 PostgreSQL 自定义格式备份。清单记录文件大小、SHA-256、关键业务表行数和归档可读性检查结果；备份文件与清单必须成对保存。
 
+备份脚本会读取数据库服务端主版本，并优先使用同主版本的 `/usr/lib/postgresql/<major>/bin/pg_dump` 与 `pg_restore`，避免多版本服务器上的 `pg_wrapper` 为导出和校验选择不同版本；非标准安装可通过 `PG_DUMP_BIN`、`PG_RESTORE_BIN` 显式指定。备份文件与清单最终权限统一为 `0640`。
+
 ```bash
 cd /opt/dashboard-sku-api/current
 sudo -u dashboard-sku env \
