@@ -233,6 +233,16 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(dialog.getByText('字段对应关系')).toBeVisible()
   await expect(dialog.getByText('供应商品名', { exact: true }).last()).toBeVisible()
 
+  await dialog.getByRole('button', { name: '编辑导入规则' }).click()
+  await dialog.getByLabel('默认品牌').fill('MANN')
+  await dialog.getByLabel('默认单位').fill('件')
+  await dialog.getByLabel('来源系统').fill('供应商 A CSV')
+  await dialog.locator('.sku-profile-rule-editor').getByRole('button', { name: '保存规则' }).click()
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('品牌 MANN')
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('单位 件')
+  await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('来源 供应商 A CSV')
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新导入规则', { exact: true })).toBeVisible()
+
   await dialog.getByRole('button', { name: '重命名方案' }).click()
   await dialog.getByLabel('新的方案名称').fill('供应商 A 标准映射')
   await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
@@ -255,6 +265,21 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
   await expect(dialog.locator('.sku-profile-inspector > header').getByText('启用中')).toBeVisible()
   await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const rulesDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const rulesCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n　燃油  滤芯　,ａb-１２３,,Audi A4 (B9),规则测试'
+  await rulesDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-rules.csv', mimeType: 'text/csv', buffer: Buffer.from(rulesCsv) })
+  await expect(rulesDialog.getByText('导入规则预览 · 第 1 行')).toBeVisible()
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('ａb-１２３')
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('AB-123')
+  await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('MANN')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-rule-preview-1680.png', fullPage: false })
+  await rulesDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(rulesDialog.getByText('燃油 滤芯', { exact: true })).toBeVisible()
+  await expect(rulesDialog.getByText('AB-123', { exact: true })).toBeVisible()
+  await expect(rulesDialog.getByText('MANN', { exact: true })).toBeVisible()
+  await rulesDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {

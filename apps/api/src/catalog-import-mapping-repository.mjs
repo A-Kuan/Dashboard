@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
 const allowedFields = new Set(['nameZh', 'nameEn', 'brand', 'category', 'unit', 'primaryOe', 'vehicle', 'years', 'condition', 'sourceSystem', 'sourceRecordId'])
+const allowedDefaultFields = new Set(['brand', 'category', 'unit', 'sourceSystem'])
+const transformRuleKeys = ['trimText', 'collapseWhitespace', 'uppercaseOe', 'normalizeFullWidth']
 
 function text(value) {
   return String(value ?? '').trim()
@@ -67,6 +69,8 @@ function mapRow(row) {
     headerSignature: row.header_signature,
     sourceHeaders: row.source_headers || [],
     fieldMapping: row.field_mapping || {},
+    defaultValues: row.default_values || {},
+    transformRules: row.transform_rules || {},
     active: row.active,
     usageCount: row.usage_count,
     lastUsedAt: row.last_used_at,
@@ -76,6 +80,17 @@ function mapRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function normalizeDefaultValues(input = {}) {
+  return Object.fromEntries(Object.entries(input || {}).flatMap(([field, value]) => {
+    const normalized = text(value)
+    return allowedDefaultFields.has(field) && normalized ? [[field, normalized]] : []
+  }))
+}
+
+function normalizeTransformRules(input = {}) {
+  return Object.fromEntries(transformRuleKeys.map((key) => [key, input?.[key] !== false]))
 }
 
 function mapChange(row) {
@@ -222,6 +237,23 @@ export function createCatalogImportMappingRepository(pool) {
       })
     },
 
+    async updateRules(id, input = {}, actor = '系统操作员') {
+      const expectedVersion = Number(input.expectedVersion)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      const defaultValues = normalizeDefaultValues(input.defaultValues)
+      const transformRules = normalizeTransformRules(input.transformRules)
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) return null
+        if (current.version !== expectedVersion) throw versionConflict()
+        const row = (await client.query(`UPDATE catalog_import_mapping_profile SET default_values=$2::jsonb,transform_rules=$3::jsonb,
+          version=version+1,updated_by=$4,updated_at=now() WHERE id=$1 RETURNING *`,
+        [id, JSON.stringify(defaultValues), JSON.stringify(transformRules), actor])).rows[0]
+        await recordChange(client, row, 'update_rules', actor)
+        return mapRow(row)
+      })
+    },
+
     async clone(id, input = {}, actor = '系统操作员') {
       const name = text(input.name)
       if (!name) throw invalid('请输入新方案名称')
@@ -230,9 +262,9 @@ export function createCatalogImportMappingRepository(pool) {
         if (!source) return null
         const cloneId = randomUUID()
         const row = (await client.query(`INSERT INTO catalog_import_mapping_profile
-          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,created_by,updated_by)
-          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$7) RETURNING *`,
-        [cloneId, name, source.source_name_pattern, source.header_signature, JSON.stringify(source.source_headers), JSON.stringify(source.field_mapping), actor])).rows[0]
+          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,default_values,transform_rules,created_by,updated_by)
+          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$9) RETURNING *`,
+        [cloneId, name, source.source_name_pattern, source.header_signature, JSON.stringify(source.source_headers), JSON.stringify(source.field_mapping), JSON.stringify(source.default_values), JSON.stringify(source.transform_rules), actor])).rows[0]
         await recordChange(client, row, 'clone', actor, { clonedFrom: source.id })
         return mapRow(row)
       })

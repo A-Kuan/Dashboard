@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { inspectCatalogCsv, mapCatalogCsvInspection, parseCatalogCsv } from '../src/services/catalogApi.js'
+import { applyCatalogImportRules, inspectCatalogCsv, mapCatalogCsvInspection, parseCatalogCsv } from '../src/services/catalogApi.js'
 
 test('parses Chinese SKU import headers and quoted commas', () => {
   const rows = parseCatalogCsv('\uFEFF中文名称,英文名称,品牌,分类,主 OE,车型,适配条件\n前刹车片,"Brake pad, front",Porsche OE,制动系统 / 制动片,95B 698 151 H,Macan (95B),"前轴, 排除 PSCB"')
@@ -34,4 +34,17 @@ test('supports manual mapping and rejects one source column mapped twice', () =>
   const rows = mapCatalogCsvInspection(inspection, { ...inspection.suggestedMapping, nameZh: 0, primaryOe: 1 })
   assert.equal(rows[0].nameZh, '机油滤清器')
   assert.throws(() => mapCatalogCsvInspection(inspection, { ...inspection.suggestedMapping, nameZh: 0, primaryOe: 0 }), /同一原始列/)
+})
+
+test('applies supplier defaults and text rules without changing original source evidence', () => {
+  const sourceRow = { 供应商品名: '　空气  滤芯　', 原厂编号: 'ａb-１２３ ' }
+  const rows = applyCatalogImportRules([{ nameZh: sourceRow.供应商品名, primaryOe: sourceRow.原厂编号, brand: '', unit: '', _sourceRow: sourceRow }], {
+    defaultValues: { brand: 'MANN', unit: '件' },
+    transformRules: { trimText: true, collapseWhitespace: true, uppercaseOe: true, normalizeFullWidth: true },
+  })
+  assert.equal(rows[0].nameZh, '空气 滤芯')
+  assert.equal(rows[0].primaryOe, 'AB-123')
+  assert.equal(rows[0].brand, 'MANN')
+  assert.equal(rows[0].unit, '件')
+  assert.deepEqual(rows[0]._sourceRow, sourceRow)
 })

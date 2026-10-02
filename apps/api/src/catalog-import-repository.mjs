@@ -168,7 +168,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         const profileId = text(mappingProfile?.id) || null
         let mappingSnapshot = {}
         if (profileId) {
-          const updated = await client.query('UPDATE catalog_import_mapping_profile SET usage_count=usage_count+1,last_used_at=now() WHERE id=$1 AND active RETURNING name,header_signature,version', [profileId])
+          const updated = await client.query('UPDATE catalog_import_mapping_profile SET usage_count=usage_count+1,last_used_at=now() WHERE id=$1 AND active RETURNING name,header_signature,version,default_values,transform_rules', [profileId])
           if (!updated.rows[0]) throw invalid('选择的映射方案不存在或已停用')
           const sourceKeys = new Set(rows.flatMap((row) => Object.keys(row?._sourceRow || {})))
           const allowedFields = new Set(catalogImportFields.map((field) => field.key))
@@ -180,6 +180,8 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           mappingSnapshot = {
             id: profileId, name: updated.rows[0].name, version: updated.rows[0].version,
             matchStatus, headerSignature: updated.rows[0].header_signature, fieldMapping,
+            defaultValues: updated.rows[0].default_values || {},
+            transformRules: updated.rows[0].transform_rules || {},
           }
         }
         const { rows: jobs } = await client.query(`INSERT INTO catalog_import_job

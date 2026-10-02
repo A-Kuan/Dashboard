@@ -226,6 +226,28 @@ export function mapCatalogCsvInspection(inspection, mapping = inspection?.sugges
   })
 }
 
+function normalizeFullWidthText(value) {
+  return String(value || '').replace(/[！-～]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0xFEE0)).replace(/　/g, ' ')
+}
+
+export function applyCatalogImportRules(rows = [], profile = {}) {
+  const defaults = profile.defaultValues || {}
+  const rules = profile.transformRules || {}
+  return rows.map((row) => {
+    const next = { ...row }
+    for (const field of catalogImportFieldDefinitions) {
+      let value = String(next[field.key] || '')
+      if (rules.normalizeFullWidth !== false) value = normalizeFullWidthText(value)
+      if (rules.trimText !== false) value = value.trim()
+      if (rules.collapseWhitespace !== false) value = value.replace(/\s+/g, ' ')
+      if (field.key === 'primaryOe' && rules.uppercaseOe !== false) value = value.toUpperCase()
+      if (!value && defaults[field.key]) value = String(defaults[field.key])
+      next[field.key] = value
+    }
+    return next
+  })
+}
+
 export function parseCatalogCsv(text) {
   const inspection = inspectCatalogCsv(text)
   return mapCatalogCsvInspection(inspection, inspection.suggestedMapping)
@@ -268,6 +290,12 @@ export function getCatalogImportMapping(profileId) {
 export function updateCatalogImportMapping(profile, updates) {
   return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profile.id)}`, {
     method: 'PATCH', body: JSON.stringify({ expectedVersion: profile.version, ...updates }),
+  })
+}
+
+export function updateCatalogImportMappingRules(profile, { defaultValues, transformRules }) {
+  return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profile.id)}/rules`, {
+    method: 'PATCH', body: JSON.stringify({ expectedVersion: profile.version, defaultValues, transformRules }),
   })
 }
 
