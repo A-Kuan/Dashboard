@@ -752,11 +752,66 @@ test('preflights and atomically executes an approved legacy SKU migration plan',
   const persisted = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${plan.id}`, { headers: adminHeaders })).json()
   expect(persisted.execution.summary.migrated).toBe(2)
   expect(persisted.execution.items).toHaveLength(2)
+  const initialAcceptance = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: reviewerHeaders })).json()
+  expect(initialAcceptance.ready).toBe(false)
+  expect(initialAcceptance.summary.needsAttention).toBe(2)
+  const selfAcceptance = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: adminHeaders, data: { expectedVersion: committed.version, decision: 'accept' } })
+  expect(selfAcceptance.status()).toBe(403)
+  expect((await selfAcceptance.json()).error).toBe('LEGACY_MIGRATION_SELF_ACCEPTANCE_FORBIDDEN')
+  const prematureAcceptance = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: reviewerHeaders, data: { expectedVersion: committed.version, decision: 'accept' } })
+  expect(prematureAcceptance.status()).toBe(409)
+  expect((await prematureAcceptance.json()).error).toBe('LEGACY_MIGRATION_ACCEPTANCE_FAILED')
+  const changesRequiredResponse = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: reviewerHeaders, data: {
+    expectedVersion: committed.version, decision: 'changes_required', note: '补齐车型平台并完成适配专项审核',
+  } })
+  expect(changesRequiredResponse.ok()).toBeTruthy()
+  const changesRequired = await changesRequiredResponse.json()
+  expect(changesRequired.acceptanceState).toBe('changes_required')
+
+  const platformResponse = await page.request.post('/api/v2/catalog/vehicle-platforms', { headers: adminHeaders, data: {
+    platformCode: 'PILOT-E2E', brandCode: 'POR', brandLabel: 'Porsche', seriesCode: 'PILOT', seriesLabel: '迁移试运行车型',
+    yearFrom: 2018, yearTo: 2025, lifecycleStatus: 'active', sourceSystem: '迁移隔离测试', sourceReference: 'pilot-e2e-platform',
+  } })
+  expect(platformResponse.status()).toBe(201)
   for (const result of persisted.execution.items) {
-    const catalogSku = await (await page.request.get(`/api/v2/catalog/skus/${result.catalogSkuId}`, { headers: adminHeaders })).json()
+    let catalogSku = await (await page.request.get(`/api/v2/catalog/skus/${result.catalogSkuId}`, { headers: adminHeaders })).json()
     expect(catalogSku.lifecycleStatus).toBe('draft')
     expect(catalogSku.verificationLevel).toBe('unverified')
+    const completedResponse = await page.request.patch(`/api/v2/catalog/skus/${result.catalogSkuId}`, { headers: adminHeaders, data: {
+      expectedVersion: catalogSku.version,
+      identity: catalogSku.identity,
+      evidence: catalogSku.evidence,
+      identifiers: catalogSku.identifiers,
+      fitments: [{ vehiclePlatformId: 'PILOT-E2E', vehicleLabel: 'Porsche 迁移试运行车型', years: '2018-2025', yearFrom: 2018, yearTo: 2025, evidenceId: catalogSku.evidence[0].id, includeConditions: { note: '按 OE 与车型平台复核' } }],
+      interchanges: catalogSku.interchanges,
+    } })
+    expect(completedResponse.ok()).toBeTruthy()
+    catalogSku = await completedResponse.json()
+    const fitmentReviewResponse = await page.request.post(`/api/v2/catalog/fitments/${catalogSku.fitments[0].id}/review`, { headers: reviewerHeaders, data: {
+      expectedSkuVersion: catalogSku.version, expectedReviewVersion: catalogSku.fitments[0].reviewVersion, decision: 'approve', note: 'OE、平台与年款范围一致',
+    } })
+    expect(fitmentReviewResponse.ok()).toBeTruthy()
+    catalogSku = (await fitmentReviewResponse.json()).sku
+    const submittedResponse = await page.request.post(`/api/v2/catalog/skus/${catalogSku.id}/transition`, { headers: editorHeaders, data: {
+      action: 'submit_review', expectedVersion: catalogSku.version, assignee: '独立审核员',
+    } })
+    expect(submittedResponse.ok()).toBeTruthy()
+    catalogSku = await submittedResponse.json()
+    const verifiedResponse = await page.request.post(`/api/v2/catalog/skus/${catalogSku.id}/verify`, { headers: reviewerHeaders, data: {
+      expectedVersion: catalogSku.version, note: '迁移资料与来源证据一致',
+    } })
+    expect(verifiedResponse.ok()).toBeTruthy()
   }
+  const readyAcceptance = await (await page.request.get(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: reviewerHeaders })).json()
+  expect(readyAcceptance.ready).toBe(true)
+  expect(readyAcceptance.summary.verified).toBe(2)
+  const acceptedResponse = await page.request.post(`/api/v2/catalog/legacy-migration-plans/${plan.id}/acceptance`, { headers: reviewerHeaders, data: {
+    expectedVersion: changesRequired.version, decision: 'accept', note: '两条资料已完成适配与 SKU 独立审核',
+  } })
+  expect(acceptedResponse.ok()).toBeTruthy()
+  const accepted = await acceptedResponse.json()
+  expect(accepted.acceptanceState).toBe('accepted')
+  expect(accepted.acceptance.ready).toBe(true)
 
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '旧资料迁移' }).click()
@@ -764,6 +819,9 @@ test('preflights and atomically executes an approved legacy SKU migration plan',
   await page.getByRole('button', { name: /首批真实流程隔离试运行/ }).click()
   await expect(page.getByRole('heading', { name: '执行结果' })).toBeVisible()
   await expect(page.getByText('2生成草稿')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '迁移后验收' })).toBeVisible()
+  await expect(page.getByText('已验收', { exact: true })).toBeVisible()
+  await expect(page.getByText('2已达标')).toBeVisible()
 })
 
 test('collapses the navigation into a persistent icon rail', async ({ page }) => {

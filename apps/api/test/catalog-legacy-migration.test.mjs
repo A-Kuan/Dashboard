@@ -71,6 +71,8 @@ test('legacy migration routes are read-visible but writes require import capabil
     preflightPlan: async (id) => id === 'plan-1' ? { planId: id, ready: true, summary: { total: 1, ready: 1, blocked: 0 } } : null,
     reviewPlan: async (id, input, actor) => ({ id, state: input.decision === 'approve' ? 'approved' : 'rejected', reviewedBy: actor.name }),
     commitPlan: async (id, _input, actor) => ({ id, state: 'committed', committedBy: actor.name }),
+    acceptancePlan: async (id) => id === 'plan-1' ? { planId: id, ready: true, status: 'ready', summary: { total: 1, verified: 1, needsAttention: 0 } } : null,
+    reviewAcceptance: async (id, input, actor) => ({ id, state: 'committed', acceptanceState: input.decision === 'accept' ? 'accepted' : 'changes_required', acceptanceBy: actor.name }),
   }
   const app = buildApp({ catalogLegacyMigrationRepository: repository, logger: false })
   const preview = await app.inject('/api/v2/catalog/legacy-migration-preview')
@@ -98,5 +100,14 @@ test('legacy migration routes are read-visible but writes require import capabil
   const committed = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/commit', headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': '资料管理员' }, payload: { expectedVersion: 2 } })
   assert.equal(committed.statusCode, 200)
   assert.equal(committed.json().committedBy, '资料管理员')
+  const acceptance = await app.inject({ method: 'GET', url: '/api/v2/catalog/legacy-migration-plans/plan-1/acceptance', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(acceptance.statusCode, 200)
+  assert.equal(acceptance.json().ready, true)
+  const editorAcceptanceDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/acceptance', headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedVersion: 3, decision: 'accept' } })
+  assert.equal(editorAcceptanceDenied.statusCode, 403)
+  const accepted = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/acceptance', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '验收员' }, payload: { expectedVersion: 3, decision: 'accept' } })
+  assert.equal(accepted.statusCode, 200)
+  assert.equal(accepted.json().acceptanceState, 'accepted')
+  assert.equal(accepted.json().acceptanceBy, '验收员')
   await app.close()
 })
