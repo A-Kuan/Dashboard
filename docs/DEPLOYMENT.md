@@ -4,7 +4,7 @@
 
 - 访问地址：`https://121.41.24.42/sku-preview/`
 - 服务器发布根目录：`/opt/dashboard-sku-preview`
-- 当前版本：`/opt/dashboard-sku-preview/releases/20261002-4f106413`
+- 当前版本：`/opt/dashboard-sku-preview/releases/20261002-70d21e32`
 - 当前版本指针：`/opt/dashboard-sku-preview/current`
 - Nginx 站点：`/etc/nginx/sites-enabled/dashboard-https`
 - 原配置备份：`/etc/nginx/backups/dashboard-https.bak-20260927-8c1fb19`
@@ -37,7 +37,7 @@ npm run test:sites
 - PostgreSQL 数据库：`dashboard_sku`
 - PostgreSQL / 系统用户：`dashboard-sku`
 - 外部接口前缀：`/sku-preview/api/`
-- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002-4f106413`
+- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002-70d21e32`
 - 空库备份：`/opt/dashboard-sku-api/backups/20260927-pre-smoke-empty.dump`
 - 本次迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-b885538.dump`
 - 版本锁迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-3de9223.dump`
@@ -51,6 +51,7 @@ npm run test:sites
 - SKU v2 与资源托管迁移前备份：`/opt/dashboard-sku-api/backups/20261002T0604Z-before-0cf9993f.dump`（SHA-256 `d1e60557a98b1812eee3419aafde0e91e67c45104c92ddbee2d59c1a2e3ad889`）
 - 旧 SKU 迁移预览发布前备份：`/opt/dashboard-sku-api/backups/20261002T070248Z-c790f499-dashboard_sku.dump`，配套清单 `.manifest.json`（SHA-256 `4190ea941198c1726c57b391218a39393821555dd10a4a70206ec55b8d9aedf4`，文件与清单权限均为 `0640`）
 - 旧 SKU 迁移治理发布前备份：`/opt/dashboard-sku-api/backups/20261002T073431Z-28be2bbf-dashboard_sku.dump`，配套清单 `.manifest.json`（SHA-256 `bfaa793feabff5f2e0fb3ac65308c5624f9b5067585b25368a4ee92383298f6c`，文件与清单权限均为 `0640`）
+- 可信身份与职责分离发布前备份：`/opt/dashboard-sku-api/backups/20261002T081633Z-a48a3bbf-dashboard_sku.dump`，配套清单 `.manifest.json`（SHA-256 `3846f3f94c27c04cf375e9a19b665f9f0e2588f5a9f4411e44a269f7bffeb046`，2,112,598 字节，文件与清单权限均为 `0640`）
 
 API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
 
@@ -223,6 +224,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:production-sm
 `20261002-fb938da5` API 与前端联合发布后已在线验证旧 SKU 受控迁移预览：迁移 `027_catalog_legacy_sku_migration.sql` 已执行，预览读取旧表 17 条 SKU、46 条 OE 关系与 1 条适配，未自动写入新资料库；`catalog_sku` 与三张迁移账本均保持 0 条。生产只读身份可查看映射、风险与来源变化，但迁移写请求仍返回 403。API `ready` 报告 27 个迁移，Nginx、静态入口与生产只读冒烟均通过。备份脚本同时修复多 PostgreSQL 版本环境下导出/校验工具错配，并以配套清单验证了本次迁移前备份。回滚点为前端 `20261002-0caffeee`、API `20261002-0cf9993f`；数据库不随应用回滚自动降级。
 
 `20261002-4f106413` API 与前端联合发布后已在线验证旧 SKU 迁移治理：资料员可在方案内修正品牌、分类和单位，并对排除记录填写原因；方案必须经过审核角色批准，管理员才可正式执行，旧的直接迁移接口不再允许绕过审批。迁移 `028`、`029` 新增方案账本、版本校验与单次执行占用保护。独立测试库走通提交、批准和执行，并发执行只产生一个批次；生产只读冒烟读取 17 条旧 SKU，默认 0 条选择，提交按钮和全选均不可用，控制台无错误。生产未创建方案、未执行迁移，17 条旧 SKU、46 条 OE、1 条适配保持不变，`catalog_sku`、迁移批次、方案与方案明细均为 0。API `ready` 报告 29 个迁移；回滚点为前端与 API `20261002-fb938da5`，数据库不随应用回滚自动降级。
+
+`20261002-70d21e32` API 与前端联合发布后已在线验证可信身份与迁移职责分离：生产未配置身份网关时保持 `anonymous-readonly`，直接伪造管理员请求头仍是只读会话；迁移方案和旧 `/api/v1/skus` 写入均返回 403。迁移 `030` 增加稳定用户 ID、角色与方案审计事件，独立数据库验证了禁止自审、审核员不可执行、管理员执行及 4 条完整事件轨迹。生产只读浏览器冒烟、Nginx 和 API `ready` 均通过，控制台无错误。发布前后 17 条旧 SKU、46 条 OE、1 条适配保持不变，`catalog_sku`、迁移批次、方案、方案明细与身份审计事件均为 0。API `ready` 报告 30 个迁移；前端与 API 回滚点为 `20261002-4f106413`，数据库不随应用回滚自动降级。
 
 ## 回滚
 
