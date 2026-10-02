@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
-    "build:server": "VITE_BASE_PATH=/sku-preview/ vite build && node scripts/prepare-sites-build.mjs",
+    "build:server": "VITE_BASE_PATH=/sku-preview/ VITE_API_BASE=/sku-preview vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:unit": "node --test tests/catalog-csv.test.mjs",

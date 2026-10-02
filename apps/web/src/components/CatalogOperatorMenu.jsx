@@ -13,7 +13,13 @@ export function CatalogOperatorMenu({ onSession }) {
     onSession?.(next)
   }
 
-  useEffect(() => { load().catch(() => {}) }, [])
+  useEffect(() => {
+    load().catch(() => {
+      const unavailable = { name: '虎山行', roleLabel: '权限读取失败', capabilities: [], availableRoles: [], development: false }
+      setSession(unavailable)
+      onSession?.(unavailable)
+    })
+  }, [])
   useEffect(() => {
     const close = (event) => { if (!root.current?.contains(event.target)) setOpen(false) }
     document.addEventListener('pointerdown', close)
@@ -29,7 +35,7 @@ export function CatalogOperatorMenu({ onSession }) {
   const displayName = session?.name === 'hushanxing-workbench' ? '虎山行' : session?.name || '虎山行'
 
   return <div className="catalog-operator-menu" ref={root}>
-    <button type="button" aria-label="当前资料权限" aria-expanded={open} onClick={() => setOpen((value) => !value)}><span><strong>{displayName}</strong><small>{session?.roleLabel || '资料管理员'}</small></span><CaretDown size={14} weight="bold" /></button>
+    <button type="button" aria-label="当前资料权限" aria-expanded={open} onClick={() => setOpen((value) => !value)}><span><strong>{displayName}</strong><small>{session?.roleLabel || '正在确认权限'}</small></span><CaretDown size={14} weight="bold" /></button>
     {open ? <div className="catalog-role-popover"><header><ShieldCheck size={18} weight="duotone" /><div><strong>当前资料权限</strong><span>{session?.development ? '开发环境可切换角色进行验收' : '权限由登录身份决定'}</span></div></header>{session?.availableRoles?.length ? <div>{session.availableRoles.map((role) => <button type="button" key={role.id} onClick={() => choose(role.id)}><span><strong>{role.label}</strong><small>{role.capabilities.length} 项能力</small></span>{session.role === role.id ? <Check size={17} weight="bold" /> : null}</button>)}</div> : null}</div> : null}
   </div>
 }
