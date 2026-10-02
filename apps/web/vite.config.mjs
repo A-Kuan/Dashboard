@@ -16,7 +16,7 @@ export default defineConfig({
       clientFiles: ["./src/main.jsx"],
     },
     proxy: {
-      "/api": "http://127.0.0.1:4183",
+      "/api": process.env.VITE_API_PROXY || "http://127.0.0.1:4183",
     },
   },
   plugins: [react()],

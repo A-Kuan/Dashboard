@@ -1,6 +1,17 @@
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
+const testInfoByPage = new WeakMap()
+
+function capture(page, filename) {
+  const testInfo = testInfoByPage.get(page)
+  if (!testInfo) throw new Error('Missing Playwright test context for screenshot')
+  const path = process.env.UPDATE_QA_ARTIFACTS === '1'
+    ? `qa-artifacts/${filename}`
+    : testInfo.outputPath(filename)
+  return page.screenshot({ path, fullPage: false })
+}
+
 test.beforeAll(async ({ request }) => {
   const response = await request.post('/api/v1/dictionaries/reset', {
     headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright' },
@@ -8,7 +19,8 @@ test.beforeAll(async ({ request }) => {
   expect(response.ok()).toBeTruthy()
 })
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
+  testInfoByPage.set(page, testInfo)
   const errors = []
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
   page.on('pageerror', (error) => errors.push(error.message))
@@ -27,7 +39,7 @@ test('renders the standalone workbench home', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '业务跟进' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '我的待办' })).toBeVisible()
   await expect(page.getByText('Pi 助手', { exact: true }).last()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-workbench-home-1680.png', fullPage: false })
+  await capture(page, 'implementation-workbench-home-1680.png')
 })
 
 test('supports search, command center and todo interactions', async ({ page }) => {
@@ -53,7 +65,7 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
   await expect(page).toHaveURL(/#\/sku$/)
   await expect(page.getByRole('heading', { name: 'SKU 资料库' })).toBeVisible()
   await expect(page.getByText('95B 698 151 H', { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-library-default-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-library-default-1680.png')
 
   await page.getByPlaceholder('搜索 SKU、OE 号、配件名称、品牌或适配车型').fill('机油滤清器')
   await expect(page.getByText('机油滤清器', { exact: true }).first()).toBeVisible()
@@ -62,10 +74,10 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
 
   await page.getByRole('button', { name: '库存与价格' }).click()
   await expect(page.getByText('OEM 参考价')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-library-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-library-1680.png')
   await page.getByRole('button', { name: '新建 SKU' }).click()
   await expect(page.getByRole('dialog', { name: '选择 SKU 创建来源' })).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-source-modal-1680.png')
 })
 
 test('establishes an auditable vehicle platform master record', async ({ page }) => {
@@ -90,7 +102,7 @@ test('establishes an auditable vehicle platform master record', async ({ page })
   await page.getByRole('button', { name: '保存平台' }).click()
   await expect(page.getByText('车型平台已建立')).toBeVisible()
   await expect(page.getByText('9YA', { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-platform-governance-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-platform-governance-1680.png')
   const aliasLookup = await page.request.get('/api/v2/catalog/vehicle-platforms/9Y0')
   expect(aliasLookup.ok()).toBeTruthy()
   expect((await aliasLookup.json()).platformCode).toBe('9YA')
@@ -125,7 +137,7 @@ test('governs structured vehicle variants under a platform', async ({ page }) =>
   await page.getByRole('button', { name: '保存版本' }).click()
   await expect(page.getByText('车型版本已建立')).toBeVisible()
   await expect(page.getByText('9YA-DCBE-CN', { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-vehicle-variant-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-vehicle-variant-1680.png')
   const variants = await (await page.request.get('/api/v2/catalog/vehicle-variants?status=active')).json()
   expect(variants.items[0].engineCodes).toContain('DCBE')
   expect(variants.items[0].history).toBeUndefined()
@@ -154,13 +166,13 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   await page.getByPlaceholder('结束年款').fill('2023')
   await page.getByPlaceholder('变速箱代码').fill('A48.00')
   await page.getByPlaceholder('PR 代码').fill('1ZT')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-intake-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-epc-intake-1680.png')
   await page.getByRole('button', { name: '生成匹配预览' }).click()
   await expect(page.getByText('写入前匹配预览', { exact: true })).toBeVisible()
   await expect(page.getByText('建议新建', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('9YA-DCBE-CN', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('现有人工名称、分类、价格不覆盖')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-preview-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-epc-preview-1680.png')
 
   const commitResponse = page.waitForResponse((response) => response.url().includes('/api/v2/catalog/epc-previews/') && response.url().endsWith('/commit') && response.request().method() === 'POST')
   await page.getByRole('button', { name: '确认写入所选记录' }).click()
@@ -172,7 +184,7 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   await expect(page.getByRole('heading', { name: 'EPC 批次记录' })).toBeVisible()
   await expect(page.getByText('已完成 · 1/1')).toBeVisible()
   await expect(page.getByText(/Cayenne 9YA \/ 615-05/)).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-history-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-epc-history-1680.png')
 
   const created = await (await page.request.get(`/api/v2/catalog/skus/${skuId}`)).json()
   const completed = await page.request.patch(`/api/v2/catalog/skus/${skuId}`, { data: {
@@ -237,7 +249,7 @@ test('operates failed EPC connector runs with filters, inspection and linked ret
   await expect(page.getByText(vin).first()).toBeVisible()
   await expect(page.getByRole('strong').filter({ hasText: 'EPC_CONNECTOR_NOT_CONFIGURED' })).toBeVisible()
   await expect(page.getByText('地址与密钥不会进入浏览器或运行记录')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-epc-run-center-1680.png', fullPage: false })
+  await capture(page, 'implementation-epc-run-center-1680.png')
 
   const retryResponse = page.waitForResponse((response) => response.url().includes('/api/v2/catalog/epc-connector-runs/') && response.url().endsWith('/retry') && response.request().method() === 'POST')
   await page.getByRole('button', { name: '使用原条件重试' }).click()
@@ -258,7 +270,7 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await expect(page.getByText('9YA', { exact: true }).first()).toBeVisible()
   await page.getByLabel('适配审核结论').fill('EPC 图组、平台、年款与排除条件均已复核')
   await page.locator('.fitment-governance-scroll').evaluate((element) => { element.scrollTop = 0 })
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-fitment-governance-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-fitment-governance-1680.png')
   await page.getByRole('button', { name: '通过适配' }).click()
   await expect(page.getByText('适配关系已通过审核')).toBeVisible()
   await page.getByRole('button', { name: '处理队列' }).click()
@@ -266,7 +278,7 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await page.getByRole('button', { name: /前制动盘/ }).click()
   await expect(page.getByText('全部通过', { exact: true })).toBeVisible()
   await expect(page.getByText('资料审核员', { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-review-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-quality-review-1680.png')
   await page.getByRole('button', { name: '通过审核', exact: true }).click()
   await page.getByPlaceholder('可填写审核结论（选填）').fill('来源、编号与车型适配均已复核')
   await page.getByRole('button', { name: '确认通过审核' }).click()
@@ -275,7 +287,7 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await expect(page.getByRole('heading', { name: '运营洞察' })).toBeVisible()
   await expect(page.getByText('审核通过率')).toBeVisible()
   await expect(page.getByText('平均审核耗时')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-insights-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-quality-insights-1680.png')
 })
 
 test('detects and resolves overlapping fitment scopes before publication', async ({ page }) => {
@@ -298,7 +310,7 @@ test('detects and resolves overlapping fitment scopes before publication', async
   await expect(page.getByText('适配重叠验收件', { exact: true }).first()).toBeVisible()
   await page.getByText('允许重叠', { exact: true }).click()
   await page.getByLabel('适配冲突处理依据').fill('PR 1ZT 与 1ZK 对应不同制动配置，允许年款重叠')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-fitment-conflict-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-fitment-conflict-1680.png')
   await page.getByRole('button', { name: '提交处理结论' }).click()
   await expect(page.getByText('适配冲突已留痕处理')).toBeVisible()
 })
@@ -316,7 +328,7 @@ test('compares historical SKU versions and restores one as a new draft', async (
   const dialog = page.getByRole('dialog', { name: 'SKU 版本对比' })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText('审核状态不会回退')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-version-compare-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-version-compare-1680.png')
   await dialog.getByPlaceholder('例如：撤销错误的 OE 与车型适配修改').fill('撤销测试中的错误名称修改')
   await dialog.getByRole('button', { name: '恢复 v5 为新草稿' }).click()
   await expect(page.getByText(/已从 v5 恢复为新草稿/)).toBeVisible()
@@ -334,7 +346,7 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   expect((await templateDownload).suggestedFilename()).toBe('hushanxing-sku-import-template.csv')
   await dialog.getByRole('button', { name: '查看字段说明' }).click()
   await expect(dialog.getByText('来源记录ID', { exact: true })).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-template-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-template-1680.png')
   await dialog.getByRole('button', { name: '查看字段说明' }).click()
   const csv = '\uFEFF中文名称,品牌,分类,单位,主 OE,车型,年款范围,来源系统\n后刹车片,Porsche OE,制动系统 / 制动片,件,TEST-IMPORT-001,Macan (95B),2014-2018,Porsche PET\n重复前制动盘,Porsche OE,制动系统 / 制动盘,件,9Y0 615 301 M,Cayenne (9YA),2018-2023,Porsche PET\n无编号件,Porsche OE,制动系统 / 制动片,件,,,,供应商资料\n文件重复件 A,Porsche OE,制动系统 / 制动片,件,FILE-DUP-001,Macan (95B),2014-2018,Porsche PET\n文件重复件 B,Porsche OE,制动系统 / 制动片,件,FILE DUP 001,Macan (95B),2014-2018,Porsche PET'
   await dialog.locator('input[type=file]').setInputFiles({ name: 'sku-import.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
@@ -348,14 +360,14 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await expect(page.getByLabel('选择第 4 行')).toBeDisabled()
   await expect(page.getByLabel('选择第 5 行')).not.toBeChecked()
   await expect(dialog.getByText('与文件第 6 行使用相同主 OE')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-preview-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-preview-1680.png')
   await page.getByRole('button', { name: '写入 1 条草稿' }).click()
   await expect(page.getByRole('heading', { name: '导入批次已完成' })).toBeVisible()
   await expect(page.getByText('成功写入 1 条，失败 0 条')).toBeVisible()
   await page.getByRole('button', { name: '查看本次导入记录' }).click()
   await expect(page.getByText('首次写入')).toBeVisible()
   await expect(page.getByText('sku-import.csv', { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-history-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-history-1680.png')
   await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
   await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '批量导入' }).click()
@@ -363,7 +375,7 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await repeatedDialog.locator('input[type=file]').setInputFiles({ name: 'renamed-copy.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   await expect(repeatedDialog.getByText('该文件内容已导入过')).toBeVisible()
   await expect(repeatedDialog.getByText('首次写入')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-idempotency-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-idempotency-1680.png')
   await repeatedDialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
 })
 
@@ -381,7 +393,7 @@ test('maps supplier CSV headers and reuses a saved supplier profile', async ({ p
   await expect(dialog.locator('.sku-import-mapping > footer p').getByText('内部备注', { exact: true })).toBeVisible()
   await expect(dialog.getByText('保存为供应商方案')).toBeVisible()
   await expect(dialog.getByLabel('映射方案名称')).toHaveValue('supplier-a 映射方案')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-mapping-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-mapping-1680.png')
   await dialog.getByRole('button', { name: '确认映射并预检查' }).click()
   await expect(dialog.getByText('空调滤芯', { exact: true })).toBeVisible()
   await expect(dialog.getByText('4M0 819 439 B', { exact: true })).toBeVisible()
@@ -393,7 +405,7 @@ test('maps supplier CSV headers and reuses a saved supplier profile', async ({ p
   await reuseDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-202610.csv', mimeType: 'text/csv', buffer: Buffer.from(nextCsv) })
   await expect(reuseDialog.getByText('已自动套用“supplier-a 映射方案”')).toBeVisible()
   await expect(reuseDialog.getByLabel('映射 主 OE')).toHaveValue('1')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-reuse-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-profile-reuse-1680.png')
   await reuseDialog.getByRole('button', { name: '确认映射并预检查' }).click()
   await expect(reuseDialog.getByText('机油滤芯', { exact: true })).toBeVisible()
   await reuseDialog.getByRole('button', { name: '关闭' }).first().click()
@@ -407,7 +419,7 @@ test('maps supplier CSV headers and reuses a saved supplier profile', async ({ p
   await driftDialog.getByRole('button', { name: '应用已有方案' }).click()
   await expect(driftDialog.getByRole('button', { name: '已应用可匹配字段' })).toBeDisabled()
   await expect(driftDialog.getByText('同步更新供应商方案')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-drift-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-profile-drift-1680.png')
   await driftDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
@@ -438,7 +450,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await dialog.getByRole('button', { name: '添加品牌映射' }).click()
   await dialog.getByLabel('品牌供应商值 2').fill('博世中国')
   await dialog.getByLabel('品牌标准值 2').fill('BOSCH')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-editor-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-value-editor-1680.png')
   await dialog.locator('.sku-profile-value-editor').getByRole('button', { name: '保存映射' }).click()
   await expect(dialog.locator('.sku-profile-value-summary')).toContainText('品牌2 条')
   await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新值映射', { exact: true })).toBeVisible()
@@ -459,7 +471,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(dialog.getByText('停用后不再参与自动匹配')).toBeVisible()
   await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
   await expect(dialog.locator('.sku-profile-inspector > header').getByText('已停用')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-manager-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-profile-manager-1680.png')
 
   await dialog.getByRole('button', { name: '恢复方案' }).click()
   await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
@@ -474,7 +486,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('ａb-１２３')
   await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('AB-123')
   await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('MANN-FILTER')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-rule-preview-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-rule-preview-1680.png')
   await rulesDialog.getByRole('button', { name: '确认映射并预检查' }).click()
   await expect(rulesDialog.getByText('燃油 滤芯', { exact: true }).first()).toBeVisible()
   await expect(rulesDialog.getByText('AB-123', { exact: true })).toBeVisible()
@@ -498,7 +510,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(valueDialog.getByLabel('选择第 3 行')).toBeDisabled()
   await expect(valueDialog.getByLabel('选择第 4 行')).toBeDisabled()
   await expect(valueDialog.locator('.import-state.review')).toHaveCount(2)
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-review-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-value-review-1680.png')
   await valueDialog.getByLabel('品牌 曼牌中国 的标准值').selectOption('MANN-FILTER')
   await valueDialog.getByRole('button', { name: '保存并重新检查' }).click()
   await expect(valueDialog.locator('.sku-value-review-queue article').filter({ hasText: '曼牌中国' })).toHaveCount(0)
@@ -517,7 +529,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await valueDialog.getByLabel('NEW-BRAND 审核说明').fill('品牌资料已核验，同意纳入标准字典')
   await valueDialog.getByRole('button', { name: '通过并入字典' }).click()
   await expect(valueDialog.getByText('当前没有待审核申请')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-standard-governance-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-standard-governance-1680.png')
 
   await valueDialog.getByRole('button', { name: '新建导入' }).click()
   await valueDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-values.csv', mimeType: 'text/csv', buffer: Buffer.from(valueCsv) })
@@ -529,7 +541,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(valueDialog.locator('.sku-import-table').getByText('NEW-BRAND', { exact: true })).toBeVisible()
   await expect(valueDialog.getByLabel('选择第 4 行')).toBeChecked()
   await expect(valueDialog.getByRole('button', { name: '写入 3 条草稿' })).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-resolved-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-import-value-resolved-1680.png')
   await valueDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
@@ -540,7 +552,7 @@ test('supports controlled bulk review submission with per-record results', async
   await page.getByRole('button', { name: '提交审核', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '批量提交审核' })
   await expect(dialog).toContainText('已选择 2 条资料')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-bulk-review-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-bulk-review-1680.png')
   await dialog.getByRole('button', { name: '提交审核 2 条' }).click()
   await expect(dialog.getByRole('heading', { name: '批量操作已完成' })).toBeVisible()
   await expect(dialog.getByText('成功 2 条，失败 0 条')).toBeVisible()
@@ -561,7 +573,7 @@ test('exports a full audit package and a readable business CSV', async ({ page }
   const dialog = page.getByRole('dialog', { name: '导出 SKU 资料' })
   await expect(dialog).toContainText('审计包自带完整性信息')
   await expect(dialog).toContainText('业务导出不等于数据库备份')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-export-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-export-1680.png')
 
   const jsonDownloadPromise = page.waitForEvent('download')
   await dialog.getByRole('button', { name: '下载 JSON' }).click()
@@ -593,7 +605,7 @@ test('switches development roles and disables unauthorized operations', async ({
   await expect(page.getByRole('button', { name: '批量导入' })).toBeDisabled()
   await expect(page.getByRole('button', { name: '导出资料' })).toBeDisabled()
   await page.getByRole('button', { name: '当前资料权限' }).click()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-role-permissions-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-role-permissions-1680.png')
 })
 
 test('reviews and resolves an identifier conflict with evidence', async ({ page }) => {
@@ -613,7 +625,7 @@ test('reviews and resolves an identifier conflict with evidence', async ({ page 
   await expect(page.getByText('CONFLICT001', { exact: true })).toBeVisible()
   await page.getByLabel(/适用范围不同/).check()
   await page.getByPlaceholder('记录品牌目录、EPC 图组、适用范围或人工复核依据').fill('两个 SKU 的适配车型不同，已依据品牌目录逐项复核')
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-conflict-resolution-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-conflict-resolution-1680.png')
   await page.getByRole('button', { name: '保存处理结论' }).click()
   await expect(page.getByText('冲突结论已保存，质量阻断已解除')).toBeVisible()
   await expect(page.getByText('适用范围不同', { exact: true }).first()).toBeVisible()
@@ -647,7 +659,7 @@ test('previews and safely merges a confirmed duplicate SKU', async ({ page }) =>
   await expect(dialog.getByText('版本锁、双份快照和操作人留痕已开启')).toBeVisible()
   await dialog.getByPlaceholder(/例如：经 Porsche EPC/).fill('经 Porsche PET 目录和实物标签复核，两条资料确认是同一零件')
   await dialog.getByLabel(/我已核对保留项与停用项/).check()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-safe-merge-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-safe-merge-1680.png')
   await dialog.getByRole('button', { name: '确认安全合并' }).click()
   await expect(page.getByText(/已合并至 .*原 SKU 已安全停用/)).toBeVisible()
   await expect(page.getByRole('button', { name: /MERGE-E2E-001/ })).toHaveCount(0)
@@ -669,7 +681,7 @@ test('shows actionable validation issues for an incomplete manual SKU', async ({
   await page.getByRole('button', { name: '提交审核' }).click()
   await expect(page.getByRole('heading', { name: '来源与基本身份' })).toBeVisible()
   await expect(page.getByText('还有 5 项需要补充')).toBeVisible()
-  await page.screenshot({ path: 'qa-artifacts/implementation-sku-editor-incomplete-1680.png', fullPage: false })
+  await capture(page, 'implementation-sku-editor-incomplete-1680.png')
 })
 
 test('collapses the navigation into a persistent icon rail', async ({ page }) => {
@@ -680,7 +692,7 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
   await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
   await expect(page.getByRole('button', { name: '展开导航' })).toBeVisible()
   await expect.poll(async () => Math.round((await page.locator('.workbench-main').boundingBox()).x)).toBe(72)
-  await page.screenshot({ path: 'qa-artifacts/implementation-sidebar-collapsed-1680.png', fullPage: false })
+  await capture(page, 'implementation-sidebar-collapsed-1680.png')
 
   await page.reload()
   await expect(page.locator('.workbench-home')).toHaveClass(/sidebar-collapsed/)
