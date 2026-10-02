@@ -31,6 +31,15 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 来源类型：`epc`、`vin_epc`、`oe_lookup`、`brand_catalog`、`supplier`、`manual`、`import`。
 
+### EPC / VIN 写入前预览
+
+- `POST /api/v2/catalog/epc-previews`：提交 VIN、来源系统、目录路径与最多 100 条 EPC 零件记录；服务端保存不可变原始批次，并返回 OE、车型平台和车型版本的匹配解释。该接口不写入 SKU。
+- `GET /api/v2/catalog/epc-previews?state=&page=&pageSize=`：读取预览批次历史。
+- `GET /api/v2/catalog/epc-previews/:id`：读取逐条候选、来源快照、已执行决定和结果 SKU。
+- `POST /api/v2/catalog/epc-previews/:id/commit`：提交 `expectedVersion` 和明确的逐条 `create_sku`、`attach_evidence` 或 `skip` 决定。未选择行保持待处理；附加证据不会覆盖现有人工名称、分类、编号或价格；新资料只生成草稿，适配默认为待核验。
+
+同一规范 OE 唯一命中时返回 `exact`，无命中返回 `new`，多条命中返回 `ambiguous`。前端不得把 `ambiguous` 自动写入任意候选；所有决定写入追加式审计表。
+
 ### SKU 资料
 
 - `GET /api/v2/catalog/skus?q=&status=&page=&pageSize=`：服务端分页检索；响应包含 `statusCounts`，编号搜索会忽略空格和常用分隔符。
@@ -114,7 +123,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 ### 运营指标
 
 - `GET /api/v2/catalog/metrics?days=30`：读取指定统计周期内的真实资料、审核与导入聚合数据，`days` 支持 14、30 或 90。
-- `GET /api/v2/catalog/export?format=json|csv&status=`：仅资料管理员可用。JSON 返回含 SKU/适配版本历史、车型平台与车型版本及其变更快照、适配冲突结论、编号冲突结论、合并索引、数据计数与 SHA-256 校验值的 `catalog-export-v1` 审计包；CSV 返回便于表格核对的一行一 SKU 视图。单次最多 5000 条。
+- `GET /api/v2/catalog/export?format=json|csv&status=`：仅资料管理员可用。JSON 返回含 SKU/适配版本历史、车型平台与车型版本及其变更快照、EPC 预览/来源行/写入决定、适配冲突结论、编号冲突结论、合并索引、数据计数与 SHA-256 校验值的 `catalog-export-v1` 审计包；CSV 返回便于表格核对的一行一 SKU 视图。单次最多 5000 条。
 
 响应包含资料状态、完整度区间、质量问题、审核提交/通过/退回/平均耗时/逾期数、导入批次与成功率，以及按日汇总的创建、提交、通过和退回趋势。日期边界按 `Asia/Shanghai` 业务日计算；没有数据时返回零值，不生成演示数据。
 

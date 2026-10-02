@@ -4,6 +4,7 @@ import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validati
 import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, sanitizeCatalogFitmentReviews, validateCatalogFitmentsReviewed, validateCatalogVerifiable } from './catalog-validation.mjs'
 import { catalogRoles, requireCatalogCapability, resolveCatalogActor } from './catalog-access.mjs'
 import { catalogImportTemplateCsv, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
+import { normalizeEpcCommitInput, normalizeEpcPreviewInput } from './catalog-epc-validation.mjs'
 
 const transitionCapabilities = {
   submit_review: 'catalog.submit',
@@ -35,7 +36,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -179,6 +180,32 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const intake = await catalogRepository.getIntake(request.params.id)
     if (!intake) return reply.code(404).send({ error: 'CATALOG_INTAKE_NOT_FOUND', message: '导入批次不存在' })
     return intake
+  })
+  app.post('/api/v2/catalog/epc-previews', async (request, reply) => {
+    if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    return reply.code(201).send(await catalogEpcIntakeRepository.createPreview(normalizeEpcPreviewInput(request.body), actor.name))
+  })
+  app.get('/api/v2/catalog/epc-previews', async (request, reply) => {
+    if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogEpcIntakeRepository.list({ state: request.query?.state, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/catalog/epc-previews/:id', async (request, reply) => {
+    if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const preview = await catalogEpcIntakeRepository.get(request.params.id)
+    return preview || reply.code(404).send({ error: 'EPC_PREVIEW_NOT_FOUND', message: 'EPC 匹配预览不存在' })
+  })
+  app.post('/api/v2/catalog/epc-previews/:id/commit', async (request, reply) => {
+    if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    const preview = await catalogEpcIntakeRepository.commit(request.params.id, normalizeEpcCommitInput(request.body), actor.name)
+    return preview || reply.code(404).send({ error: 'EPC_PREVIEW_NOT_FOUND', message: 'EPC 匹配预览不存在' })
   })
   app.get('/api/v2/catalog/skus', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })

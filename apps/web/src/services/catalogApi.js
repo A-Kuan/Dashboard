@@ -148,6 +148,16 @@ export function getCatalogVehiclePlatform(id) {
   return request(`/api/v2/catalog/vehicle-platforms/${encodeURIComponent(id)}`)
 }
 
+export function createCatalogEpcPreview(input) {
+  return request('/api/v2/catalog/epc-previews', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function commitCatalogEpcPreview(preview, decisions) {
+  return request(`/api/v2/catalog/epc-previews/${encodeURIComponent(preview.id)}/commit`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: preview.version, decisions }),
+  })
+}
+
 export function saveCatalogVehiclePlatform(platform) {
   const path = platform.id ? `/api/v2/catalog/vehicle-platforms/${encodeURIComponent(platform.id)}` : '/api/v2/catalog/vehicle-platforms'
   return request(path, { method: platform.id ? 'PATCH' : 'POST', body: JSON.stringify(platform) })

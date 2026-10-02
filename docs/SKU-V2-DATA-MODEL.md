@@ -120,6 +120,12 @@ CatalogSku
 | `confidence` | enum | low/medium/high |
 | `immutable_hash` | varchar | 防止原始证据被静默覆盖 |
 
+### EPC 写入前审阅
+
+`catalog_epc_preview` 关联一条 `catalog_intake`，保存 VIN、来源系统、目录路径、匹配统计、状态和乐观锁版本。`catalog_epc_preview_item` 保存每一条来源 OE、原始名称、图例位置、车型上下文、原始载荷、SKU 候选、平台匹配和带评分原因的车型版本候选。候选是解释性预览，不是已确认适配。
+
+`catalog_epc_publish_decision` 采用追加写模型，逐条保存 `create_sku`、`attach_evidence` 或 `skip` 决定、完整来源快照、写入结果、操作人与时间。同一预览行只能产生一个决定；未选择行保持待处理。附加到现有 SKU 时只新增来源证据并使资料回到待核验状态，不替换人工维护的身份、分类、价格或既有适配。新建结果固定为草稿，来源产生的适配固定为 `pending`。
+
 ### 商业域
 
 `supplier_offer` 保存 `supplier_id`、`supplier_part_number`、采购单位、币种、含税价、MOQ、交期、有效期和来源；`inventory_balance` 保存仓库/库位、现有量、锁定量、在途量和快照时间。`oem_reference` 单独作为来源价格类型，只读展示，禁止写入商业价格枚举。
