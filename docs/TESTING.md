@@ -46,6 +46,7 @@ UPDATE_QA_ARTIFACTS=1 npm run test:e2e
 
 - `Unit tests and build` 验证 API、前端单元测试、Sites 包装和生产构建；
 - `Isolated browser regression` 启动专用 PostgreSQL 服务，并运行完整的一次性数据库浏览器回归。
+- 自动发布计划以 dry-run 方式验证脚本语法、安全路径和 Git 修订解析，不连接生产服务器。
 
 两项检查都通过后才应合并业务变更。工作流使用 Node.js 22，与本地和服务器运行时保持一致。
 

@@ -16,6 +16,11 @@ test('production workbench uses its real API without writing data', { skip: !bas
   try {
     const response = await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
     assert.equal(response?.status(), 200)
+    const readyResponse = await page.request.get(new URL('api/ready', baseUrl).toString())
+    assert.equal(readyResponse.ok(), true)
+    const readiness = await readyResponse.json()
+    assert.equal(readiness.status, 'ready')
+    assert.match(readiness.releaseRevision, /^[0-9a-f]{40}$/)
     await page.getByRole('button', { name: 'SKU 资料库', exact: true }).click()
     await page.getByRole('heading', { name: 'SKU 资料库', exact: true }).waitFor({ state: 'visible' })
 

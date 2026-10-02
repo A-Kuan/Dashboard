@@ -37,8 +37,9 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
+  const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
     if (!catalogPlatformRepository) return
@@ -69,13 +70,13 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     }
   }
 
-  app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
+  app.get('/api/health', async () => ({ status: 'ok', ...serviceMetadata }))
   app.get('/api/ready', async (request, reply) => {
     try {
-      return { status: 'ready', service: 'dashboard-sku-api', ...(await readinessCheck()) }
+      return { status: 'ready', ...serviceMetadata, ...(await readinessCheck()) }
     } catch (error) {
       request.log.warn({ err: error, code: error.code }, 'readiness check failed')
-      return reply.code(503).send({ status: 'not_ready', service: 'dashboard-sku-api', error: error.code || 'DATABASE_UNAVAILABLE' })
+      return reply.code(503).send({ status: 'not_ready', ...serviceMetadata, error: error.code || 'DATABASE_UNAVAILABLE' })
     }
   })
   app.get('/api/v2/catalog/import-template', async (request, reply) => {

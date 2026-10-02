@@ -64,11 +64,12 @@ const input = {
 }
 
 test('separates process health from database readiness', async () => {
-  const ready = buildApp({ readinessCheck: async () => ({ database: 'ready', migrations: 13, latestMigration: '013_catalog_sku_merge.sql' }), logger: false })
-  assert.deepEqual((await ready.inject('/api/health')).json(), { status: 'ok', service: 'dashboard-sku-api' })
+  const ready = buildApp({ releaseRevision: 'abc1234', readinessCheck: async () => ({ database: 'ready', migrations: 13, latestMigration: '013_catalog_sku_merge.sql' }), logger: false })
+  assert.deepEqual((await ready.inject('/api/health')).json(), { status: 'ok', service: 'dashboard-sku-api', releaseRevision: 'abc1234' })
   const response = await ready.inject('/api/ready')
   assert.equal(response.statusCode, 200)
   assert.equal(response.json().status, 'ready')
+  assert.equal(response.json().releaseRevision, 'abc1234')
   assert.equal(response.json().latestMigration, '013_catalog_sku_merge.sql')
   await ready.close()
 
@@ -76,6 +77,7 @@ test('separates process health from database readiness', async () => {
   const rejected = await unavailable.inject('/api/ready')
   assert.equal(rejected.statusCode, 503)
   assert.equal(rejected.json().error, 'DATABASE_SCHEMA_NOT_READY')
+  assert.equal(rejected.json().releaseRevision, 'development')
   await unavailable.close()
 })
 

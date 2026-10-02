@@ -50,6 +50,14 @@ jobs:
           npm run build
           npm run test:sites
 
+      - name: Validate protected API release plan
+        env:
+          API_DEPLOY_DRY_RUN: 1
+          API_DEPLOY_ALLOW_NON_MAIN: 1
+        run: |
+          bash -n deploy/release-api.sh
+          bash deploy/release-api.sh HEAD
+
   browser-regression:
     name: Isolated browser regression
     runs-on: ubuntu-latest

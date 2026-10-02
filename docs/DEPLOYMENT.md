@@ -60,6 +60,24 @@ cd /opt/dashboard-sku-api/releases/<version>
 sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku npm run migrate
 ```
 
+正式 API 发布统一从仓库根目录执行自动发布工具：
+
+```bash
+API_DEPLOY_ALLOW_INSECURE_TLS=1 ./deploy/release-api.sh origin/main
+```
+
+当前预览站使用 IP 地址证书，因此示例显式允许本次浏览器冒烟忽略证书校验；切换到匹配域名的正式证书后应去掉该变量。工具只接受受保护的 `origin/main` 当前提交，使用 UTC 时间与 Git SHA 创建不可变 release，并依次完成：
+
+1. 检查当前服务与 readiness；
+2. 记录关键业务表数量；
+3. 安装依赖并在服务器运行 API 测试；
+4. 生成并校验 PostgreSQL 备份及配套 EPC 资源快照；
+5. 执行校验式数据库迁移；
+6. 原子切换 `current` 并等待包含目标 Git SHA 的 readiness；
+7. 对比关键数据数量并运行线上只读浏览器冒烟。
+
+任何切换后检查失败都会自动恢复上一 API release 并重启服务；数据库迁移遵循只前进原则，不随应用回滚降级。只有经过审核、明确会改变业务行数的迁移才可以设置 `API_DEPLOY_ALLOW_DATA_CHANGE=1`。`API_DEPLOY_DRY_RUN=1` 仅输出发布计划，不连接服务器或修改状态。
+
 外部 EPC 连接器为可选服务端配置。生产凭据应通过 systemd `EnvironmentFile` 或等效密钥设施注入，不能写入 release 目录：
 
 ```text
@@ -103,7 +121,7 @@ sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 
 ### 可校验数据库备份
 
-API 工程提供带清单的 PostgreSQL 自定义格式备份。清单记录文件大小、SHA-256、关键业务表行数和归档可读性检查结果；备份文件与清单必须成对保存。
+API 工程提供带清单的 PostgreSQL 自定义格式备份。清单记录文件大小、SHA-256、关键业务表行数、PostgreSQL 工具版本和归档可读性检查结果；配置 `CATALOG_EPC_ASSET_DIR` 时会同时生成 `.epc-assets.tar.gz` 资源快照，并把大小、SHA-256 与文件数量写入同一清单。数据库归档、资源快照与清单必须成套保存。
 
 备份脚本会读取数据库服务端主版本，并优先使用同主版本的 `/usr/lib/postgresql/<major>/bin/pg_dump` 与 `pg_restore`，避免多版本服务器上的 `pg_wrapper` 为导出和校验选择不同版本；非标准安装可通过 `PG_DUMP_BIN`、`PG_RESTORE_BIN` 显式指定。备份文件与清单最终权限统一为 `0640`。
 
@@ -169,7 +187,7 @@ curl https://121.41.24.42/sku-preview/api/ready
 curl https://121.41.24.42/sku-preview/api/v1/skus
 ```
 
-`/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。发布切流前必须以 `/api/ready` 返回 `200` 和 `status=ready` 为准。
+`/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。两者都返回 `releaseRevision`：本地无 release 元数据时为 `development`，正式 release 必须是受保护主分支的 40 位 Git SHA。发布切流前必须以 `/api/ready` 返回 `200`、`status=ready` 且版本等于目标提交为准。
 
 完整浏览器回归会建立和修改验收数据，只能用于本地或一次性数据库，不得直接指向生产。生产环境使用只读冒烟脚本：
 
