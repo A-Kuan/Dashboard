@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowsLeftRight, Check, CheckCircle, ClockCounterClockwise, Cube, Database,
-  MagnifyingGlass, ShieldCheck, WarningCircle, XCircle,
+  FlagCheckered, MagnifyingGlass, ShieldCheck, WarningCircle, XCircle,
 } from '@phosphor-icons/react'
 import {
   commitLegacyMigrationPlan, createLegacyMigrationPlan, getCatalogDictionaries, getLegacyMigrationPlan,
-  getLegacyMigrationPlanAcceptance, getLegacyMigrationPlanPreflight, getLegacySkuMigrationPreview,
+  getLegacyMigrationPilot, getLegacyMigrationPlanAcceptance, getLegacyMigrationPlanPreflight, getLegacySkuMigrationPreview,
   listLegacyMigrationPlans, reviewLegacyMigrationPlan, reviewLegacyMigrationPlanAcceptance,
 } from '../services/catalogApi'
 import '../sku-legacy-migration.css'
@@ -38,6 +38,9 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
   const [surface, setSurface] = useState('preview')
   const [preview, setPreview] = useState({ items: [], summary: {} })
   const [plans, setPlans] = useState([])
+  const [pilot, setPilot] = useState({ items: [], summary: { tasks: {} } })
+  const [pilotSize, setPilotSize] = useState(5)
+  const [pilotLoading, setPilotLoading] = useState(true)
   const [planDetail, setPlanDetail] = useState(null)
   const [planPreflight, setPlanPreflight] = useState(null)
   const [planAcceptance, setPlanAcceptance] = useState(null)
@@ -71,6 +74,12 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
   }, [query])
 
   useEffect(() => { const timeout = window.setTimeout(load, 220); return () => window.clearTimeout(timeout) }, [load])
+  useEffect(() => {
+    let active = true
+    setPilotLoading(true)
+    getLegacyMigrationPilot(pilotSize).then((next) => { if (active) setPilot(next) }).catch((requestError) => { if (active) setError(requestError.message || '试运行候选加载失败') }).finally(() => { if (active) setPilotLoading(false) })
+    return () => { active = false }
+  }, [pilotSize])
 
   const visibleItems = useMemo(() => preview.items.filter((item) => {
     if (filter === 'recommended') return item.recommended
@@ -145,6 +154,14 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
     } finally { setSubmitting(false) }
   }
 
+  const adoptPilot = () => {
+    if (!canPlan || !pilot.items?.length) return
+    setDecisions(Object.fromEntries(pilot.items.map((item) => [item.legacySkuId, { decision: 'migrate', exclusionReason: '', overrides: {} }])))
+    setReason(`首批真实 SKU 试运行：${pilot.summary.selected} 条，覆盖 ${pilot.summary.categoryCount} 个分类，预计复核 ${pilot.summary.estimatedMinutes} 分钟`)
+    setFilter('all'); setSurface('preview')
+    onNotify?.(`已采用 ${pilot.summary.selected} 条试运行候选，请逐条核对后提交审核`)
+  }
+
   const reviewAcceptance = async (decision) => {
     if (!planDetail || !canAccept || planDetail.committedById === session?.id || (decision === 'changes_required' && !acceptanceNote.trim())) return
     setSubmitting(true); setError('')
@@ -169,12 +186,30 @@ export function SkuLegacyMigration({ session = null, capabilities = [], onBack, 
     <header className="legacy-migration-topbar"><div><button type="button" aria-label="返回 SKU 资料库" onClick={onBack}><ArrowLeft size={20} weight="bold" /></button><span><h1>旧 SKU 迁移治理</h1><p>先形成可审核方案，批准后才允许生成新资料库草稿</p></span></div><span className="legacy-migration-safety"><ShieldCheck size={19} weight="fill" />可回查 · 不覆盖 · 审批后写入</span></header>
     <div className="legacy-migration-content">
       <section className="legacy-migration-metrics" aria-label="迁移概览"><div><span>旧资料总数</span><strong>{preview.summary.total ?? '—'}</strong><small>当前迁移范围</small></div><div className="accent"><span>建议迁移</span><strong>{preview.summary.recommended ?? '—'}</strong><small>无阻断风险</small></div><div><span>需先处理</span><strong>{preview.summary.blocked ?? '—'}</strong><small>编号或字段冲突</small></div><div><span>待审核方案</span><strong>{plans.filter((item) => item.state === 'submitted').length}</strong><small>等待审核角色处理</small></div><div><span>已迁移</span><strong>{preview.summary.migrated ?? '—'}</strong><small>已生成草稿</small></div></section>
-      <section className="legacy-migration-toolbar"><div className="legacy-surface-tabs"><button type="button" className={surface === 'preview' ? 'active' : ''} onClick={() => setSurface('preview')}>资料治理</button><button type="button" className={surface === 'plans' ? 'active' : ''} onClick={() => setSurface('plans')}>审批记录 <b>{plans.filter((item) => item.state === 'submitted').length}</b></button></div>{surface === 'preview' ? <><label><MagnifyingGlass size={20} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索旧 SKU、OE、名称、品牌" /></label><nav>{filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? 'active' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</nav><button type="button" className="legacy-select-recommended" disabled={!canPlan || !preview.summary.recommended} onClick={() => setDecisions(Object.fromEntries(preview.items.filter((item) => item.recommended).map((item) => [item.legacySkuId, { decision: 'migrate', exclusionReason: '', overrides: {} }])))}><Check size={17} weight="bold" />选择全部建议项</button></> : null}</section>
-      {surface === 'preview' ? <PreviewWorkspace {...{ visibleItems, selected, decisions, selectedDecision, canPlan, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }} /> : <PlanWorkspace {...{ plans, planDetail, planPreflight, planAcceptance, preflightLoading, canReview, canExecute, canAccept, isSelfReview: Boolean(planDetail?.createdById && planDetail.createdById === session?.id), isSelfAcceptance: Boolean(planDetail?.committedById && planDetail.committedById === session?.id), submitting, reviewNote, setReviewNote, acceptanceNote, setAcceptanceNote, openPlan, reviewPlan, commitPlan, reviewAcceptance }} />}
+      <section className="legacy-migration-toolbar"><div className="legacy-surface-tabs"><button type="button" className={surface === 'preview' ? 'active' : ''} onClick={() => setSurface('preview')}>资料治理</button><button type="button" className={surface === 'pilot' ? 'active' : ''} onClick={() => setSurface('pilot')}>首批试运行 <b>{pilot.summary?.selected || 0}</b></button><button type="button" className={surface === 'plans' ? 'active' : ''} onClick={() => setSurface('plans')}>审批记录 <b>{plans.filter((item) => item.state === 'submitted').length}</b></button></div>{surface === 'preview' ? <><label><MagnifyingGlass size={20} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索旧 SKU、OE、名称、品牌" /></label><nav>{filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? 'active' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</nav><button type="button" className="legacy-select-recommended" disabled={!canPlan || !preview.summary.recommended} onClick={() => setDecisions(Object.fromEntries(preview.items.filter((item) => item.recommended).map((item) => [item.legacySkuId, { decision: 'migrate', exclusionReason: '', overrides: {} }])))}><Check size={17} weight="bold" />选择全部建议项</button></> : null}</section>
+      {surface === 'preview' ? <PreviewWorkspace {...{ visibleItems, selected, decisions, selectedDecision, canPlan, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }} /> : surface === 'pilot' ? <PilotWorkspace {...{ pilot, pilotSize, pilotLoading, canPlan, setPilotSize, adoptPilot }} /> : <PlanWorkspace {...{ plans, planDetail, planPreflight, planAcceptance, preflightLoading, canReview, canExecute, canAccept, isSelfReview: Boolean(planDetail?.createdById && planDetail.createdById === session?.id), isSelfAcceptance: Boolean(planDetail?.committedById && planDetail.committedById === session?.id), submitting, reviewNote, setReviewNote, acceptanceNote, setAcceptanceNote, openPlan, reviewPlan, commitPlan, reviewAcceptance }} />}
       {surface === 'preview' ? <footer className="legacy-migration-footer"><div><strong>方案内 {migrationCount} 条迁移 · {planItems.length - migrationCount} 条排除</strong><span>提交后由审核角色批准，不会立即写入新资料库。</span></div><label><span>方案说明</span><input value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canPlan || submitting} /></label><button type="button" disabled={!canPlan || !migrationCount || !reason.trim() || invalidExclusion || submitting} onClick={submitPlan}>{submitting ? '正在提交…' : `提交审核 ${migrationCount} 条`}</button></footer> : <footer className="legacy-migration-footer legacy-plan-footer"><div><strong>迁移审批与执行已分离</strong><span>审核人确认方案，管理员执行后只生成待核验草稿。</span></div></footer>}
       {error ? <div className="legacy-migration-error"><XCircle size={18} weight="fill" />{error}</div> : null}
     </div>
   </main>
+}
+
+function PilotWorkspace({ pilot, pilotSize, pilotLoading, canPlan, setPilotSize, adoptPilot }) {
+  const tasks = pilot.summary?.tasks || {}
+  return <section className="legacy-pilot-workspace">
+    <article className="legacy-pilot-list">
+      <header><span><FlagCheckered size={20} weight="fill" /><strong>首批候选组合</strong><small>先用小批量验证完整业务闭环，再逐步扩大范围</small></span><div>{[5, 8, 10].map((size) => <button type="button" className={pilotSize === size ? 'active' : ''} key={size} onClick={() => setPilotSize(size)}>{size} 条</button>)}</div></header>
+      <div className="legacy-pilot-rows">{pilotLoading ? <div className="legacy-migration-empty"><ClockCounterClockwise size={34} /><strong>正在计算试运行组合</strong><span>综合来源、编号、适配和分类覆盖。</span></div> : pilot.items?.length ? pilot.items.map((item, index) => <div className="legacy-pilot-row" key={item.legacySkuId}><span className="legacy-pilot-index">{index + 1}</span><span><strong>{item.name}</strong><small>{item.skuCode} · {item.category}</small></span><span><b>{item.identifierCount} 个编号</b><small>{item.fitmentCount ? `${item.fitmentCount} 条适配待复核` : '需补建标准适配'}</small></span><span><em>{item.score}</em><small>准备度</small></span><p>{item.reasons.join(' · ')}</p></div>) : <div className="legacy-migration-empty"><Database size={34} /><strong>暂无可试运行资料</strong><span>已迁移或存在硬阻断的资料不会进入候选。</span></div>}</div>
+    </article>
+    <aside className="legacy-pilot-summary">
+      <header><span>试运行范围</span><strong>{pilot.summary?.selected || 0}</strong><small>可用候选 {pilot.summary?.available || 0} 条</small></header>
+      <section><h3>覆盖情况</h3><div className="legacy-pilot-coverage"><span><strong>{pilot.summary?.categoryCount || 0}</strong>配件分类</span><span><strong>{pilot.summary?.brandCount || 0}</strong>品牌范围</span><span><strong>{pilot.summary?.estimatedMinutes || 0}</strong>预计分钟</span></div></section>
+      <section><h3>预计复核任务</h3><dl className="legacy-pilot-tasks"><div><dt>补建标准适配</dt><dd>{tasks.fitmentResearch || 0}</dd></div><div><dt>复核已有适配</dt><dd>{tasks.fitmentReview || 0}</dd></div><div><dt>补强来源证据</dt><dd>{tasks.evidenceReview || 0}</dd></div><div><dt>核对旧图片</dt><dd>{tasks.imageReview || 0}</dd></div><div><dt>处理字典映射</dt><dd>{tasks.dictionaryReview || 0}</dd></div></dl></section>
+      <section className="legacy-pilot-policy"><ShieldCheck size={19} weight="fill" /><span><strong>组合原则</strong><small>{pilot.selectionPolicy || '正在生成候选策略'}</small></span></section>
+      <button className="legacy-pilot-adopt" type="button" disabled={!canPlan || pilotLoading || !pilot.items?.length} onClick={adoptPilot}>采用这组候选</button>
+      {!canPlan ? <p className="legacy-pilot-readonly">当前为只读权限，可以查看建议，但不能建立迁移方案。</p> : null}
+    </aside>
+  </section>
 }
 
 function PreviewWorkspace({ visibleItems, selected, decisions, selectedDecision, canPlan, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }) {

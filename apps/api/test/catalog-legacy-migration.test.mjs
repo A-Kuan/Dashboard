@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildApp } from '../src/app.mjs'
-import { mapLegacySku } from '../src/catalog-legacy-migration-repository.mjs'
+import { buildLegacyMigrationPilot, mapLegacySku } from '../src/catalog-legacy-migration-repository.mjs'
 
 function legacySnapshot(overrides = {}) {
   return {
@@ -60,9 +60,44 @@ test('applies reviewed dictionary overrides without changing the legacy snapshot
   assert.throws(() => mapLegacySku(snapshot, extended, { categoryCode: 'MISSING' }), /不在当前字典中/)
 })
 
+test('builds a deterministic pilot cohort with workload and scenario coverage', () => {
+  const item = (id, category, { identifiers = 2, fitments = 0, issues = [], migrated = false, blocking = false } = {}) => ({
+    legacySkuId: id,
+    sourceHash: `hash-${id}`,
+    migrated,
+    blocking,
+    legacy: { skuCode: `SKU-${id}`, name: `零件 ${id}`, brand: id === '6' ? 'Audi' : 'Porsche', category, identifierCount: identifiers, fitmentCount: fitments },
+    mapping: { images: issues.some((issue) => issue.code === 'imagesPreservedInEvidence') ? ['old.jpg'] : [] },
+    issues,
+  })
+  const items = [
+    item('1', '滤清器', { identifiers: 3 }),
+    item('2', '制动系统', { fitments: 1, issues: [{ code: 'fitmentNeedsReview', blocking: false }] }),
+    item('3', '悬挂系统'),
+    item('4', '滤清器', { issues: [{ code: 'weakEvidence', blocking: false }] }),
+    item('5', '制动系统', { issues: [{ code: 'imagesPreservedInEvidence', blocking: false }] }),
+    item('6', '发动机附件'),
+    item('7', '电气系统', { blocking: true }),
+    item('8', '车身附件', { migrated: true }),
+  ]
+  const pilot = buildLegacyMigrationPilot(items, 5)
+  const repeated = buildLegacyMigrationPilot(items, 5)
+  assert.equal(pilot.summary.selected, 5)
+  assert.equal(pilot.summary.available, 6)
+  assert.ok(pilot.summary.categoryCount >= 3)
+  assert.ok(pilot.items.some((candidate) => candidate.fitmentCount > 0))
+  assert.ok(pilot.summary.tasks.fitmentResearch >= 1)
+  assert.ok(pilot.summary.tasks.fitmentReview >= 1)
+  assert.ok(pilot.summary.estimatedMinutes > 0)
+  assert.deepEqual(pilot.items.map((candidate) => candidate.legacySkuId), repeated.items.map((candidate) => candidate.legacySkuId))
+  assert.throws(() => buildLegacyMigrationPilot(items, 4), /5 至 10/)
+  assert.throws(() => buildLegacyMigrationPilot(items, 11), /5 至 10/)
+})
+
 test('legacy migration routes are read-visible but writes require import capability', async () => {
   const repository = {
     preview: async () => ({ items: [], total: 0, summary: { pending: 0 } }),
+    pilot: async ({ size }) => ({ requestedSize: Number(size), items: [], summary: { selected: 0, tasks: {} } }),
     commit: async (_input, actor) => ({ id: 'batch-1', state: 'succeeded', createdBy: actor }),
     getBatch: async (id) => id === 'batch-1' ? { id, state: 'succeeded' } : null,
     createPlan: async (_input, actor) => ({ id: 'plan-1', state: 'submitted', version: 1, createdBy: actor.name, createdById: actor.id }),
@@ -77,6 +112,9 @@ test('legacy migration routes are read-visible but writes require import capabil
   const app = buildApp({ catalogLegacyMigrationRepository: repository, logger: false })
   const preview = await app.inject('/api/v2/catalog/legacy-migration-preview')
   assert.equal(preview.statusCode, 200)
+  const pilot = await app.inject('/api/v2/catalog/legacy-migration-pilot?size=8')
+  assert.equal(pilot.statusCode, 200)
+  assert.equal(pilot.json().requestedSize, 8)
   const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { items: [], reason: '测试' } })
   assert.equal(denied.statusCode, 403)
   const directCommit = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': '管理员' }, payload: { items: [{ legacySkuId: 'legacy-1', sourceHash: 'hash' }], reason: '经审核迁移' } })

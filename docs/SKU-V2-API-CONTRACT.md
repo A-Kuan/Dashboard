@@ -7,6 +7,7 @@
 ### 旧 SKU 受控迁移
 
 - `GET /api/v2/catalog/legacy-migration-preview?q=&page=&pageSize=`：只读比对旧 SKU、OE 关系、适配与当前字典/新资料库，返回字段映射、来源哈希、阻断问题、复核提示和建议选择；不会写入数据。
+- `GET /api/v2/catalog/legacy-migration-pilot?size=5`：从无硬阻断且未迁移的旧资料中生成 5 至 10 条可解释的首批试运行候选，兼顾准备度、分类覆盖与已有适配复核场景，并返回预计复核任务和工时；只读计算，不创建方案、不写入数据。
 - `POST /api/v2/catalog/legacy-migration-plans`：资料录入角色提交迁移、排除与字段修正决定，形成待审核方案，不立即写入新资料库。
 - `GET /api/v2/catalog/legacy-migration-plans/:id/preflight`：重新比对方案中的来源哈希、当前编号冲突、迁移状态和字典映射，返回逐条阻断原因；该检查只读，审核和执行时仍会在服务端强制再跑一次。
 - `POST /api/v2/catalog/legacy-migration-plans/:id/review`：独立审核角色批准或退回方案；稳定用户 ID 与提交人相同时拒绝自审，实时复核不通过时禁止批准。

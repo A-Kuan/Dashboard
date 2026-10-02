@@ -42,6 +42,10 @@ export function getLegacySkuMigrationPreview({ query = '', page = 1, pageSize = 
   return request(`/api/v2/catalog/legacy-migration-preview?${params}`)
 }
 
+export function getLegacyMigrationPilot(size = 5) {
+  return request(`/api/v2/catalog/legacy-migration-pilot?size=${encodeURIComponent(size)}`)
+}
+
 export function createLegacyMigrationPlan(items, reason) {
   return request('/api/v2/catalog/legacy-migration-plans', { method: 'POST', body: JSON.stringify({ items, reason }) })
 }
