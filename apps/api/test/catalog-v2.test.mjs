@@ -559,6 +559,7 @@ test('catalog v2 matches and saves versioned supplier mapping profiles', async (
     async get(id) { return id === 'profile-1' ? { id, name: '华东供应商', version: 2, recentUses: [], changes: [] } : null },
     async updateMetadata(id, input, actor) { return id === 'profile-1' ? { id, name: input.name || '华东供应商', active: input.active ?? true, version: input.expectedVersion + 1, updatedBy: actor } : null },
     async updateRules(id, input, actor) { return id === 'profile-1' ? { id, name: '华东供应商', defaultValues: input.defaultValues, transformRules: input.transformRules, version: input.expectedVersion + 1, updatedBy: actor } : null },
+    async updateValueMappings(id, input, actor) { return id === 'profile-1' ? { id, name: '华东供应商', valueMappings: input.valueMappings, version: input.expectedVersion + 1, updatedBy: actor } : null },
     async clone(id, input, actor) { return id === 'profile-1' ? { id: 'profile-clone', name: input.name, active: true, version: 1, updatedBy: actor } : null },
   }
   const app = buildApp({ catalogImportMappingRepository, logger: false })
@@ -580,6 +581,10 @@ test('catalog v2 matches and saves versioned supplier mapping profiles', async (
   assert.equal(rules.statusCode, 200)
   assert.equal(rules.json().defaultValues.brand, 'MANN')
   assert.equal(rules.json().version, 3)
+  const values = await app.inject({ method: 'PATCH', url: '/api/v2/catalog/import-mappings/profile-1/value-mappings', payload: { expectedVersion: 2, valueMappings: { brand: [{ source: '博世中国', target: 'BOSCH' }] } } })
+  assert.equal(values.statusCode, 200)
+  assert.equal(values.json().valueMappings.brand[0].target, 'BOSCH')
+  assert.equal(values.json().version, 3)
   const cloned = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings/profile-1/clone', payload: { name: '华东备用模板' } })
   assert.equal(cloned.statusCode, 201)
   assert.equal(cloned.json().id, 'profile-clone')

@@ -48,3 +48,22 @@ test('applies supplier defaults and text rules without changing original source 
   assert.equal(rows[0].unit, '件')
   assert.deepEqual(rows[0]._sourceRow, sourceRow)
 })
+
+test('maps known supplier values and queues unknown values for review', () => {
+  const rows = applyCatalogImportRules([
+    { nameZh: '火花塞', primaryOe: '06K905601M', brand: '博世中国', category: '点火件', unit: 'PCS', _sourceRow: { 品牌: '博世中国' } },
+    { nameZh: '火花塞', primaryOe: '06K905601N', brand: '未知品牌', category: '点火件', unit: 'PCS', _sourceRow: { 品牌: '未知品牌' } },
+  ], {
+    valueMappings: {
+      brand: [{ source: '博世中国', target: 'BOSCH' }],
+      category: [{ source: '点火件', target: '点火系统 / 火花塞' }],
+      unit: [{ source: 'PCS', target: '件' }],
+    },
+  })
+  assert.equal(rows[0].brand, 'BOSCH')
+  assert.equal(rows[0].category, '点火系统 / 火花塞')
+  assert.equal(rows[0].unit, '件')
+  assert.deepEqual(rows[0]._valueMappingIssues, [])
+  assert.deepEqual(rows[1]._valueMappingIssues, [{ field: 'brand', value: '未知品牌' }])
+  assert.equal(rows[1]._sourceRow.品牌, '未知品牌')
+})

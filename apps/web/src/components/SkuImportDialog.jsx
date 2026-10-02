@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, Copy, DownloadSimple, FileCsv, FingerprintSimple, MagnifyingGlass, PencilSimple, Power, ShieldCheck, SlidersHorizontal, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, Copy, DownloadSimple, FileCsv, FingerprintSimple, MagnifyingGlass, PencilSimple, Plus, Power, ShieldCheck, SlidersHorizontal, Trash, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules, updateCatalogImportValueMappings } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
   ready: { label: '可导入', className: 'ready' },
   duplicate: { label: '疑似重复', className: 'duplicate' },
+  review: { label: '值待映射', className: 'review' },
   invalid: { label: '不可导入', className: 'invalid' },
   imported: { label: '已写入', className: 'imported' },
   skipped: { label: '已跳过', className: 'skipped' },
@@ -25,8 +26,9 @@ const jobState = {
   retrying: { label: '重试中', className: 'duplicate' }, completed: { label: '已完成', className: 'ready' }, partial: { label: '部分失败', className: 'invalid' },
 }
 
-const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', update_rules: '更新导入规则', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
+const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', update_rules: '更新导入规则', update_value_mappings: '更新值映射', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
 const transformRuleLabel = { normalizeFullWidth: '全角转半角', trimText: '清理首尾空白', collapseWhitespace: '合并连续空白', uppercaseOe: 'OE 编号转大写' }
+const valueMappingFieldLabel = { brand: '品牌', category: '分类', unit: '单位' }
 
 function displayTime(value) {
   if (!value) return '—'
@@ -88,6 +90,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [profileAction, setProfileAction] = useState('')
   const [profileActionName, setProfileActionName] = useState('')
   const [profileRulesDraft, setProfileRulesDraft] = useState(null)
+  const [profileValueMappingsDraft, setProfileValueMappingsDraft] = useState(null)
   const [profileBusy, setProfileBusy] = useState(false)
 
   useEffect(() => {
@@ -145,8 +148,13 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
       defaultValues: { brand: '', category: '', unit: '', sourceSystem: '', ...(selectedProfile.defaultValues || {}) },
       transformRules: { trimText: true, collapseWhitespace: true, uppercaseOe: true, normalizeFullWidth: true, ...(selectedProfile.transformRules || {}) },
     })
+    if (action === 'values') setProfileValueMappingsDraft(Object.fromEntries(Object.keys(valueMappingFieldLabel).map((field) => [field, [...(selectedProfile.valueMappings?.[field] || [])]])))
     setError('')
   }
+
+  const addProfileValueMapping = (field) => setProfileValueMappingsDraft((current) => ({ ...current, [field]: [...(current?.[field] || []), { source: '', target: '' }] }))
+  const updateProfileValueMapping = (field, index, key, value) => setProfileValueMappingsDraft((current) => ({ ...current, [field]: current[field].map((entry, entryIndex) => entryIndex === index ? { ...entry, [key]: value } : entry) }))
+  const removeProfileValueMapping = (field, index) => setProfileValueMappingsDraft((current) => ({ ...current, [field]: current[field].filter((_, entryIndex) => entryIndex !== index) }))
 
   const submitProfileAction = async () => {
     if (!selectedProfile) return
@@ -155,6 +163,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     try {
       let result
       if (profileAction === 'rules') result = await updateCatalogImportMappingRules(selectedProfile, profileRulesDraft)
+      else if (profileAction === 'values') result = await updateCatalogImportValueMappings(selectedProfile, profileValueMappingsDraft)
       else if (profileAction === 'rename') result = await updateCatalogImportMapping(selectedProfile, { name: profileActionName })
       else if (profileAction === 'clone') result = await cloneCatalogImportMapping(selectedProfile.id, profileActionName)
       else if (profileAction === 'toggle') result = await updateCatalogImportMapping(selectedProfile, { active: !selectedProfile.active })
@@ -162,7 +171,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
       await loadProfiles()
       setSelectedProfile(await getCatalogImportMapping(result.id))
       setProfileAction('')
-      onNotify?.(profileAction === 'rules' ? '供应商导入规则已更新' : profileAction === 'clone' ? '映射方案已复制' : profileAction === 'rename' ? '映射方案已重命名' : result.active ? '映射方案已恢复' : '映射方案已停用')
+      onNotify?.(profileAction === 'rules' ? '供应商导入规则已更新' : profileAction === 'values' ? '供应商值映射已更新' : profileAction === 'clone' ? '映射方案已复制' : profileAction === 'rename' ? '映射方案已重命名' : result.active ? '映射方案已恢复' : '映射方案已停用')
     } catch (reason) {
       if (reason.code === 'IMPORT_MAPPING_VERSION_CONFLICT') setSelectedProfile(await getCatalogImportMapping(selectedProfile.id).catch(() => selectedProfile))
       setError(reason.message || '映射方案操作失败')
@@ -270,6 +279,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
       const mappingProfile = profile ? {
         id: profile.id,
         name: profile.name,
+        version: profile.version,
         matchStatus,
         headerSignature: profile.headerSignature,
         fieldMapping: snapshotFieldMapping(mappingContext.mapping, mappingContext.inspection.columns),
@@ -284,7 +294,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   }
 
   const toggleRow = (row) => {
-    if (!['ready', 'duplicate'].includes(row.state)) return
+    if (!['ready', 'duplicate', 'review'].includes(row.state)) return
     setSelected((current) => {
       const next = new Set(current)
       if (next.has(row.id)) next.delete(row.id)
@@ -335,15 +345,24 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const mappingMatch = mappingContext?.match
   const appliedRuleProfile = mappingContext?.profileApplied ? mappingMatch?.profile : null
   let mappingRulePreview = []
+  let mappingValueIssues = []
   if (mappingReady && appliedRuleProfile) {
     try {
-      const before = mapCatalogCsvInspection(mappingContext.inspection, mapping)[0]
-      const after = applyCatalogImportRules([before], appliedRuleProfile)[0]
+      const mappedRows = mapCatalogCsvInspection(mappingContext.inspection, mapping)
+      const transformedRows = applyCatalogImportRules(mappedRows, appliedRuleProfile)
+      const before = mappedRows[0]
+      const after = transformedRows[0]
       mappingRulePreview = catalogImportFieldDefinitions.flatMap((field) => {
         const original = String(before?.[field.key] || '')
         const standardized = String(after?.[field.key] || '')
         return original === standardized ? [] : [{ key: field.key, label: field.label, before: original || '空', after: standardized || '空' }]
       })
+      const grouped = new Map()
+      for (const row of transformedRows) for (const issue of row._valueMappingIssues || []) {
+        const key = `${issue.field}:${issue.value}`
+        grouped.set(key, { ...issue, count: (grouped.get(key)?.count || 0) + 1 })
+      }
+      mappingValueIssues = [...grouped.values()]
     } catch { mappingRulePreview = [] }
   }
   const visibleProfiles = profiles.filter((profile) => {
@@ -351,6 +370,15 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     const query = profileQuery.trim().toLowerCase()
     return stateMatches && (!query || `${profile.name} ${profile.sourceNamePattern}`.toLowerCase().includes(query))
   })
+  const valueReviewQueue = job?.rows ? [...job.rows.reduce((grouped, row) => {
+    for (const issue of row.issues || []) if (issue.severity === 'review') {
+      const key = `${issue.field}:${issue.value}`
+      const current = grouped.get(key) || { field: issue.field, value: issue.value, rows: [] }
+      current.rows.push(row.rowNumber)
+      grouped.set(key, current)
+    }
+    return grouped
+  }, new Map()).values()] : []
 
   return (
     <div className="sku-modal-backdrop" onMouseDown={onClose}>
@@ -386,6 +414,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             {mappingMatch?.status === 'exact' ? <div className="sku-mapping-profile-status exact"><ShieldCheck size={21} weight="fill" /><div><strong>已自动套用“{mappingMatch.profile.name}”</strong><span>表头完全一致 · 历史使用 {mappingMatch.profile.usageCount} 次；仍可在下方人工调整。</span></div></div> : null}
             {mappingMatch?.status === 'drift' ? <div className="sku-mapping-profile-status drift"><WarningCircle size={21} weight="fill" /><div><strong>检测到“{mappingMatch.profile.name}”的表头发生变化</strong><span>{mappingMatch.changes.added.length ? `新增：${mappingMatch.changes.added.join('、')}` : '无新增列'}；{mappingMatch.changes.removed.length ? `缺少：${mappingMatch.changes.removed.join('、')}` : '无缺少列'}。</span></div><button type="button" disabled={mappingContext.profileApplied} onClick={applyMatchedProfile}>{mappingContext.profileApplied ? '已应用可匹配字段' : '应用已有方案'}</button></div> : null}
             {appliedRuleProfile ? <div className="sku-mapping-rule-preview"><span><SlidersHorizontal size={20} weight="duotone" /></span><div><strong>导入规则预览 · 第 1 行</strong><small>只调整标准字段，供应商原始行会完整保留。</small><div>{mappingRulePreview.length ? mappingRulePreview.slice(0, 5).map((item) => <p key={item.key}><b>{item.label}</b><span>{item.before}</span><ArrowRight size={14} /><em>{item.after}</em></p>) : <p className="unchanged"><CheckCircle size={15} weight="fill" />首行已符合当前标准，无需调整</p>}</div></div></div> : null}
+            {mappingValueIssues.length ? <div className="sku-mapping-value-alert"><WarningCircle size={20} weight="fill" /><div><strong>{mappingValueIssues.reduce((sum, item) => sum + item.count, 0)} 行值需要人工确认</strong><span>这些值不在当前供应商映射表中，预检查后默认不会选中。</span><p>{mappingValueIssues.slice(0, 6).map((issue) => <em key={`${issue.field}:${issue.value}`}>{valueMappingFieldLabel[issue.field]} · {issue.value} × {issue.count}</em>)}</p></div></div> : null}
             <div className="sku-mapping-list">{mappingFields.map((field) => { const selectedIndex = Number(mapping[field.key]); const column = mappingContext.inspection.columns.find((item) => item.index === selectedIndex); return <article key={field.key}><div className="sku-mapping-target"><span><strong>{field.label}</strong>{field.required === 'one_of_name' ? <i>二选一</i> : field.required ? <i className="required">必需</i> : field.recommended ? <i>建议</i> : <i className="optional">可选</i>}</span><small>{field.description || '映射到 SKU 标准字段'}</small></div><ArrowRight size={17} /><label><select aria-label={`映射 ${field.label}`} value={selectedIndex >= 0 ? selectedIndex : -1} onChange={(event) => updateMapping(field.key, event.target.value)}><option value={-1}>不导入此字段</option>{mappingContext.inspection.columns.map((item) => <option key={item.index} value={item.index} disabled={mappedIndexes.includes(item.index) && item.index !== selectedIndex}>{item.label}</option>)}</select><span>{column ? `样例：${column.sample}` : '尚未选择原始列'}</span></label></article> })}</div>
             <footer><div><strong>未映射原始列</strong><span>不写入 SKU 字段，但仍会保留在来源证据中</span></div><p>{unmappedColumns.length ? unmappedColumns.map((column) => <span key={column.index}>{column.label}</span>) : <em>全部原始列已映射</em>}</p></footer>
             {mappingMatch?.status === 'none' || mappingContext.profileDirty ? <div className="sku-mapping-profile-save"><label><input type="checkbox" checked={mappingContext.saveProfile} onChange={(event) => setMappingContext((current) => ({ ...current, saveProfile: event.target.checked }))} /><span><strong>{mappingMatch?.profile ? '同步更新供应商方案' : '保存为供应商方案'}</strong><small>{mappingMatch?.profile ? '本次确认后更新方案版本，后续同类文件自动复用。' : '下次遇到相同表头将自动套用，减少重复配置。'}</small></span></label>{mappingContext.saveProfile ? <input aria-label="映射方案名称" value={mappingContext.profileName} onChange={(event) => setMappingContext((current) => ({ ...current, profileName: event.target.value }))} placeholder="例如：华东供应商标准表" /> : null}</div> : null}
@@ -393,9 +422,10 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
 
           {mode === 'new' && step === 'preview' ? <>
             {job.duplicateUpload ? <section className="sku-import-duplicate-upload"><FingerprintSimple size={22} weight="duotone" /><div><strong>已找到相同内容的待确认批次</strong><span>系统没有新建重复批次；你可继续处理下方原批次。</span></div><code>{job.contentFingerprint}</code></section> : null}
-            {job.preflight ? (() => { const decision = preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>警告</dt><dd>{job.preflight.warningCount} 项</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
-            <div className="sku-import-summary"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
+            {job.preflight ? (() => { const decision = job.preflight.reviewRows && !job.preflight.duplicateMatches ? { title: '需要确认未识别的供应商值', note: '异常行默认不选中，请核对映射或明确按原值写入。', className: 'warning' } : preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>值待映射</dt><dd>{job.preflight.reviewRows || 0} 条</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
+            <div className="sku-import-summary has-review"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="review"><span>值待映射</span><strong>{job.reviewRows || 0}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
             {job.preflight ? <div className="sku-preflight-grid"><section><header><strong>资料覆盖率</strong><span>不阻断导入，但会影响后续核验</span></header><div className="sku-preflight-coverage">{job.preflight.coverage.map((item) => <div key={item.field}><span><b>{item.label}</b><em>{item.present}/{item.total} · {item.percent}%</em></span><i><b style={{ width: `${item.percent}%` }} /></i></div>)}</div></section><section><header><strong>问题汇总</strong><span>按严重程度与影响行数排序</span></header><div className="sku-preflight-issues">{job.preflight.issueSummary.slice(0, 5).map((issue) => <div className={issue.severity} key={issue.code}><span>{issue.severity === 'error' ? <WarningCircle size={16} weight="fill" /> : <WarningCircle size={16} />}</span><p><strong>{issue.message}</strong><small>{issue.count} 行受影响</small></p></div>)}{!job.preflight.issueSummary.length ? <div className="clear"><span><CheckCircle size={17} weight="fill" /></span><p><strong>未发现字段问题</strong><small>可继续检查逐行结果</small></p></div> : null}</div></section></div> : null}
+            {valueReviewQueue.length ? <section className="sku-value-review-queue"><header><div><span><WarningCircle size={19} weight="fill" /></span><div><strong>供应商值异常队列</strong><small>默认不选中；确认按原值写入前，请核对是否应该补充映射。</small></div></div><b>{valueReviewQueue.length} 个未识别值</b></header><div>{valueReviewQueue.map((item) => <article key={`${item.field}:${item.value}`}><span>{valueMappingFieldLabel[item.field] || item.field}</span><strong>{item.value}</strong><small>文件第 {item.rows.join('、')} 行</small></article>)}</div></section> : null}
             <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? duplicateMessage(row) : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
             <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>疑似重复项默认不选中。勾选表示你已确认它应作为独立 SKU 写入，系统不会自动覆盖已有资料。</span></div>
           </> : null}
@@ -421,11 +451,13 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             <div className="sku-profile-workspace">
               <aside><div className="sku-profile-list">{visibleProfiles.map((profile) => <button type="button" className={selectedProfile?.id === profile.id ? 'active' : ''} key={profile.id} onClick={() => openProfile(profile.id)}><span><strong>{profile.name}</strong><small>{profile.sourceNamePattern || '未设置文件名特征'} · v{profile.version}</small></span><span><em className={profile.active ? 'enabled' : 'disabled'}>{profile.active ? '启用' : '停用'}</em><small>{profile.usageCount} 次使用</small></span><ArrowRight size={17} /></button>)}{!visibleProfiles.length && !profilesLoading ? <div className="sku-profile-empty"><ArrowsLeftRight size={30} /><strong>没有匹配的方案</strong><span>首次导入供应商文件时可保存方案</span></div> : null}</div></aside>
               <section className="sku-profile-inspector">{selectedProfile ? <>
-                <header><div><span className={selectedProfile.active ? 'enabled' : 'disabled'}>{selectedProfile.active ? '启用中' : '已停用'}</span><h3>{selectedProfile.name}</h3><p>文件名特征 {selectedProfile.sourceNamePattern || '—'} · v{selectedProfile.version} · {selectedProfile.usageCount} 次使用</p></div><div><button type="button" aria-label="编辑导入规则" onClick={() => startProfileAction('rules')}><SlidersHorizontal size={17} />导入规则</button><button type="button" aria-label="重命名方案" onClick={() => startProfileAction('rename')}><PencilSimple size={17} />重命名</button><button type="button" aria-label="复制方案" onClick={() => startProfileAction('clone')}><Copy size={17} />复制</button><button type="button" className={selectedProfile.active ? 'danger' : 'restore'} aria-label={selectedProfile.active ? '停用方案' : '恢复方案'} onClick={() => startProfileAction('toggle')}><Power size={17} />{selectedProfile.active ? '停用' : '恢复'}</button></div></header>
-                {profileAction && profileAction !== 'rules' ? <div className={`sku-profile-action ${profileAction === 'toggle' ? 'warning' : ''}`}><div><strong>{profileAction === 'rename' ? '重命名方案' : profileAction === 'clone' ? '复制为新方案' : selectedProfile.active ? '确认停用方案' : '确认恢复方案'}</strong><span>{profileAction === 'toggle' ? selectedProfile.active ? '停用后不再参与自动匹配，历史导入仍然保留。' : '恢复后将重新参与供应商文件自动匹配。' : '名称应能识别供应商或文件用途。'}</span></div>{profileAction !== 'toggle' ? <input aria-label={profileAction === 'rename' ? '新的方案名称' : '复制方案名称'} value={profileActionName} onChange={(event) => setProfileActionName(event.target.value)} /> : null}<div><button type="button" onClick={() => setProfileAction('')}>取消</button><button className="confirm" type="button" disabled={profileBusy || (profileAction !== 'toggle' && !profileActionName.trim())} onClick={submitProfileAction}>{profileBusy ? '正在保存…' : '确认'}</button></div></div> : null}
+                <header><div><span className={selectedProfile.active ? 'enabled' : 'disabled'}>{selectedProfile.active ? '启用中' : '已停用'}</span><h3>{selectedProfile.name}</h3><p>文件名特征 {selectedProfile.sourceNamePattern || '—'} · v{selectedProfile.version} · {selectedProfile.usageCount} 次使用</p></div><div><button type="button" aria-label="编辑值映射" onClick={() => startProfileAction('values')}><ArrowsLeftRight size={17} />值映射</button><button type="button" aria-label="编辑导入规则" onClick={() => startProfileAction('rules')}><SlidersHorizontal size={17} />导入规则</button><button type="button" aria-label="重命名方案" onClick={() => startProfileAction('rename')}><PencilSimple size={17} />重命名</button><button type="button" aria-label="复制方案" onClick={() => startProfileAction('clone')}><Copy size={17} />复制</button><button type="button" className={selectedProfile.active ? 'danger' : 'restore'} aria-label={selectedProfile.active ? '停用方案' : '恢复方案'} onClick={() => startProfileAction('toggle')}><Power size={17} />{selectedProfile.active ? '停用' : '恢复'}</button></div></header>
+                {profileAction && !['rules', 'values'].includes(profileAction) ? <div className={`sku-profile-action ${profileAction === 'toggle' ? 'warning' : ''}`}><div><strong>{profileAction === 'rename' ? '重命名方案' : profileAction === 'clone' ? '复制为新方案' : selectedProfile.active ? '确认停用方案' : '确认恢复方案'}</strong><span>{profileAction === 'toggle' ? selectedProfile.active ? '停用后不再参与自动匹配，历史导入仍然保留。' : '恢复后将重新参与供应商文件自动匹配。' : '名称应能识别供应商或文件用途。'}</span></div>{profileAction !== 'toggle' ? <input aria-label={profileAction === 'rename' ? '新的方案名称' : '复制方案名称'} value={profileActionName} onChange={(event) => setProfileActionName(event.target.value)} /> : null}<div><button type="button" onClick={() => setProfileAction('')}>取消</button><button className="confirm" type="button" disabled={profileBusy || (profileAction !== 'toggle' && !profileActionName.trim())} onClick={submitProfileAction}>{profileBusy ? '正在保存…' : '确认'}</button></div></div> : null}
                 {profileAction === 'rules' && profileRulesDraft ? <section className="sku-profile-rule-editor"><header><div><strong>编辑导入规则</strong><span>空值才会使用默认值；清理规则不会覆盖原始供应商行。</span></div><div><button type="button" onClick={() => { setProfileAction(''); setProfileRulesDraft(null) }}>取消</button><button className="confirm" type="button" disabled={profileBusy} onClick={submitProfileAction}>{profileBusy ? '正在保存…' : '保存规则'}</button></div></header><div className="sku-profile-default-grid">{[['brand', '默认品牌'], ['category', '默认分类'], ['unit', '默认单位'], ['sourceSystem', '来源系统']].map(([key, label]) => <label key={key}><span>{label}</span><input aria-label={label} value={profileRulesDraft.defaultValues[key] || ''} onChange={(event) => setProfileRulesDraft((current) => ({ ...current, defaultValues: { ...current.defaultValues, [key]: event.target.value } }))} placeholder="留空则不补充" /></label>)}</div><div className="sku-profile-transform-grid">{Object.entries(transformRuleLabel).map(([key, label]) => <label key={key}><input type="checkbox" checked={Boolean(profileRulesDraft.transformRules[key])} onChange={(event) => setProfileRulesDraft((current) => ({ ...current, transformRules: { ...current.transformRules, [key]: event.target.checked } }))} /><span><strong>{label}</strong><small>{key === 'uppercaseOe' ? '仅处理主 OE 标准字段' : '应用到已映射的文本字段'}</small></span></label>)}</div></section> : null}
+                {profileAction === 'values' && profileValueMappingsDraft ? <section className="sku-profile-value-editor"><header><div><strong>编辑供应商值映射</strong><span>将供应商写法转换为资料库标准值；未识别值会进入异常队列。</span></div><div><button type="button" onClick={() => { setProfileAction(''); setProfileValueMappingsDraft(null) }}>取消</button><button className="confirm" type="button" disabled={profileBusy} onClick={submitProfileAction}>{profileBusy ? '正在保存…' : '保存映射'}</button></div></header><div className="sku-profile-value-columns">{Object.entries(valueMappingFieldLabel).map(([field, label]) => <section key={field}><header><div><strong>{label}</strong><span>{profileValueMappingsDraft[field].length} 条</span></div><button type="button" aria-label={`添加${label}映射`} onClick={() => addProfileValueMapping(field)}><Plus size={15} />添加</button></header><div>{profileValueMappingsDraft[field].map((entry, index) => <div key={`${field}-${index}`}><input aria-label={`${label}供应商值 ${index + 1}`} value={entry.source} onChange={(event) => updateProfileValueMapping(field, index, 'source', event.target.value)} placeholder="供应商写法" /><ArrowRight size={14} /><input aria-label={`${label}标准值 ${index + 1}`} value={entry.target} onChange={(event) => updateProfileValueMapping(field, index, 'target', event.target.value)} placeholder="标准值" /><button type="button" aria-label={`删除${label}映射 ${index + 1}`} onClick={() => removeProfileValueMapping(field, index)}><Trash size={15} /></button></div>)}{!profileValueMappingsDraft[field].length ? <p>尚未配置，只有添加映射后才会检查未知值。</p> : null}</div></section>)}</div></section> : null}
                 <div className="sku-profile-facts"><div><span>原始字段</span><strong>{selectedProfile.sourceHeaders.length}</strong></div><div><span>已映射</span><strong>{Object.keys(selectedProfile.fieldMapping).length}</strong></div><div><span>最后使用</span><strong>{displayTime(selectedProfile.lastUsedAt)}</strong></div><div><span>最后修改人</span><strong>{selectedProfile.updatedBy}</strong></div></div>
                 <section className="sku-profile-rule-summary"><header><span><SlidersHorizontal size={18} /></span><div><strong>导入标准化</strong><small>每次预检查前执行，可在字段映射页查看首行前后对比。</small></div></header><div><p><span>默认值</span><strong>{Object.entries(selectedProfile.defaultValues || {}).filter(([, value]) => value).map(([key, value]) => `${({ brand: '品牌', category: '分类', unit: '单位', sourceSystem: '来源' })[key]} ${value}`).join(' · ') || '未配置'}</strong></p><p><span>清理规则</span><strong>{Object.entries(selectedProfile.transformRules || {}).filter(([, enabled]) => enabled).map(([key]) => transformRuleLabel[key]).filter(Boolean).join(' · ') || '未启用'}</strong></p></div></section>
+                <section className="sku-profile-value-summary"><header><span><ArrowsLeftRight size={18} /></span><div><strong>供应商值映射</strong><small>有映射表的字段才会检查未知值。</small></div></header><div>{Object.entries(valueMappingFieldLabel).map(([field, label]) => <p key={field}><span>{label}</span><strong>{selectedProfile.valueMappings?.[field]?.length || 0} 条</strong><small>{(selectedProfile.valueMappings?.[field] || []).slice(0, 2).map((entry) => `${entry.source} → ${entry.target}`).join(' · ') || '未配置'}</small></p>)}</div></section>
                 <section className="sku-profile-mapping-detail"><header><strong>字段对应关系</strong><span>标准字段 ← 供应商原始列</span></header><div>{catalogImportFieldDefinitions.map((field) => <div key={field.key}><span>{field.label}</span><ArrowLeft size={14} /><strong>{selectedProfile.fieldMapping[field.key] || '未映射'}</strong></div>)}</div></section>
                 <div className="sku-profile-detail-grid"><section><header><strong>最近使用</strong><span>{selectedProfile.recentUses?.length || 0} 个批次</span></header><div>{selectedProfile.recentUses?.map((use) => <div key={use.id}><span><strong>{use.sourceName}</strong><small>{displayTime(use.createdAt)} · {use.matchStatus || '人工映射'}</small></span><span><b>{use.importedRows}/{use.totalRows}</b><small>{(jobState[use.state] || {}).label || use.state}</small></span></div>)}{!selectedProfile.recentUses?.length ? <p>尚未用于导入批次</p> : null}</div></section><section><header><strong>变更记录</strong><span>最近 {selectedProfile.changes?.length || 0} 条</span></header><div>{selectedProfile.changes?.map((change) => <div key={change.id}><span className="change-dot" /><span><strong>{profileChangeLabel[change.action] || change.action}</strong><small>{change.actor} · {displayTime(change.createdAt)} · v{change.version}</small></span></div>)}{!selectedProfile.changes?.length ? <p>暂无变更记录</p> : null}</div></section></div>
               </> : <div className="sku-profile-empty detail"><ArrowsLeftRight size={36} /><strong>选择一个映射方案</strong><span>查看字段关系、最近使用和版本记录</span></div>}</section>

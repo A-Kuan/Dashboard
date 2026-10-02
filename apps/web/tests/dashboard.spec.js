@@ -243,6 +243,18 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(dialog.locator('.sku-profile-rule-summary')).toContainText('来源 供应商 A CSV')
   await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新导入规则', { exact: true })).toBeVisible()
 
+  await dialog.getByRole('button', { name: '编辑值映射' }).click()
+  await dialog.getByRole('button', { name: '添加品牌映射' }).click()
+  await dialog.getByLabel('品牌供应商值 1').fill('MANN')
+  await dialog.getByLabel('品牌标准值 1').fill('MANN')
+  await dialog.getByRole('button', { name: '添加品牌映射' }).click()
+  await dialog.getByLabel('品牌供应商值 2').fill('博世中国')
+  await dialog.getByLabel('品牌标准值 2').fill('BOSCH')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-editor-1680.png', fullPage: false })
+  await dialog.locator('.sku-profile-value-editor').getByRole('button', { name: '保存映射' }).click()
+  await expect(dialog.locator('.sku-profile-value-summary')).toContainText('品牌2 条')
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('更新值映射', { exact: true })).toBeVisible()
+
   await dialog.getByRole('button', { name: '重命名方案' }).click()
   await dialog.getByLabel('新的方案名称').fill('供应商 A 标准映射')
   await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
@@ -280,6 +292,24 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(rulesDialog.getByText('AB-123', { exact: true })).toBeVisible()
   await expect(rulesDialog.getByText('MANN', { exact: true })).toBeVisible()
   await rulesDialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const valueDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const valueCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n火花塞,VALUE-MAP-001,博世中国,Audi A4 (B9),已配置映射\n点火线圈,VALUE-MAP-002,神秘品牌,Audi A4 (B9),未知值'
+  await valueDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-values.csv', mimeType: 'text/csv', buffer: Buffer.from(valueCsv) })
+  await expect(valueDialog.getByText('1 行值需要人工确认')).toBeVisible()
+  await expect(valueDialog.getByText('品牌 · 神秘品牌 × 1')).toBeVisible()
+  await valueDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(valueDialog.getByText('供应商值异常队列')).toBeVisible()
+  await expect(valueDialog.getByText('神秘品牌', { exact: true }).first()).toBeVisible()
+  await expect(valueDialog.getByText('BOSCH', { exact: true })).toBeVisible()
+  await expect(valueDialog.getByLabel('选择第 2 行')).toBeChecked()
+  await expect(valueDialog.getByLabel('选择第 3 行')).not.toBeChecked()
+  await expect(valueDialog.locator('.import-state.review')).toHaveText('值待映射')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-value-review-1680.png', fullPage: false })
+  await valueDialog.getByLabel('选择第 3 行').check()
+  await expect(valueDialog.getByRole('button', { name: '写入 2 条草稿' })).toBeVisible()
+  await valueDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {

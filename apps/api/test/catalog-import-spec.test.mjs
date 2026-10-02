@@ -27,3 +27,14 @@ test('summarizes blocking issues, duplicate matches and source coverage', () => 
   assert.deepEqual(report.issueSummary.map((item) => item.code), ['MISSING_PRIMARY_OE', 'MISSING_FITMENT'])
   assert.equal(report.coverage.find((item) => item.field === 'sourceRecordId').percent, 33)
 })
+
+test('requires explicit review for unresolved supplier values', () => {
+  const report = buildImportPreflightReport([
+    { state: 'ready', issues: [], duplicate_matches: [], normalized_payload: { identity: { brandLabel: 'BOSCH' }, fitments: [], evidence: [] } },
+    { state: 'review', issues: [{ code: 'VALUE_MAPPING_UNRESOLVED_BRAND', severity: 'review', message: '品牌值尚未映射' }], duplicate_matches: [], normalized_payload: { identity: { brandLabel: '神秘品牌' }, fitments: [], evidence: [] } },
+  ])
+  assert.equal(report.decision, 'review_required')
+  assert.equal(report.defaultSelectedRows, 1)
+  assert.equal(report.selectableRows, 2)
+  assert.equal(report.reviewRows, 1)
+})

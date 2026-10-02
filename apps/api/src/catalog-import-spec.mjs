@@ -43,7 +43,7 @@ export function buildImportPreflightReport(rows = [], totals = {}) {
     issueMap.set(issue.code, current)
   }
   const issueSummary = [...issueMap.values()].sort((left, right) => {
-    const severity = { error: 0, warning: 1 }
+    const severity = { error: 0, review: 1, warning: 2 }
     return (severity[left.severity] ?? 2) - (severity[right.severity] ?? 2) || right.count - left.count || left.code.localeCompare(right.code)
   })
   const coverageDefinitions = [
@@ -59,15 +59,17 @@ export function buildImportPreflightReport(rows = [], totals = {}) {
   })
   const invalidRows = Number(totals.invalidRows ?? rows.filter((row) => row.state === 'invalid').length)
   const duplicateRows = Number(totals.duplicateRows ?? rows.filter((row) => row.state === 'duplicate').length)
+  const reviewRows = Number(totals.reviewRows ?? rows.filter((row) => row.state === 'review').length)
   const readyRows = Number(totals.readyRows ?? rows.filter((row) => row.state === 'ready').length)
   const warningCount = issueSummary.filter((item) => item.severity === 'warning').reduce((sum, item) => sum + item.count, 0)
-  const decision = invalidRows ? 'blocked' : duplicateRows ? 'review_required' : warningCount ? 'ready_with_warnings' : 'ready'
+  const decision = invalidRows ? 'blocked' : duplicateRows || reviewRows ? 'review_required' : warningCount ? 'ready_with_warnings' : 'ready'
   return {
     schemaVersion: 'catalog-import-preflight-v1',
     decision,
     defaultSelectedRows: readyRows,
-    selectableRows: readyRows + duplicateRows,
+    selectableRows: readyRows + duplicateRows + reviewRows,
     blockingRows: invalidRows,
+    reviewRows,
     warningCount,
     duplicateMatches: rows.reduce((sum, row) => sum + (row.duplicate_matches || []).length, 0),
     issueSummary,

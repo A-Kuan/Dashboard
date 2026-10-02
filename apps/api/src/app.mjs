@@ -375,6 +375,14 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
     return profile
   })
+  app.patch('/api/v2/catalog/import-mappings/:id/value-mappings', async (request, reply) => {
+    if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const profile = await catalogImportMappingRepository.updateValueMappings(request.params.id, request.body, actor.name)
+    if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
+    return profile
+  })
   app.post('/api/v2/catalog/import-mappings/:id/clone', async (request, reply) => {
     if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.import')

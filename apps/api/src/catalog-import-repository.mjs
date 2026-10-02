@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { normalizeCatalogInput, normalizeIdentifierValue } from './catalog-validation.mjs'
 import { buildImportPreflightReport, catalogImportFields, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
+import { applyCatalogImportProfile } from './catalog-import-rules.mjs'
 
 function text(value) {
   return String(value ?? '').trim()
@@ -51,6 +52,11 @@ function normalizeRow(row, rowNumber, sourceName, intakeId) {
   if (!payload.identity.brandLabel) issues.push({ code: 'MISSING_BRAND', severity: 'warning', message: '品牌待补充' })
   if (!payload.identity.categoryLabel) issues.push({ code: 'MISSING_CATEGORY', severity: 'warning', message: '分类待补充' })
   if (!hasFitment) issues.push({ code: 'MISSING_FITMENT', severity: 'warning', message: '适配车型待补充' })
+  const valueMappingFieldLabel = { brand: '品牌', category: '分类', unit: '单位' }
+  for (const issue of Array.isArray(raw._valueMappingIssues) ? raw._valueMappingIssues : []) {
+    if (!valueMappingFieldLabel[issue?.field] || !text(issue?.value)) continue
+    issues.push({ code: `VALUE_MAPPING_UNRESOLVED_${issue.field.toUpperCase()}`, severity: 'review', message: `${valueMappingFieldLabel[issue.field]}值“${text(issue.value)}”尚未映射`, field: issue.field, value: text(issue.value) })
+  }
   return { payload, issues, normalizedPrimaryOe: normalizeIdentifierValue(primaryOe) }
 }
 
@@ -74,12 +80,13 @@ function mapJob(row, rows = [], attempts = []) {
   return {
     id: row.id, intakeId: row.intake_id, sourceName: row.source_name, state: row.state, totalRows: row.total_rows,
     readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows,
+    reviewRows: row.review_rows || 0,
     importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
     createdAt: row.created_at, committedAt: row.committed_at, version: row.version,
     contentFingerprint: row.content_hash ? row.content_hash.slice(0, 12) : '',
     mappingProfileId: row.mapping_profile_id || '', mappingSnapshot: row.mapping_snapshot || {},
     attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
-    preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows }),
+    preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, reviewRows: row.review_rows, invalidRows: row.invalid_rows }),
     rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
   }
 }
@@ -121,11 +128,39 @@ export function createCatalogImportRepository(pool, catalogRepository) {
 
     async createPreview(input, actor = '系统操作员') {
       const sourceName = text(input?.sourceName)
-      const rows = Array.isArray(input?.rows) ? input.rows : []
+      const submittedRows = Array.isArray(input?.rows) ? input.rows : []
       const mappingProfile = input?.mappingProfile && typeof input.mappingProfile === 'object' ? input.mappingProfile : null
       if (!sourceName) throw invalid('sourceName 不能为空')
-      if (!rows.length) throw invalid('导入文件没有可处理的数据行')
-      if (rows.length > catalogImportTemplateSpec.maxRows) throw invalid(`单次最多导入 ${catalogImportTemplateSpec.maxRows} 行`)
+      if (!submittedRows.length) throw invalid('导入文件没有可处理的数据行')
+      if (submittedRows.length > catalogImportTemplateSpec.maxRows) throw invalid(`单次最多导入 ${catalogImportTemplateSpec.maxRows} 行`)
+
+      const profileId = text(mappingProfile?.id) || null
+      let appliedProfile = null
+      let fieldMapping = {}
+      let rows = submittedRows
+      if (profileId) {
+        appliedProfile = (await pool.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 AND active', [profileId])).rows[0]
+        if (!appliedProfile) throw invalid('选择的映射方案不存在或已停用')
+        const expectedProfileVersion = Number(mappingProfile?.version)
+        if (!Number.isInteger(expectedProfileVersion) || expectedProfileVersion !== appliedProfile.version) {
+          const error = new Error('映射方案已更新，请重新打开文件后再试')
+          error.statusCode = 409
+          error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
+          throw error
+        }
+        const sourceKeys = new Set(submittedRows.flatMap((row) => Object.keys(row?._sourceRow || {})))
+        const allowedFields = new Set(catalogImportFields.map((field) => field.key))
+        fieldMapping = Object.fromEntries(Object.entries(mappingProfile?.fieldMapping || {}).flatMap(([field, sourceKey]) => {
+          const value = text(sourceKey)
+          return allowedFields.has(field) && sourceKeys.has(value) ? [[field, value]] : []
+        }))
+        const profileRules = { defaultValues: appliedProfile.default_values, transformRules: appliedProfile.transform_rules, valueMappings: appliedProfile.value_mappings }
+        rows = submittedRows.map((submitted) => {
+          const sourceRow = submitted?._sourceRow && typeof submitted._sourceRow === 'object' ? submitted._sourceRow : {}
+          const reconstructed = { ...submitted, ...Object.fromEntries(Object.entries(fieldMapping).map(([field, sourceKey]) => [field, sourceRow[sourceKey] ?? ''])), _sourceRow: sourceRow }
+          return applyCatalogImportProfile(reconstructed, profileRules)
+        })
+      }
 
       const fileAnalysis = analyzeCatalogImportRows(rows)
       const existing = (await pool.query('SELECT id FROM catalog_import_job WHERE content_hash=$1 LIMIT 1', [fileAnalysis.contentHash])).rows[0]
@@ -149,45 +184,47 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         const jobId = randomUUID()
         await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
           VALUES ($1,'import','preview',$2::jsonb,$3::jsonb,$4)`,
-        [intakeId, JSON.stringify({ sourceName, rowCount: rows.length, mappingProfile }), JSON.stringify({ rows }), actor])
+        [intakeId, JSON.stringify({ sourceName, rowCount: submittedRows.length, mappingProfile }), JSON.stringify({ rows: submittedRows }), actor])
 
         let readyRows = 0
         let duplicateRows = 0
+        let reviewRows = 0
         let invalidRows = 0
         const prepared = normalizedRows.map((item, index) => {
           const fileMatches = (fileAnalysis.inFileDuplicates[item.normalizedPrimaryOe] || []).filter((rowNumber) => rowNumber !== index + 2).map((rowNumber) => ({ scope: 'file', rowNumber }))
           const duplicates = item.normalizedPrimaryOe ? [...(duplicateMap[item.normalizedPrimaryOe] || []), ...fileMatches] : []
           const hasError = item.issues.some((issue) => issue.severity === 'error')
-          const state = hasError ? 'invalid' : duplicates.length ? 'duplicate' : 'ready'
+          const needsReview = item.issues.some((issue) => issue.severity === 'review')
+          const state = hasError ? 'invalid' : duplicates.length ? 'duplicate' : needsReview ? 'review' : 'ready'
           if (state === 'ready') readyRows += 1
           if (state === 'duplicate') duplicateRows += 1
+          if (state === 'review') reviewRows += 1
           if (state === 'invalid') invalidRows += 1
           return { id: randomUUID(), rowNumber: index + 2, ...item, duplicates, state }
         })
 
-        const profileId = text(mappingProfile?.id) || null
         let mappingSnapshot = {}
         if (profileId) {
-          const updated = await client.query('UPDATE catalog_import_mapping_profile SET usage_count=usage_count+1,last_used_at=now() WHERE id=$1 AND active RETURNING name,header_signature,version,default_values,transform_rules', [profileId])
-          if (!updated.rows[0]) throw invalid('选择的映射方案不存在或已停用')
-          const sourceKeys = new Set(rows.flatMap((row) => Object.keys(row?._sourceRow || {})))
-          const allowedFields = new Set(catalogImportFields.map((field) => field.key))
-          const fieldMapping = Object.fromEntries(Object.entries(mappingProfile?.fieldMapping || {}).flatMap(([field, sourceKey]) => {
-            const value = text(sourceKey)
-            return allowedFields.has(field) && sourceKeys.has(value) ? [[field, value]] : []
-          }))
+          const updated = await client.query('UPDATE catalog_import_mapping_profile SET usage_count=usage_count+1,last_used_at=now() WHERE id=$1 AND active AND version=$2 RETURNING name,header_signature,version,default_values,transform_rules,value_mappings', [profileId, appliedProfile.version])
+          if (!updated.rows[0]) {
+            const error = new Error('映射方案已更新，请重新打开文件后再试')
+            error.statusCode = 409
+            error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
+            throw error
+          }
           const matchStatus = ['created', 'updated', 'exact', 'drift', 'manual_override'].includes(text(mappingProfile?.matchStatus)) ? text(mappingProfile.matchStatus) : 'manual_override'
           mappingSnapshot = {
             id: profileId, name: updated.rows[0].name, version: updated.rows[0].version,
             matchStatus, headerSignature: updated.rows[0].header_signature, fieldMapping,
             defaultValues: updated.rows[0].default_values || {},
             transformRules: updated.rows[0].transform_rules || {},
+            valueMappings: updated.rows[0].value_mappings || {},
           }
         }
         const { rows: jobs } = await client.query(`INSERT INTO catalog_import_job
-          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by,content_hash,mapping_profile_id,mapping_snapshot)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) RETURNING *`,
-        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor, fileAnalysis.contentHash, profileId, JSON.stringify(mappingSnapshot)])
+          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,review_rows,invalid_rows,created_by,content_hash,mapping_profile_id,mapping_snapshot)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) RETURNING *`,
+        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, reviewRows, invalidRows, actor, fileAnalysis.contentHash, profileId, JSON.stringify(mappingSnapshot)])
         for (const item of prepared) {
           await client.query(`INSERT INTO catalog_import_row
             (id,job_id,row_number,normalized_payload,state,issues,duplicate_matches)
@@ -224,7 +261,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           throw error
         }
         const result = await client.query(`SELECT * FROM catalog_import_row WHERE job_id=$1 AND id=ANY($2::text[]) ORDER BY row_number`, [id, selectedIds])
-        if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate'].includes(row.state))) throw invalid('选择中包含不可导入的记录')
+        if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate', 'review'].includes(row.state))) throw invalid('选择中包含不可导入的记录')
         await client.query("UPDATE catalog_import_job SET state='committing',version=version+1 WHERE id=$1", [id])
         const attemptId = randomUUID()
         await client.query(`INSERT INTO catalog_import_attempt (id,job_id,attempt_number,attempt_type,selected_rows,started_by)
@@ -245,7 +282,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           failed += 1
         }
       }
-      await pool.query(`UPDATE catalog_import_row SET state='skipped',updated_at=now() WHERE job_id=$1 AND state IN ('ready','duplicate')`, [id])
+      await pool.query(`UPDATE catalog_import_row SET state='skipped',updated_at=now() WHERE job_id=$1 AND state IN ('ready','duplicate','review')`, [id])
       await pool.query(`UPDATE catalog_import_job SET state=$2,imported_rows=$3,failed_rows=$4,committed_at=now(),version=version+1 WHERE id=$1`,
         [id, failed ? 'partial' : 'completed', imported, failed])
       await pool.query(`UPDATE catalog_import_attempt SET state=$2,imported_rows=$3,failed_rows=$4,completed_at=now() WHERE id=$1`,

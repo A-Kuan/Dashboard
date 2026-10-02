@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
+import { normalizeCatalogValueMappings } from './catalog-import-rules.mjs'
 
 const allowedFields = new Set(['nameZh', 'nameEn', 'brand', 'category', 'unit', 'primaryOe', 'vehicle', 'years', 'condition', 'sourceSystem', 'sourceRecordId'])
 const allowedDefaultFields = new Set(['brand', 'category', 'unit', 'sourceSystem'])
@@ -71,6 +72,7 @@ function mapRow(row) {
     fieldMapping: row.field_mapping || {},
     defaultValues: row.default_values || {},
     transformRules: row.transform_rules || {},
+    valueMappings: row.value_mappings || { brand: [], category: [], unit: [] },
     active: row.active,
     usageCount: row.usage_count,
     lastUsedAt: row.last_used_at,
@@ -254,6 +256,22 @@ export function createCatalogImportMappingRepository(pool) {
       })
     },
 
+    async updateValueMappings(id, input = {}, actor = '系统操作员') {
+      const expectedVersion = Number(input.expectedVersion)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      const valueMappings = normalizeCatalogValueMappings(input.valueMappings)
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) return null
+        if (current.version !== expectedVersion) throw versionConflict()
+        const row = (await client.query(`UPDATE catalog_import_mapping_profile SET value_mappings=$2::jsonb,
+          version=version+1,updated_by=$3,updated_at=now() WHERE id=$1 RETURNING *`,
+        [id, JSON.stringify(valueMappings), actor])).rows[0]
+        await recordChange(client, row, 'update_value_mappings', actor)
+        return mapRow(row)
+      })
+    },
+
     async clone(id, input = {}, actor = '系统操作员') {
       const name = text(input.name)
       if (!name) throw invalid('请输入新方案名称')
@@ -262,9 +280,9 @@ export function createCatalogImportMappingRepository(pool) {
         if (!source) return null
         const cloneId = randomUUID()
         const row = (await client.query(`INSERT INTO catalog_import_mapping_profile
-          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,default_values,transform_rules,created_by,updated_by)
-          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$9) RETURNING *`,
-        [cloneId, name, source.source_name_pattern, source.header_signature, JSON.stringify(source.source_headers), JSON.stringify(source.field_mapping), JSON.stringify(source.default_values), JSON.stringify(source.transform_rules), actor])).rows[0]
+          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,default_values,transform_rules,value_mappings,created_by,updated_by)
+          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$10) RETURNING *`,
+        [cloneId, name, source.source_name_pattern, source.header_signature, JSON.stringify(source.source_headers), JSON.stringify(source.field_mapping), JSON.stringify(source.default_values), JSON.stringify(source.transform_rules), JSON.stringify(source.value_mappings), actor])).rows[0]
         await recordChange(client, row, 'clone', actor, { clonedFrom: source.id })
         return mapRow(row)
       })

@@ -230,6 +230,10 @@ function normalizeFullWidthText(value) {
   return String(value || '').replace(/[！-～]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0xFEE0)).replace(/　/g, ' ')
 }
 
+function normalizeValueMappingKey(value) {
+  return normalizeFullWidthText(value).trim().replace(/\s+/g, ' ').toLocaleLowerCase('zh-CN')
+}
+
 export function applyCatalogImportRules(rows = [], profile = {}) {
   const defaults = profile.defaultValues || {}
   const rules = profile.transformRules || {}
@@ -244,6 +248,17 @@ export function applyCatalogImportRules(rows = [], profile = {}) {
       if (!value && defaults[field.key]) value = String(defaults[field.key])
       next[field.key] = value
     }
+    const mappingIssues = []
+    for (const field of ['brand', 'category', 'unit']) {
+      const entries = Array.isArray(profile.valueMappings?.[field]) ? profile.valueMappings[field] : []
+      const value = String(next[field] || '')
+      if (!value || !entries.length) continue
+      const key = normalizeValueMappingKey(value)
+      const matched = entries.find((entry) => normalizeValueMappingKey(entry.source) === key || normalizeValueMappingKey(entry.target) === key)
+      if (matched) next[field] = String(matched.target || '').trim()
+      else mappingIssues.push({ field, value })
+    }
+    next._valueMappingIssues = mappingIssues
     return next
   })
 }
@@ -296,6 +311,12 @@ export function updateCatalogImportMapping(profile, updates) {
 export function updateCatalogImportMappingRules(profile, { defaultValues, transformRules }) {
   return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profile.id)}/rules`, {
     method: 'PATCH', body: JSON.stringify({ expectedVersion: profile.version, defaultValues, transformRules }),
+  })
+}
+
+export function updateCatalogImportValueMappings(profile, valueMappings) {
+  return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profile.id)}/value-mappings`, {
+    method: 'PATCH', body: JSON.stringify({ expectedVersion: profile.version, valueMappings }),
   })
 }
 
