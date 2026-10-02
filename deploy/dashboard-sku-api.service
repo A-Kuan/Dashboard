@@ -14,9 +14,13 @@ Environment=PGHOST=/var/run/postgresql
 Environment=PGPORT=5432
 Environment=PGDATABASE=dashboard_sku
 Environment=PGUSER=dashboard-sku
+Environment=CATALOG_EPC_ASSET_DIR=/opt/dashboard-sku-api/data/epc-assets
+Environment=CATALOG_EPC_ASSET_MAX_BYTES=12582912
+Environment=CATALOG_EPC_ASSET_TIMEOUT_MS=15000
 ExecStart=/usr/bin/node src/server.mjs
 Restart=on-failure
 RestartSec=3
+UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
