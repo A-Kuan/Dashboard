@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { withTransaction } from './db.mjs'
 
 const allowedFields = new Set(['nameZh', 'nameEn', 'brand', 'category', 'unit', 'primaryOe', 'vehicle', 'years', 'condition', 'sourceSystem', 'sourceRecordId'])
 
@@ -77,6 +78,22 @@ function mapRow(row) {
   }
 }
 
+function mapChange(row) {
+  return { id: row.id, action: row.action, version: row.version, snapshot: row.snapshot || {}, actor: row.actor, createdAt: row.created_at }
+}
+
+async function recordChange(client, row, action, actor, extra = {}) {
+  await client.query(`INSERT INTO catalog_import_mapping_profile_change (id,profile_id,action,version,snapshot,actor)
+    VALUES ($1,$2,$3,$4,$5::jsonb,$6)`, [randomUUID(), row.id, action, row.version, JSON.stringify({ ...mapRow(row), ...extra }), actor])
+}
+
+function versionConflict() {
+  const error = new Error('映射方案已被其他人更新，请重新打开后再试')
+  error.statusCode = 409
+  error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
+  return error
+}
+
 function overlap(left, right) {
   const leftSet = new Set(left)
   const rightSet = new Set(right)
@@ -92,9 +109,30 @@ function matchMapping(profile, columns) {
 
 export function createCatalogImportMappingRepository(pool) {
   return {
-    async list() {
-      const { rows } = await pool.query('SELECT * FROM catalog_import_mapping_profile WHERE active ORDER BY last_used_at DESC NULLS LAST, updated_at DESC')
+    async list({ query = '', active = 'all' } = {}) {
+      const clauses = []
+      const values = []
+      const search = text(query)
+      if (search) { values.push(`%${search}%`); clauses.push(`(name ILIKE $${values.length} OR source_name_pattern ILIKE $${values.length})`) }
+      if (active === 'active' || active === 'inactive') { values.push(active === 'active'); clauses.push(`active=$${values.length}`) }
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+      const { rows } = await pool.query(`SELECT * FROM catalog_import_mapping_profile ${where} ORDER BY active DESC,last_used_at DESC NULLS LAST,updated_at DESC`, values)
       return { items: rows.map(mapRow), total: rows.length }
+    },
+
+    async get(id) {
+      const profile = (await pool.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1', [id])).rows[0]
+      if (!profile) return null
+      const [uses, changes] = await Promise.all([
+        pool.query(`SELECT id,source_name,state,total_rows,imported_rows,created_at,mapping_snapshot
+          FROM catalog_import_job WHERE mapping_profile_id=$1 ORDER BY created_at DESC LIMIT 12`, [id]),
+        pool.query('SELECT * FROM catalog_import_mapping_profile_change WHERE profile_id=$1 ORDER BY created_at DESC LIMIT 20', [id]),
+      ])
+      return {
+        ...mapRow(profile),
+        recentUses: uses.rows.map((row) => ({ id: row.id, sourceName: row.source_name, state: row.state, totalRows: row.total_rows, importedRows: row.imported_rows, createdAt: row.created_at, matchStatus: row.mapping_snapshot?.matchStatus || '' })),
+        changes: changes.rows.map(mapChange),
+      }
     },
 
     async match(input = {}) {
@@ -140,26 +178,64 @@ export function createCatalogImportMappingRepository(pool) {
       if (profileId) {
         const expectedVersion = Number(input.expectedVersion)
         if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
-        const { rows } = await pool.query(`UPDATE catalog_import_mapping_profile SET
-          name=$3,source_name_pattern=$4,header_signature=$5,source_headers=$6::jsonb,field_mapping=$7::jsonb,
-          version=version+1,updated_by=$8,updated_at=now() WHERE id=$1 AND version=$2 RETURNING *`,
-        [profileId, expectedVersion, name, sourceNamePattern, headerSignature, JSON.stringify(columns.map(({ sourceKey, label }) => ({ sourceKey, label }))), JSON.stringify(fieldMapping), actor])
-        if (!rows[0]) {
-          const exists = (await pool.query('SELECT 1 FROM catalog_import_mapping_profile WHERE id=$1', [profileId])).rowCount
-          if (!exists) return null
-          const error = new Error('映射方案已被其他人更新，请重新打开后再试')
-          error.statusCode = 409
-          error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
-          throw error
-        }
-        return mapRow(rows[0])
+        return withTransaction(pool, async (client) => {
+          const current = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 FOR UPDATE', [profileId])).rows[0]
+          if (!current) return null
+          if (current.version !== expectedVersion) throw versionConflict()
+          const row = (await client.query(`UPDATE catalog_import_mapping_profile SET
+            name=$2,source_name_pattern=$3,header_signature=$4,source_headers=$5::jsonb,field_mapping=$6::jsonb,
+            version=version+1,updated_by=$7,updated_at=now() WHERE id=$1 RETURNING *`,
+          [profileId, name, sourceNamePattern, headerSignature, JSON.stringify(columns.map(({ sourceKey, label }) => ({ sourceKey, label }))), JSON.stringify(fieldMapping), actor])).rows[0]
+          await recordChange(client, row, 'update_mapping', actor)
+          return mapRow(row)
+        })
       }
-      const id = randomUUID()
-      const { rows } = await pool.query(`INSERT INTO catalog_import_mapping_profile
-        (id,name,source_name_pattern,header_signature,source_headers,field_mapping,created_by,updated_by)
-        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$7) RETURNING *`,
-      [id, name, sourceNamePattern, headerSignature, JSON.stringify(columns.map(({ sourceKey, label }) => ({ sourceKey, label }))), JSON.stringify(fieldMapping), actor])
-      return mapRow(rows[0])
+      return withTransaction(pool, async (client) => {
+        const id = randomUUID()
+        const row = (await client.query(`INSERT INTO catalog_import_mapping_profile
+          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,created_by,updated_by)
+          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$7) RETURNING *`,
+        [id, name, sourceNamePattern, headerSignature, JSON.stringify(columns.map(({ sourceKey, label }) => ({ sourceKey, label }))), JSON.stringify(fieldMapping), actor])).rows[0]
+        await recordChange(client, row, 'create', actor)
+        return mapRow(row)
+      })
+    },
+
+    async updateMetadata(id, input = {}, actor = '系统操作员') {
+      const expectedVersion = Number(input.expectedVersion)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
+      if (input.name === undefined && input.active === undefined) throw invalid('没有需要更新的方案信息')
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) return null
+        if (current.version !== expectedVersion) throw versionConflict()
+        const name = input.name === undefined ? current.name : text(input.name)
+        if (!name) throw invalid('请输入映射方案名称')
+        const active = input.active === undefined ? current.active : Boolean(input.active)
+        if (name !== current.name && active !== current.active) throw invalid('请分别执行重命名和状态变更')
+        const action = name !== current.name ? 'rename' : active !== current.active ? (active ? 'reactivate' : 'deactivate') : null
+        if (!action) return mapRow(current)
+        const row = (await client.query(`UPDATE catalog_import_mapping_profile SET name=$2,active=$3,version=version+1,
+          updated_by=$4,updated_at=now() WHERE id=$1 RETURNING *`, [id, name, active, actor])).rows[0]
+        await recordChange(client, row, action, actor)
+        return mapRow(row)
+      })
+    },
+
+    async clone(id, input = {}, actor = '系统操作员') {
+      const name = text(input.name)
+      if (!name) throw invalid('请输入新方案名称')
+      return withTransaction(pool, async (client) => {
+        const source = (await client.query('SELECT * FROM catalog_import_mapping_profile WHERE id=$1', [id])).rows[0]
+        if (!source) return null
+        const cloneId = randomUUID()
+        const row = (await client.query(`INSERT INTO catalog_import_mapping_profile
+          (id,name,source_name_pattern,header_signature,source_headers,field_mapping,created_by,updated_by)
+          VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$7) RETURNING *`,
+        [cloneId, name, source.source_name_pattern, source.header_signature, JSON.stringify(source.source_headers), JSON.stringify(source.field_mapping), actor])).rows[0]
+        await recordChange(client, row, 'clone', actor, { clonedFrom: source.id })
+        return mapRow(row)
+      })
     },
   }
 }

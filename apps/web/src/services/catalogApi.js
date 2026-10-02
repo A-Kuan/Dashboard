@@ -255,6 +255,28 @@ export function saveCatalogImportMapping({ profile, name, sourceName, columns, m
   })
 }
 
+export function listCatalogImportMappings({ query = '', active = 'all' } = {}) {
+  const params = new URLSearchParams({ active })
+  if (query.trim()) params.set('q', query.trim())
+  return request(`/api/v2/catalog/import-mappings?${params}`)
+}
+
+export function getCatalogImportMapping(profileId) {
+  return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profileId)}`)
+}
+
+export function updateCatalogImportMapping(profile, updates) {
+  return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profile.id)}`, {
+    method: 'PATCH', body: JSON.stringify({ expectedVersion: profile.version, ...updates }),
+  })
+}
+
+export function cloneCatalogImportMapping(profileId, name) {
+  return request(`/api/v2/catalog/import-mappings/${encodeURIComponent(profileId)}/clone`, {
+    method: 'POST', body: JSON.stringify({ name }),
+  })
+}
+
 export async function downloadCatalogImportTemplate() {
   const response = await fetch(`${apiBase}/api/v2/catalog/import-template?format=csv`, {
     headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },

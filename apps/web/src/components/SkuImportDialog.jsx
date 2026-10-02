@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, FingerprintSimple, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { catalogImportFieldDefinitions, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, Copy, DownloadSimple, FileCsv, FingerprintSimple, MagnifyingGlass, PencilSimple, Power, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
@@ -24,6 +24,8 @@ const jobState = {
   preview: { label: '待确认', className: 'duplicate' }, committing: { label: '写入中', className: 'duplicate' },
   retrying: { label: '重试中', className: 'duplicate' }, completed: { label: '已完成', className: 'ready' }, partial: { label: '部分失败', className: 'invalid' },
 }
+
+const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
 
 function displayTime(value) {
   if (!value) return '—'
@@ -77,6 +79,14 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [fieldGuideOpen, setFieldGuideOpen] = useState(false)
   const [templateBusy, setTemplateBusy] = useState(false)
   const [mappingContext, setMappingContext] = useState(null)
+  const [profiles, setProfiles] = useState([])
+  const [profilesLoading, setProfilesLoading] = useState(false)
+  const [selectedProfile, setSelectedProfile] = useState(null)
+  const [profileQuery, setProfileQuery] = useState('')
+  const [profileState, setProfileState] = useState('all')
+  const [profileAction, setProfileAction] = useState('')
+  const [profileActionName, setProfileActionName] = useState('')
+  const [profileBusy, setProfileBusy] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -99,6 +109,60 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   }, [historyState])
 
   useEffect(() => { if (mode === 'history' && !selectedJob) loadHistory() }, [loadHistory, mode, selectedJob])
+
+  const loadProfiles = useCallback(async () => {
+    setProfilesLoading(true)
+    setError('')
+    try {
+      const result = await listCatalogImportMappings()
+      setProfiles(result.items || [])
+    } catch (reason) {
+      setError(reason.message || '映射方案加载失败')
+    } finally {
+      setProfilesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { if (mode === 'profiles') loadProfiles() }, [loadProfiles, mode])
+
+  useEffect(() => {
+    if (mode === 'profiles' && profiles.length && !selectedProfile) getCatalogImportMapping(profiles[0].id).then(setSelectedProfile).catch((reason) => setError(reason.message || '映射方案详情加载失败'))
+  }, [mode, profiles, selectedProfile])
+
+  const openProfile = async (id) => {
+    setProfilesLoading(true)
+    setProfileAction('')
+    setError('')
+    try { setSelectedProfile(await getCatalogImportMapping(id)) } catch (reason) { setError(reason.message || '映射方案详情加载失败') } finally { setProfilesLoading(false) }
+  }
+
+  const startProfileAction = (action) => {
+    setProfileAction(action)
+    setProfileActionName(action === 'clone' ? `${selectedProfile.name} 副本` : selectedProfile.name)
+    setError('')
+  }
+
+  const submitProfileAction = async () => {
+    if (!selectedProfile) return
+    setProfileBusy(true)
+    setError('')
+    try {
+      let result
+      if (profileAction === 'rename') result = await updateCatalogImportMapping(selectedProfile, { name: profileActionName })
+      else if (profileAction === 'clone') result = await cloneCatalogImportMapping(selectedProfile.id, profileActionName)
+      else if (profileAction === 'toggle') result = await updateCatalogImportMapping(selectedProfile, { active: !selectedProfile.active })
+      if (!result) return
+      await loadProfiles()
+      setSelectedProfile(await getCatalogImportMapping(result.id))
+      setProfileAction('')
+      onNotify?.(profileAction === 'clone' ? '映射方案已复制' : profileAction === 'rename' ? '映射方案已重命名' : result.active ? '映射方案已恢复' : '映射方案已停用')
+    } catch (reason) {
+      if (reason.code === 'IMPORT_MAPPING_VERSION_CONFLICT') setSelectedProfile(await getCatalogImportMapping(selectedProfile.id).catch(() => selectedProfile))
+      setError(reason.message || '映射方案操作失败')
+    } finally {
+      setProfileBusy(false)
+    }
+  }
 
   const openHistoryJob = async (id) => {
     setHistoryLoading(true)
@@ -261,6 +325,11 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const mappingReady = (Number(mapping.nameZh) >= 0 || Number(mapping.nameEn) >= 0) && Number(mapping.primaryOe) >= 0 && new Set(mappedIndexes).size === mappedIndexes.length && (!mappingContext?.saveProfile || Boolean(mappingContext.profileName.trim()))
   const unmappedColumns = (mappingContext?.inspection.columns || []).filter((column) => !mappedIndexes.includes(column.index))
   const mappingMatch = mappingContext?.match
+  const visibleProfiles = profiles.filter((profile) => {
+    const stateMatches = profileState === 'all' || (profileState === 'active' ? profile.active : !profile.active)
+    const query = profileQuery.trim().toLowerCase()
+    return stateMatches && (!query || `${profile.name} ${profile.sourceNamePattern}`.toLowerCase().includes(query))
+  })
 
   return (
     <div className="sku-modal-backdrop" onMouseDown={onClose}>
@@ -271,8 +340,8 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
         </header>
 
         <div className="sku-import-modebar">
-          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setStep('upload'); setMappingContext(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button></div>
-          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '字段映射', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, mapping: 1, preview: 2, result: 3 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label>}
+          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setStep('upload'); setMappingContext(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button><button type="button" className={mode === 'profiles' ? 'active' : ''} onClick={() => { setMode('profiles'); setSelectedProfile(null); setProfileAction(''); setError('') }}><ArrowsLeftRight size={17} />映射方案</button></div>
+          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '字段映射', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, mapping: 1, preview: 2, result: 3 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : mode === 'history' ? <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label> : <span className="sku-profile-policy">版本化管理 · 历史记录不会删除</span>}
         </div>
 
         <div className="sku-import-body">
@@ -324,6 +393,21 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             <div className="history-detail-grid"><section><h4>逐行结果</h4><div className="history-row-list">{selectedJob.rows.map((row) => { const state = rowState[row.state] || { label: row.state, className: 'skipped' }; const identity = row.payload?.identity || {}; const primary = row.payload?.identifiers?.find((item) => item.isPrimary); return <div key={row.id}><span>{row.rowNumber}</span><span><strong>{identity.nameZh || identity.nameEn || '未命名'}</strong><small>{primary?.rawValue || '无主 OE'}</small></span><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.errorMessage || row.issues?.map((item) => item.message).join('、') || '—'}</small></div> })}</div></section><section><h4>执行记录</h4><div className="history-attempts">{selectedJob.attempts.map((attempt) => <div key={attempt.id}><span><ArrowsClockwise size={18} weight="bold" /></span><div><strong>{attempt.attemptType === 'retry' ? `第 ${attempt.attemptNumber} 次 · 失败重试` : '首次写入'}</strong><small>{attempt.startedBy} · {displayTime(attempt.startedAt)}</small><p>选中 {attempt.selectedRows} · 成功 {attempt.importedRows} · 失败 {attempt.failedRows}</p></div></div>)}{!selectedJob.attempts.length ? <p className="history-no-attempt">尚未执行写入</p> : null}</div></section></div>
           </div> : null}
 
+          {mode === 'profiles' ? <div className="sku-profile-manager">
+            <header><div><h3>供应商映射方案</h3><p>管理自动套用规则、表头结构和历史使用记录。</p></div><dl><div><dt>方案</dt><dd>{profiles.length}</dd></div><div><dt>启用</dt><dd>{profiles.filter((profile) => profile.active).length}</dd></div><div><dt>累计使用</dt><dd>{profiles.reduce((sum, profile) => sum + profile.usageCount, 0)}</dd></div></dl></header>
+            <div className="sku-profile-toolbar"><label><MagnifyingGlass size={17} /><input aria-label="搜索映射方案" value={profileQuery} onChange={(event) => setProfileQuery(event.target.value)} placeholder="搜索方案或文件名特征" /></label><select aria-label="映射方案状态" value={profileState} onChange={(event) => setProfileState(event.target.value)}><option value="all">全部状态</option><option value="active">仅启用</option><option value="inactive">已停用</option></select></div>
+            <div className="sku-profile-workspace">
+              <aside><div className="sku-profile-list">{visibleProfiles.map((profile) => <button type="button" className={selectedProfile?.id === profile.id ? 'active' : ''} key={profile.id} onClick={() => openProfile(profile.id)}><span><strong>{profile.name}</strong><small>{profile.sourceNamePattern || '未设置文件名特征'} · v{profile.version}</small></span><span><em className={profile.active ? 'enabled' : 'disabled'}>{profile.active ? '启用' : '停用'}</em><small>{profile.usageCount} 次使用</small></span><ArrowRight size={17} /></button>)}{!visibleProfiles.length && !profilesLoading ? <div className="sku-profile-empty"><ArrowsLeftRight size={30} /><strong>没有匹配的方案</strong><span>首次导入供应商文件时可保存方案</span></div> : null}</div></aside>
+              <section className="sku-profile-inspector">{selectedProfile ? <>
+                <header><div><span className={selectedProfile.active ? 'enabled' : 'disabled'}>{selectedProfile.active ? '启用中' : '已停用'}</span><h3>{selectedProfile.name}</h3><p>文件名特征 {selectedProfile.sourceNamePattern || '—'} · v{selectedProfile.version} · {selectedProfile.usageCount} 次使用</p></div><div><button type="button" aria-label="重命名方案" onClick={() => startProfileAction('rename')}><PencilSimple size={17} />重命名</button><button type="button" aria-label="复制方案" onClick={() => startProfileAction('clone')}><Copy size={17} />复制</button><button type="button" className={selectedProfile.active ? 'danger' : 'restore'} aria-label={selectedProfile.active ? '停用方案' : '恢复方案'} onClick={() => startProfileAction('toggle')}><Power size={17} />{selectedProfile.active ? '停用' : '恢复'}</button></div></header>
+                {profileAction ? <div className={`sku-profile-action ${profileAction === 'toggle' ? 'warning' : ''}`}><div><strong>{profileAction === 'rename' ? '重命名方案' : profileAction === 'clone' ? '复制为新方案' : selectedProfile.active ? '确认停用方案' : '确认恢复方案'}</strong><span>{profileAction === 'toggle' ? selectedProfile.active ? '停用后不再参与自动匹配，历史导入仍然保留。' : '恢复后将重新参与供应商文件自动匹配。' : '名称应能识别供应商或文件用途。'}</span></div>{profileAction !== 'toggle' ? <input aria-label={profileAction === 'rename' ? '新的方案名称' : '复制方案名称'} value={profileActionName} onChange={(event) => setProfileActionName(event.target.value)} /> : null}<div><button type="button" onClick={() => setProfileAction('')}>取消</button><button className="confirm" type="button" disabled={profileBusy || (profileAction !== 'toggle' && !profileActionName.trim())} onClick={submitProfileAction}>{profileBusy ? '正在保存…' : '确认'}</button></div></div> : null}
+                <div className="sku-profile-facts"><div><span>原始字段</span><strong>{selectedProfile.sourceHeaders.length}</strong></div><div><span>已映射</span><strong>{Object.keys(selectedProfile.fieldMapping).length}</strong></div><div><span>最后使用</span><strong>{displayTime(selectedProfile.lastUsedAt)}</strong></div><div><span>最后修改人</span><strong>{selectedProfile.updatedBy}</strong></div></div>
+                <section className="sku-profile-mapping-detail"><header><strong>字段对应关系</strong><span>标准字段 ← 供应商原始列</span></header><div>{catalogImportFieldDefinitions.map((field) => <div key={field.key}><span>{field.label}</span><ArrowLeft size={14} /><strong>{selectedProfile.fieldMapping[field.key] || '未映射'}</strong></div>)}</div></section>
+                <div className="sku-profile-detail-grid"><section><header><strong>最近使用</strong><span>{selectedProfile.recentUses?.length || 0} 个批次</span></header><div>{selectedProfile.recentUses?.map((use) => <div key={use.id}><span><strong>{use.sourceName}</strong><small>{displayTime(use.createdAt)} · {use.matchStatus || '人工映射'}</small></span><span><b>{use.importedRows}/{use.totalRows}</b><small>{(jobState[use.state] || {}).label || use.state}</small></span></div>)}{!selectedProfile.recentUses?.length ? <p>尚未用于导入批次</p> : null}</div></section><section><header><strong>变更记录</strong><span>最近 {selectedProfile.changes?.length || 0} 条</span></header><div>{selectedProfile.changes?.map((change) => <div key={change.id}><span className="change-dot" /><span><strong>{profileChangeLabel[change.action] || change.action}</strong><small>{change.actor} · {displayTime(change.createdAt)} · v{change.version}</small></span></div>)}{!selectedProfile.changes?.length ? <p>暂无变更记录</p> : null}</div></section></div>
+              </> : <div className="sku-profile-empty detail"><ArrowsLeftRight size={36} /><strong>选择一个映射方案</strong><span>查看字段关系、最近使用和版本记录</span></div>}</section>
+            </div>
+          </div> : null}
+
           {error ? <div className="sku-import-error"><WarningCircle size={18} weight="fill" />{error}</div> : null}
         </div>
 
@@ -333,7 +417,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
           {mode === 'new' && step === 'mapping' ? <button className="primary" type="button" disabled={busy || !mappingReady} onClick={confirmMapping}>{busy ? '正在预检查…' : '确认映射并预检查'}</button> : null}
           {mode === 'new' && step === 'preview' ? <button className="primary" type="button" disabled={busy || !selected.size} onClick={commit}>{busy ? '正在写入…' : `写入 ${selected.size} 条草稿`}</button> : null}
           {mode === 'new' && step === 'result' ? <button className="primary" type="button" onClick={onClose}>完成并返回资料库</button> : null}
-          {mode === 'history' ? <button className="secondary" type="button" onClick={onClose}>关闭</button> : null}
+          {['history', 'profiles'].includes(mode) ? <button className="secondary" type="button" onClick={onClose}>关闭</button> : null}
           {mode === 'history' && selectedJob?.state === 'partial' ? <button className="primary" type="button" disabled={busy} onClick={retryFailed}><ArrowsClockwise size={17} />{busy ? '正在重试…' : `重试 ${selectedJob.failedRows} 条失败记录`}</button> : null}
         </footer>
       </section>

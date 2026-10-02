@@ -223,6 +223,40 @@ test('maps supplier CSV headers and reuses a saved supplier profile', async ({ p
   await driftDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
+test('manages supplier mapping profiles without deleting audit history', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await dialog.getByRole('button', { name: '映射方案' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商映射方案' })).toBeVisible()
+  await expect(dialog.getByText('supplier-a 映射方案', { exact: true }).first()).toBeVisible()
+  await expect(dialog.getByText('字段对应关系')).toBeVisible()
+  await expect(dialog.getByText('供应商品名', { exact: true }).last()).toBeVisible()
+
+  await dialog.getByRole('button', { name: '重命名方案' }).click()
+  await dialog.getByLabel('新的方案名称').fill('供应商 A 标准映射')
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商 A 标准映射' })).toBeVisible()
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('重命名', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '复制方案' }).click()
+  await dialog.getByLabel('复制方案名称').fill('供应商 A 备用映射')
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.getByRole('heading', { name: '供应商 A 备用映射' })).toBeVisible()
+  await expect(dialog.locator('.sku-profile-detail-grid > section').nth(1).getByText('复制方案', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '停用方案' }).click()
+  await expect(dialog.getByText('停用后不再参与自动匹配')).toBeVisible()
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.locator('.sku-profile-inspector > header').getByText('已停用')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-manager-1680.png', fullPage: false })
+
+  await dialog.getByRole('button', { name: '恢复方案' }).click()
+  await dialog.locator('.sku-profile-action').getByRole('button', { name: '确认' }).click()
+  await expect(dialog.locator('.sku-profile-inspector > header').getByText('启用中')).toBeVisible()
+  await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
+})
+
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByLabel('选择 前制动盘').check()

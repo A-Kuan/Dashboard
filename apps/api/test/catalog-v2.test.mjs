@@ -556,6 +556,9 @@ test('catalog v2 matches and saves versioned supplier mapping profiles', async (
     async list() { return { items: saved, total: saved.length } },
     async match(input) { return { status: 'exact', profile: { id: 'profile-1', name: '华东供应商', version: 2 }, suggestedMapping: { nameZh: 0, primaryOe: 1 }, changes: { added: [], removed: [], similarity: 1 }, sourceName: input.sourceName } },
     async save(input, actor) { const profile = { id: input.id || 'profile-1', name: input.name, version: (input.expectedVersion || 0) + 1, updatedBy: actor }; saved.push(profile); return profile },
+    async get(id) { return id === 'profile-1' ? { id, name: '华东供应商', version: 2, recentUses: [], changes: [] } : null },
+    async updateMetadata(id, input, actor) { return id === 'profile-1' ? { id, name: input.name || '华东供应商', active: input.active ?? true, version: input.expectedVersion + 1, updatedBy: actor } : null },
+    async clone(id, input, actor) { return id === 'profile-1' ? { id: 'profile-clone', name: input.name, active: true, version: 1, updatedBy: actor } : null },
   }
   const app = buildApp({ catalogImportMappingRepository, logger: false })
   const match = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings/match', payload: { sourceName: 'supplier.csv', columns: [{ sourceKey: '品名', label: '品名' }, { sourceKey: 'OE', label: 'OE' }] } })
@@ -568,6 +571,14 @@ test('catalog v2 matches and saves versioned supplier mapping profiles', async (
   const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { name: '无权限方案' } })
   assert.equal(denied.statusCode, 403)
   assert.equal((await app.inject('/api/v2/catalog/import-mappings')).json().total, 1)
+  assert.equal((await app.inject('/api/v2/catalog/import-mappings/profile-1')).json().version, 2)
+  const renamed = await app.inject({ method: 'PATCH', url: '/api/v2/catalog/import-mappings/profile-1', payload: { expectedVersion: 2, name: '华东月结模板' } })
+  assert.equal(renamed.json().name, '华东月结模板')
+  assert.equal(renamed.json().version, 3)
+  const cloned = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings/profile-1/clone', payload: { name: '华东备用模板' } })
+  assert.equal(cloned.statusCode, 201)
+  assert.equal(cloned.json().id, 'profile-clone')
+  assert.equal((await app.inject('/api/v2/catalog/import-mappings/missing')).statusCode, 404)
   await app.close()
 })
 

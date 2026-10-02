@@ -80,13 +80,16 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/imports/:id`：读取批次、逐行问题、重复匹配和写入结果。
 - `POST /api/v2/catalog/imports/:id/commit`：提交 `expectedVersion` 与明确选中的 `rowIds`，只写入 `ready` 或用户主动选择的 `duplicate` 行。
 - `POST /api/v2/catalog/imports/:id/retry`：对 `partial` 批次中失败的行重新执行写入；可提交 `rowIds` 进一步缩小范围，并继续使用 `expectedVersion` 防止并发重复操作。
-- `GET /api/v2/catalog/import-mappings`：读取启用中的供应商字段映射方案及使用次数。
+- `GET /api/v2/catalog/import-mappings?q=&active=`：读取供应商字段映射方案及使用次数，支持名称检索和启用状态筛选。
 - `POST /api/v2/catalog/import-mappings/match`：根据文件名特征和原始表头匹配方案；返回 `exact`、`drift` 或 `none`，以及新增/缺少字段差异。
 - `POST /api/v2/catalog/import-mappings`：创建或按 `expectedVersion` 更新映射方案。方案保存原始字段、标准字段对应关系和表头签名。
+- `GET /api/v2/catalog/import-mappings/:id`：读取方案详情、最近使用批次和不可覆盖的变更记录。
+- `PATCH /api/v2/catalog/import-mappings/:id`：按 `expectedVersion` 重命名、停用或恢复方案；停用不会删除历史批次。
+- `POST /api/v2/catalog/import-mappings/:id/clone`：复制方案为独立的新版本起点，使用次数从零开始。
 
 导入行状态为 `ready`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。疑似重复项默认不选择；不可导入项不能选择。预检查响应包含 `catalog-import-preflight-v1` 质量报告，汇总阻断项、警告、重复匹配以及品牌、分类、适配和来源字段覆盖率。文件内相同主 OE 会进入人工确认状态；结构化行内容经规范化后生成 SHA-256 指纹，重复上传时返回原批次而不新建任务。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
 
-前端导入中心会对供应商非标准表头做别名匹配，并在预检查前要求操作员确认字段映射。操作员可将确认结果保存为供应商方案；相同表头再次上传时自动套用，文件名属于同一来源但表头发生变化时展示新增/缺少列并要求人工确认。方案更新使用版本锁，避免多人同时修改时静默覆盖。未映射列不写入 SKU 标准字段，但会作为 `_sourceRow` 保留在原始来源证据中；导入批次同时冻结本次使用的方案快照，后续调整规则时仍可还原当时映射。
+前端导入中心会对供应商非标准表头做别名匹配，并在预检查前要求操作员确认字段映射。操作员可将确认结果保存为供应商方案；相同表头再次上传时自动套用，文件名属于同一来源但表头发生变化时展示新增/缺少列并要求人工确认。映射方案管理器采用列表与详情检查器，支持检索、重命名、复制、停用、恢复、最近使用和版本历史。方案更新使用版本锁，避免多人同时修改时静默覆盖。未映射列不写入 SKU 标准字段，但会作为 `_sourceRow` 保留在原始来源证据中；导入批次同时冻结本次使用的方案快照，后续调整规则时仍可还原当时映射。
 
 首次提交和每次重试都会生成独立的 `catalog_import_attempt` 记录，保留执行类型、操作者、开始与完成时间、选择行数、成功数和失败数。批次汇总数据是所有尝试后的当前结果，执行记录不可被后续重试覆盖。
 

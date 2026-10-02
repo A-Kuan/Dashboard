@@ -337,9 +337,9 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const job = await catalogImportRepository.createPreview(request.body, actor.name)
     return reply.code(job.duplicateUpload ? 200 : 201).send(job)
   })
-  app.get('/api/v2/catalog/import-mappings', async (_request, reply) => {
+  app.get('/api/v2/catalog/import-mappings', async (request, reply) => {
     if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
-    return catalogImportMappingRepository.list()
+    return catalogImportMappingRepository.list({ query: request.query?.q, active: request.query?.active })
   })
   app.post('/api/v2/catalog/import-mappings/match', async (request, reply) => {
     if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
@@ -352,6 +352,28 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const profile = await catalogImportMappingRepository.save(request.body, actor.name)
     if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
     return reply.code(request.body?.id ? 200 : 201).send(profile)
+  })
+  app.get('/api/v2/catalog/import-mappings/:id', async (request, reply) => {
+    if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
+    const profile = await catalogImportMappingRepository.get(request.params.id)
+    if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
+    return profile
+  })
+  app.patch('/api/v2/catalog/import-mappings/:id', async (request, reply) => {
+    if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const profile = await catalogImportMappingRepository.updateMetadata(request.params.id, request.body, actor.name)
+    if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
+    return profile
+  })
+  app.post('/api/v2/catalog/import-mappings/:id/clone', async (request, reply) => {
+    if (!catalogImportMappingRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_MAPPING_UNAVAILABLE', message: '供应商映射服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const profile = await catalogImportMappingRepository.clone(request.params.id, request.body, actor.name)
+    if (!profile) return reply.code(404).send({ error: 'CATALOG_IMPORT_MAPPING_NOT_FOUND', message: '映射方案不存在' })
+    return reply.code(201).send(profile)
   })
   app.get('/api/v2/catalog/imports', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
