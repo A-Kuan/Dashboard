@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { createReadStream } from 'node:fs'
+import { access, chmod, mkdir, stat, writeFile } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
 import { createPool } from '../src/db.mjs'
 
 const outputDirectory = resolve(process.argv[2] || process.env.CATALOG_BACKUP_DIR || './backups')
@@ -13,6 +14,14 @@ const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}
 const backupName = `${timestamp}-${randomUUID().slice(0, 8)}-${database}`
 const dumpPath = resolve(outputDirectory, `${backupName}.dump`)
 const manifestPath = resolve(outputDirectory, `${backupName}.manifest.json`)
+const assetDirectory = String(process.env.CATALOG_EPC_ASSET_DIR || '').trim()
+const assetArchivePath = assetDirectory ? resolve(outputDirectory, `${backupName}.epc-assets.tar.gz`) : ''
+
+async function sha256File(path) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest('hex')
+}
 
 await mkdir(outputDirectory, { recursive: true, mode: 0o750 })
 const pool = createPool({ max: 1 })
@@ -51,18 +60,34 @@ const listing = spawnSync(pgRestore, ['--list', dumpPath], { env: process.env, e
 const listedObjects = listing.stdout.split('\n').filter((line) => /^\d+;/.test(line)).length
 if (listing.status !== 0 || !listing.stdout.includes('; Archive created at') || !listedObjects) throw new Error(`pg_restore validation failed: ${(listing.stderr || listing.stdout || 'invalid archive').trim()}`)
 
-const dumpBuffer = await readFile(dumpPath)
 const file = await stat(dumpPath)
+let assetArchive = null
+if (assetDirectory) {
+  await access(assetDirectory)
+  const archived = spawnSync('tar', ['-czf', assetArchivePath, '-C', assetDirectory, '.'], { env: process.env, encoding: 'utf8' })
+  if (archived.status !== 0) throw new Error(`EPC asset snapshot failed: ${(archived.stderr || archived.stdout || 'unknown error').trim()}`)
+  await chmod(assetArchivePath, 0o640)
+  const assetListing = spawnSync('tar', ['-tzf', assetArchivePath], { env: process.env, encoding: 'utf8' })
+  if (assetListing.status !== 0) throw new Error(`EPC asset snapshot validation failed: ${(assetListing.stderr || assetListing.stdout || 'invalid archive').trim()}`)
+  const assetFile = await stat(assetArchivePath)
+  assetArchive = {
+    filename: basename(assetArchivePath), format: 'tar-gzip', bytes: assetFile.size,
+    sha256: await sha256File(assetArchivePath),
+    fileCount: assetListing.stdout.split('\n').filter((line) => line && !line.endsWith('/')).length,
+  }
+}
 const manifest = {
   manifestVersion: 'dashboard-postgres-backup-v1',
   createdAt: new Date().toISOString(),
   database,
   releaseRevision: process.env.RELEASE_REVISION || '',
-  archive: { filename: `${backupName}.dump`, format: 'postgres-custom', bytes: file.size, sha256: createHash('sha256').update(dumpBuffer).digest('hex') },
+  postgres: { serverMajorVersion, pgDump, pgRestore },
+  archive: { filename: `${backupName}.dump`, format: 'postgres-custom', bytes: file.size, sha256: await sha256File(dumpPath) },
+  assetArchive,
   counts,
   schemaMigrations,
   verification: { pgRestoreList: 'passed', objectCount: listedObjects },
 }
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o640 })
 await chmod(manifestPath, 0o640)
-process.stdout.write(`${JSON.stringify({ dumpPath, manifestPath, bytes: file.size, counts })}\n`)
+process.stdout.write(`${JSON.stringify({ dumpPath, manifestPath, assetArchivePath: assetArchive ? assetArchivePath : '', bytes: file.size, counts })}\n`)

@@ -16,8 +16,10 @@ import { createCatalogEpcAssetRepository } from './catalog-epc-asset-repository.
 import { createCatalogEpcAssetStorage } from './catalog-epc-asset-storage.mjs'
 import { createCatalogLegacyMigrationRepository } from './catalog-legacy-migration-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
+import { resolveReleaseRevision } from './release-info.mjs'
 
 const pool = createPool()
+const releaseRevision = await resolveReleaseRevision()
 const catalogRepository = createCatalogRepository(pool)
 const catalogImportMappingRepository = createCatalogImportMappingRepository(pool)
 const catalogDictionaryGovernanceRepository = createCatalogDictionaryGovernanceRepository(pool)
@@ -38,6 +40,7 @@ const app = buildApp({
   catalogEpcAssetRepository: createCatalogEpcAssetRepository(pool),
   catalogEpcAssetStorage: createCatalogEpcAssetStorage(),
   catalogLegacyMigrationRepository: createCatalogLegacyMigrationRepository(pool),
+  releaseRevision,
   readinessCheck: async () => {
     const schema = await migrationReadiness(pool)
     const database = (await pool.query('SELECT current_database() AS name')).rows[0].name
