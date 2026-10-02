@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs'
 import { access, chmod, mkdir, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { createPool } from '../src/db.mjs'
+import { resolveReleaseRevision } from '../src/release-info.mjs'
 
 const outputDirectory = resolve(process.argv[2] || process.env.CATALOG_BACKUP_DIR || './backups')
 const database = process.env.PGDATABASE || 'dashboard_sku'
@@ -18,6 +19,7 @@ const assetDirectory = String(process.env.CATALOG_EPC_ASSET_DIR || '').trim()
 const assetArchivePath = assetDirectory ? resolve(outputDirectory, `${backupName}.epc-assets.tar.gz`) : ''
 const backupPurpose = String(process.env.BACKUP_PURPOSE || 'manual').trim().toLowerCase()
 if (!/^[a-z][a-z0-9_-]{0,31}$/.test(backupPurpose)) throw new Error('BACKUP_PURPOSE must be a short machine-readable label')
+const releaseRevision = await resolveReleaseRevision()
 
 async function sha256File(path) {
   const hash = createHash('sha256')
@@ -83,7 +85,7 @@ const manifest = {
   createdAt: new Date().toISOString(),
   purpose: backupPurpose,
   database,
-  releaseRevision: process.env.RELEASE_REVISION || '',
+  releaseRevision,
   postgres: { serverMajorVersion, pgDump, pgRestore },
   archive: { filename: `${backupName}.dump`, format: 'postgres-custom', bytes: file.size, sha256: await sha256File(dumpPath) },
   assetArchive,
