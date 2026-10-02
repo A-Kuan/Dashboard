@@ -14,6 +14,7 @@ import { createCatalogEpcConnectorService } from './catalog-epc-connector-servic
 import { createCatalogEpcConnectorRunRepository } from './catalog-epc-connector-run-repository.mjs'
 import { createCatalogEpcAssetRepository } from './catalog-epc-asset-repository.mjs'
 import { createCatalogEpcAssetStorage } from './catalog-epc-asset-storage.mjs'
+import { createCatalogLegacyMigrationRepository } from './catalog-legacy-migration-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
 
 const pool = createPool()
@@ -36,6 +37,7 @@ const app = buildApp({
   catalogEpcConnectorRunRepository: createCatalogEpcConnectorRunRepository(pool),
   catalogEpcAssetRepository: createCatalogEpcAssetRepository(pool),
   catalogEpcAssetStorage: createCatalogEpcAssetStorage(),
+  catalogLegacyMigrationRepository: createCatalogLegacyMigrationRepository(pool),
   readinessCheck: async () => {
     const schema = await migrationReadiness(pool)
     const database = (await pool.query('SELECT current_database() AS name')).rows[0].name

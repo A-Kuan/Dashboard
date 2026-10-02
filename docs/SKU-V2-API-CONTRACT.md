@@ -4,6 +4,14 @@
 
 新工作台只接入 `/api/v2/catalog/*`。旧 `/api/v1/skus/*` 暂时保留用于兼容和数据迁移，不作为新功能的依赖。
 
+### 旧 SKU 受控迁移
+
+- `GET /api/v2/catalog/legacy-migration-preview?q=&page=&pageSize=`：只读比对旧 SKU、OE 关系、适配与当前字典/新资料库，返回字段映射、来源哈希、阻断问题、复核提示和建议选择；不会写入数据。
+- `POST /api/v2/catalog/legacy-migrations`：资料录入及以上角色提交迁移原因与明确选中的 `{legacySkuId, sourceHash}`。服务端重新读取并校验来源哈希，只把无阻断问题的记录写为 `draft / unverified`，旧表不修改、不删除。
+- `GET /api/v2/catalog/legacy-migrations/:id`：读取批次与逐条成功、跳过、失败结果。
+
+每条成功迁移都保存旧来源快照、映射快照、操作者、批次和 `migrate_legacy` 变更记录；重复提交同一旧 SKU 会返回 `skipped`，来源在预览后变化会返回冲突并要求重新预览。旧适配条件与图片地址在无法无损结构化时保留在来源快照并标记人工复核，不静默猜测标准字段。
+
 v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件编号、互换关系、车型适配和变更快照分别存储，避免继续扩展旧 SKU 大表。
 
 服务探针分为 `GET /api/health`（进程存活）和 `GET /api/ready`（数据库与迁移账本就绪）。部署切流必须使用后者；账本缺迁移或已执行脚本校验值变化时返回 503。

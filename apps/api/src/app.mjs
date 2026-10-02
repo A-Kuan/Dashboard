@@ -37,7 +37,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -90,6 +90,26 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.get('/api/v2/catalog/session', async (request) => {
     const actor = resolveCatalogActor(request)
     return { ...actor, availableRoles: actor.development ? Object.values(catalogRoles) : [] }
+  })
+  app.get('/api/v2/catalog/legacy-migration-preview', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.preview({ query: request.query?.q, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/catalog/legacy-migrations', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    return reply.code(201).send(await catalogLegacyMigrationRepository.commit(request.body, actor.name))
+  })
+  app.get('/api/v2/catalog/legacy-migrations/:id', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const batch = await catalogLegacyMigrationRepository.getBatch(request.params.id)
+    if (!batch) return reply.code(404).send({ error: 'LEGACY_MIGRATION_NOT_FOUND', message: '迁移批次不存在' })
+    return batch
   })
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {

@@ -30,6 +30,18 @@ export function getCatalogSession() {
   return request('/api/v2/catalog/session')
 }
 
+export function getLegacySkuMigrationPreview({ query = '', page = 1, pageSize = 100 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (query.trim()) params.set('q', query.trim())
+  return request(`/api/v2/catalog/legacy-migration-preview?${params}`)
+}
+
+export function commitLegacySkuMigration(items, reason) {
+  return request('/api/v2/catalog/legacy-migrations', {
+    method: 'POST', body: JSON.stringify({ items: items.map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash })), reason }),
+  })
+}
+
 function displayTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
