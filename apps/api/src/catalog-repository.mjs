@@ -781,7 +781,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions, epcConnectorRuns, epcAssets, epcAssetAttempts] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions, epcConnectorRuns, epcAssets, epcAssetAttempts, legacyMigrationBatches, legacyMigrations, legacyMigrationItems] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -805,6 +805,9 @@ export function createCatalogRepository(pool) {
         pool.query('SELECT * FROM catalog_epc_connector_run ORDER BY started_at,id'),
         pool.query('SELECT * FROM catalog_epc_asset ORDER BY created_at,id'),
         pool.query('SELECT * FROM catalog_epc_asset_attempt ORDER BY started_at,id'),
+        pool.query('SELECT * FROM catalog_legacy_migration_batch ORDER BY created_at,id'),
+        pool.query('SELECT * FROM catalog_legacy_sku_migration ORDER BY migrated_at,legacy_sku_id'),
+        pool.query('SELECT * FROM catalog_legacy_migration_item ORDER BY created_at,id'),
       ])
       const relations = {
         identifierResolutions: resolutions.rows.map((row) => ({
@@ -885,6 +888,21 @@ export function createCatalogRepository(pool) {
           errorCode: row.error_code, errorMessage: row.error_message, checksumSha256: row.checksum_sha256,
           byteSize: Number(row.byte_size), createdBy: row.created_by, startedAt: row.started_at, completedAt: row.completed_at,
         })),
+        legacyMigrationBatches: legacyMigrationBatches.rows.map((row) => ({
+          id: row.id, state: row.state, selectedCount: row.selected_count, migratedCount: row.migrated_count,
+          skippedCount: row.skipped_count, failedCount: row.failed_count, reason: row.reason, summary: row.summary,
+          createdBy: row.created_by, createdAt: row.created_at, completedAt: row.completed_at,
+        })),
+        legacyMigrations: legacyMigrations.rows.map((row) => ({
+          legacySkuId: row.legacy_sku_id, catalogSkuId: row.catalog_sku_id, batchId: row.batch_id,
+          sourceHash: row.source_hash, sourceSnapshot: row.source_snapshot, mappingSnapshot: row.mapping_snapshot,
+          migratedBy: row.migrated_by, migratedAt: row.migrated_at,
+        })),
+        legacyMigrationItems: legacyMigrationItems.rows.map((row) => ({
+          id: row.id, batchId: row.batch_id, legacySkuId: row.legacy_sku_id, sourceHash: row.source_hash,
+          state: row.state, catalogSkuId: row.catalog_sku_id, errorCode: row.error_code,
+          errorMessage: row.error_message, mappingSnapshot: row.mapping_snapshot, createdAt: row.created_at,
+        })),
       }
       const payload = { items, relations }
       const checksum = createHash('sha256').update(JSON.stringify(payload)).digest('hex')
@@ -909,6 +927,9 @@ export function createCatalogRepository(pool) {
           epcConnectorRuns: relations.epcConnectorRuns.length,
           epcAssets: relations.epcAssets.length,
           epcAssetAttempts: relations.epcAssetAttempts.length,
+          legacyMigrationBatches: relations.legacyMigrationBatches.length,
+          legacyMigrations: relations.legacyMigrations.length,
+          legacyMigrationItems: relations.legacyMigrationItems.length,
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,
         },

@@ -31,6 +31,7 @@ import { CatalogOperatorMenu } from './CatalogOperatorMenu'
 import { SkuBulkActionDialog } from './SkuBulkActionDialog'
 import { SkuExportDialog } from './SkuExportDialog'
 import { SkuEpcIntake } from './SkuEpcIntake'
+import { SkuLegacyMigration } from './SkuLegacyMigration'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -48,6 +49,7 @@ const changeActionLabels = {
   resolve_identifier_conflict: '处理编号冲突',
   merge_absorb: '吸收合并资料', merge_retire: '合并后停用',
   fitment_approve: '适配审核通过', fitment_reject: '适配退回补充', fitment_conflict: '适配标记冲突',
+  migrate_legacy: '从旧资料库迁移',
 }
 const pageSize = 30
 const allowDemoData = import.meta.env.DEV
@@ -72,6 +74,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [exportOpen, setExportOpen] = useState(false)
   const [qualityOpen, setQualityOpen] = useState(false)
   const [epcOpen, setEpcOpen] = useState(false)
+  const [legacyMigrationOpen, setLegacyMigrationOpen] = useState(false)
   const [versionDialogChange, setVersionDialogChange] = useState(null)
   const [bulkAction, setBulkAction] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
@@ -226,6 +229,16 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     )
   }
 
+  if (legacyMigrationOpen) {
+    return (
+      <div className={`workbench-home sku-workspace legacy-migration-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
+        <SkuLegacyMigration capabilities={catalogSession?.capabilities || []} onBack={() => { setLegacyMigrationOpen(false); loadCatalog() }} onCompleted={() => loadCatalog()} onNotify={notify} />
+        {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
+      </div>
+    )
+  }
+
   return (
     <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
@@ -247,6 +260,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
             <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.export') || dataMode !== 'live'} onClick={() => setExportOpen(true)}><DownloadSimple size={20} weight="bold" />导出资料</button>
             <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.read')} onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
+            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.read')} onClick={() => setLegacyMigrationOpen(true)}><ClockCounterClockwise size={20} weight="bold" />旧资料迁移</button>
             <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.import')} onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
             <button className="sku-primary-action" type="button" disabled={!hasCapability('catalog.edit')} onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
           </section>
