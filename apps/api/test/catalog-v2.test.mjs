@@ -34,6 +34,25 @@ function createCatalogRepository() {
       const filtered = withIssues.filter((item) => (!status || item.lifecycleStatus === status) && (!issue || item.qualityIssues.includes(issue)) && (['draft', 'review'].includes(item.lifecycleStatus) || item.qualityIssues.length))
       return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: { draft: filtered.filter((item) => item.lifecycleStatus === 'draft').length, review: filtered.filter((item) => item.lifecycleStatus === 'review').length }, issueCounts: { fitment: filtered.filter((item) => item.qualityIssues.includes('fitment')).length } }
     },
+    async fitmentReviewQueue({ state = 'pending', page = 1, pageSize = 50 } = {}) {
+      const all = items.flatMap((item) => item.fitments.map((fitment) => ({ id: fitment.id, skuId: item.id, skuCode: item.identity.skuCode, skuName: item.identity.nameZh, primaryOe: item.identifiers.find((entry) => entry.isPrimary)?.rawValue || '', skuVersion: item.version, fitment, risks: [], evidence: item.evidence[0] || null })))
+      const filtered = all.filter((item) => !state || item.fitment.verificationStatus === state)
+      return { items: filtered, total: filtered.length, page: Number(page), pageSize: Number(pageSize), statusCounts: Object.fromEntries(['pending', 'verified', 'rejected', 'conflict'].map((value) => [value, all.filter((item) => item.fitment.verificationStatus === value).length])) }
+    },
+    async reviewFitment(id, input, actor) {
+      const item = items.find((candidate) => candidate.fitments.some((fitment) => fitment.id === id))
+      if (!item) return null
+      if (item.version !== input.expectedSkuVersion) throw conflict(item.version)
+      const fitment = item.fitments.find((candidate) => candidate.id === id)
+      if (fitment.reviewVersion !== input.expectedReviewVersion) throw conflict(fitment.reviewVersion)
+      fitment.verificationStatus = { approve: 'verified', reject: 'rejected', conflict: 'conflict' }[input.decision]
+      fitment.reviewNote = input.note
+      fitment.reviewedBy = actor
+      fitment.reviewVersion += 1
+      item.version += 1
+      changes.get(item.id).unshift({ version: item.version, action: `fitment_${input.decision}`, changedBy: actor, snapshot: structuredClone(item) })
+      return { sku: item, fitment, risks: [] }
+    },
     async metrics({ days = 30 } = {}) {
       return { days: Number(days), statusCounts: { draft: items.filter((item) => item.lifecycleStatus === 'draft').length }, issueCounts: { fitment: items.filter((item) => item.completenessScore < 100).length }, completeness: { low: 1, medium: 0, complete: 0 }, reviews: { submitted: 0, approved: 0, rejected: 0, avg_hours: 0, overdue: 0 }, imports: { batches: 0, total_rows: 0, imported_rows: 0, failed_rows: 0, successRate: 0 }, activity: [] }
     },
@@ -112,6 +131,7 @@ function createCatalogRepository() {
     async get(id) { return find(id) },
     async create(input, actor) {
       const item = { id: `catalog-${nextId++}`, ...structuredClone(input), identity: { ...input.identity, skuCode: input.identity.skuCode || `SKU-AUTO-${nextId}` }, version: 1, createdBy: actor, updatedBy: actor }
+      item.fitments = item.fitments.map((fitment, index) => ({ ...fitment, id: fitment.id || `${item.id}-fitment-${index + 1}`, reviewVersion: fitment.reviewVersion || 1 }))
       items.push(item)
       changes.set(item.id, [{ version: 1, action: 'create_draft', changedBy: actor, snapshot: structuredClone(item) }])
       return { ...item, changes: changes.get(item.id) }
@@ -121,6 +141,7 @@ function createCatalogRepository() {
       if (item.version !== expectedVersion) throw conflict(item.version)
       const wasDraft = item.lifecycleStatus === 'draft'
       Object.assign(item, structuredClone(input), { version: item.version + 1, lifecycleStatus: 'draft', verificationLevel: 'unverified', reviewAssignee: '', updatedBy: actor })
+      item.fitments = item.fitments.map((fitment, index) => ({ ...fitment, id: fitment.id || `${item.id}-fitment-${index + 1}`, reviewVersion: fitment.reviewVersion || 1 }))
       changes.get(item.id).unshift({ version: item.version, action: wasDraft ? 'update_draft' : 'update_requires_review', changedBy: actor, snapshot: structuredClone(item) })
       return item
     },
@@ -281,7 +302,7 @@ test('catalog v2 requires traceable complete data before verification', async ()
     identity: { ...draft.identity, brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
     evidence: [{ clientKey: 'epc-1', sourceType: 'vin_epc', sourceSystem: 'Porsche EPC', sourceRecordId: '601-05-01', catalogPath: '前桥/制动器' }],
     identifiers: [{ clientKey: 'oe-1', type: 'oe', rawValue: '95B 698 151 H', isPrimary: true, evidenceKey: 'epc-1' }],
-    fitments: [{ vehicleLabel: 'Porsche Macan (95B)', years: '2014-2018', engineCodes: ['CYP'], evidenceKey: 'epc-1' }],
+    fitments: [{ vehiclePlatformId: '95B', vehicleLabel: 'Porsche Macan (95B)', years: '2014-2018', yearFrom: 2014, yearTo: 2018, engineCodes: ['CYP'], evidenceKey: 'epc-1' }],
   } })
   assert.equal(completed.statusCode, 200)
   assert.equal(completed.json().completenessScore, 100)
@@ -290,28 +311,37 @@ test('catalog v2 requires traceable complete data before verification', async ()
   const submitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 2, assignee: '资料审核员' } })
   assert.equal(submitted.statusCode, 200)
   assert.equal(submitted.json().lifecycleStatus, 'review')
-  const verified = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 3 } })
+  const blockedByFitment = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 3 } })
+  assert.equal(blockedByFitment.statusCode, 422)
+  assert.equal(blockedByFitment.json().error, 'FITMENT_REVIEW_REQUIRED')
+  const fitmentQueue = await app.inject('/api/v2/catalog/fitments/review?state=pending')
+  assert.equal(fitmentQueue.statusCode, 200)
+  assert.equal(fitmentQueue.json().items[0].skuId, draft.id)
+  const fitmentReviewed = await app.inject({ method: 'POST', url: `/api/v2/catalog/fitments/${completed.json().fitments[0].id}/review`, payload: { expectedSkuVersion: 3, expectedReviewVersion: 1, decision: 'approve', note: 'EPC 车型、年款与发动机范围一致' } })
+  assert.equal(fitmentReviewed.statusCode, 200)
+  assert.equal(fitmentReviewed.json().fitment.verificationStatus, 'verified')
+  const verified = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/verify`, payload: { expectedVersion: 4 } })
   assert.equal(verified.statusCode, 200)
   assert.equal(verified.json().lifecycleStatus, 'verified')
   assert.equal((await app.inject(`/api/v2/catalog/skus/${draft.id}/changes`)).json().items[0].action, 'approve_review')
-  const editedAfterApproval = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 4, identity: { nameZh: '前刹车片（修订）' } } })
+  const editedAfterApproval = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 5, identity: { nameZh: '前刹车片（修订）' } } })
   assert.equal(editedAfterApproval.statusCode, 200)
   assert.equal(editedAfterApproval.json().lifecycleStatus, 'draft')
   assert.equal(editedAfterApproval.json().verificationLevel, 'unverified')
-  const resubmitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 5, assignee: '审核员甲' } })
+  const resubmitted = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 6, assignee: '审核员甲' } })
   assert.equal(resubmitted.json().lifecycleStatus, 'review')
-  const assigned = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'assign_review', expectedVersion: 6, assignee: '审核员乙' } })
+  const assigned = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'assign_review', expectedVersion: 7, assignee: '审核员乙' } })
   assert.equal(assigned.json().reviewAssignee, '审核员乙')
-  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 7 } })).statusCode, 409)
-  const rejectedForEdit = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 7, note: '请补充适配条件说明' } })
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 8 } })).statusCode, 409)
+  const rejectedForEdit = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reject_review', expectedVersion: 8, note: '请补充适配条件说明' } })
   assert.equal(rejectedForEdit.json().lifecycleStatus, 'draft')
-  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 8, assignee: '审核员乙' } })
-  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'approve_review', expectedVersion: 9 } })
-  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 10 } })).statusCode, 409)
-  const discontinued = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 10, note: '编号已被替代' } })
+  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'submit_review', expectedVersion: 9, assignee: '审核员乙' } })
+  await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'approve_review', expectedVersion: 10 } })
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 11 } })).statusCode, 409)
+  const discontinued = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'discontinue', expectedVersion: 11, note: '编号已被替代' } })
   assert.equal(discontinued.json().lifecycleStatus, 'discontinued')
-  assert.equal((await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 11, identity: { nameZh: '不应保存' } } })).statusCode, 409)
-  const reopened = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reopen', expectedVersion: 11, note: '重新确认编号' } })
+  assert.equal((await app.inject({ method: 'PATCH', url: `/api/v2/catalog/skus/${draft.id}`, payload: { expectedVersion: 12, identity: { nameZh: '不应保存' } } })).statusCode, 409)
+  const reopened = await app.inject({ method: 'POST', url: `/api/v2/catalog/skus/${draft.id}/transition`, payload: { action: 'reopen', expectedVersion: 12, note: '重新确认编号' } })
   assert.equal(reopened.json().lifecycleStatus, 'draft')
   await app.close()
 })
@@ -347,6 +377,11 @@ test('catalog v2 exposes development roles and enforces write capabilities', asy
   const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '录入员甲' }, payload: { identity: { nameZh: '允许创建' } } })
   assert.equal(created.statusCode, 201)
   assert.equal(created.json().createdBy, '录入员甲')
+  const fitmentDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/fitments/missing/review', headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedSkuVersion: 1, expectedReviewVersion: 1, decision: 'approve', note: '无权审核' } })
+  assert.equal(fitmentDenied.statusCode, 403)
+  assert.equal(fitmentDenied.json().details.capability, 'catalog.review_fitment')
+  const reviewerAllowed = await app.inject({ method: 'POST', url: '/api/v2/catalog/fitments/missing/review', headers: { 'x-operator-role': 'catalog_reviewer' }, payload: { expectedSkuVersion: 1, expectedReviewVersion: 1, decision: 'approve', note: '允许审核' } })
+  assert.equal(reviewerAllowed.statusCode, 404)
   await app.close()
 })
 

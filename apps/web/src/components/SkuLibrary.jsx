@@ -46,6 +46,7 @@ const changeActionLabels = {
   restore_version: '恢复历史版本', update_requires_review: '编辑后重新审核',
   resolve_identifier_conflict: '处理编号冲突',
   merge_absorb: '吸收合并资料', merge_retire: '合并后停用',
+  fitment_approve: '适配审核通过', fitment_reject: '适配退回补充', fitment_conflict: '适配标记冲突',
 }
 const pageSize = 30
 const emptyRecord = {
@@ -205,7 +206,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
+        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )

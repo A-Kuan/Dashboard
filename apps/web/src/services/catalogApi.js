@@ -65,7 +65,13 @@ export function mapCatalogSku(item) {
       id: identifier.id, type: identifier.isPrimary ? '主 OE' : identifier.type || '其他编号', value: identifier.rawValue, relation: identifier.isPrimary ? '当前号' : '参考编号', isPrimary: identifier.isPrimary,
     })),
     fitments: (item.fitments || []).map((fitment) => ({
-      id: fitment.id, vehicle: fitment.vehicleLabel, years: fitment.years, condition: fitment.includeConditions?.note || fitment.position || '适配条件待补充',
+      id: fitment.id, vehicle: fitment.vehicleLabel, platformId: fitment.vehiclePlatformId || '', years: fitment.years,
+      yearFrom: fitment.yearFrom, yearTo: fitment.yearTo, engineCodes: fitment.engineCodes || [], marketCodes: fitment.marketCodes || [],
+      prCodes: fitment.prCodes || [], bodyStyles: fitment.bodyStyles || [], position: fitment.position || '',
+      condition: fitment.includeConditions?.note || '', exclusion: fitment.excludeConditions?.note || '',
+      evidenceId: fitment.evidenceId || '', verificationStatus: fitment.verificationStatus || 'pending',
+      reviewNote: fitment.reviewNote || '', reviewedBy: fitment.reviewedBy || '', reviewedAt: fitment.reviewedAt || '',
+      reviewVersion: fitment.reviewVersion || 1,
     })),
     evidence: {
       system: evidence.sourceSystem || '手工录入', catalog: evidence.catalogPath || '—', figure: evidence.figurePosition || '—',
@@ -113,6 +119,20 @@ export async function listCatalogQuality({ issue = '', status = '', assignee = '
   if (assignee) params.set('assignee', assignee)
   const result = await request(`/api/v2/catalog/quality?${params}`)
   return { ...result, records: result.items.map((item) => ({ ...mapCatalogSku(item), aggregate: null })) }
+}
+
+export function listCatalogFitmentReview({ state = 'pending', query = '', page = 1, pageSize = 100 } = {}) {
+  const params = new URLSearchParams({ state, page: String(page), pageSize: String(pageSize) })
+  if (query.trim()) params.set('q', query.trim())
+  return request(`/api/v2/catalog/fitments/review?${params}`)
+}
+
+export function reviewCatalogFitment(item, decision, note) {
+  return request(`/api/v2/catalog/fitments/${encodeURIComponent(item.id)}/review`, {
+    method: 'POST', body: JSON.stringify({
+      expectedSkuVersion: item.skuVersion, expectedReviewVersion: item.fitment.reviewVersion, decision, note,
+    }),
+  })
 }
 
 export async function transitionCatalogSku(record, action, { note = '', assignee = '', dueAt = '' } = {}) {
@@ -469,6 +489,20 @@ export function mergeCatalogSkus(conflict, survivorSkuId, reason) {
 
 const sourceTypeMap = { epc: 'vin_epc', oe: 'oe_lookup', import: 'import', manual: 'manual' }
 
+function parsedYears(value) {
+  const matches = String(value || '').match(/(19|20)\d{2}/g) || []
+  return { yearFrom: matches[0] ? Number(matches[0]) : null, yearTo: matches[1] ? Number(matches[1]) : matches[0] ? Number(matches[0]) : null }
+}
+
+function inferredPlatformId(value) {
+  return String(value || '').match(/\(([^)]+)\)/)?.[1]?.trim().toUpperCase() || ''
+}
+
+function valueList(value) {
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean)
+  return String(value || '').split(/[,，/]/).map((item) => item.trim()).filter(Boolean)
+}
+
 export function draftToCatalogPayload(draft, source) {
   const hasEvidence = draft.evidence.sourceSystem && draft.evidence.sourceSystem !== '手工录入'
   const evidence = hasEvidence ? [{
@@ -491,10 +525,17 @@ export function draftToCatalogPayload(draft, source) {
     },
     evidence,
     identifiers,
-    fitments: draft.fitments.filter((item) => item.vehicle.trim()).map((item) => ({
-      vehicleLabel: item.vehicle, years: item.years, includeConditions: item.condition ? { note: item.condition } : {},
-      evidenceKey: hasEvidence ? 'source-0' : '', verificationStatus: 'pending',
-    })),
+    fitments: draft.fitments.filter((item) => item.vehicle.trim()).map((item) => {
+      const range = parsedYears(item.years)
+      return {
+        id: item.persistedId || '', vehiclePlatformId: item.platformId || inferredPlatformId(item.vehicle), vehicleLabel: item.vehicle,
+        years: item.years, yearFrom: item.yearFrom || range.yearFrom, yearTo: item.yearTo || range.yearTo,
+        engineCodes: valueList(item.engineCodes), marketCodes: valueList(item.marketCodes), prCodes: valueList(item.prCodes),
+        bodyStyles: valueList(item.bodyStyles), position: item.position || '',
+        includeConditions: item.condition ? { note: item.condition } : {}, excludeConditions: item.exclusion ? { note: item.exclusion } : {},
+        evidenceKey: hasEvidence ? 'source-0' : '', verificationStatus: 'pending',
+      }
+    }),
     interchanges: [],
   }
 }

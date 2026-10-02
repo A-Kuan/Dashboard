@@ -52,7 +52,20 @@ function mapFitment(row) {
     prCodes: row.pr_codes || [], bodyStyles: row.body_styles || [], position: row.position,
     includeConditions: row.include_conditions || {}, excludeConditions: row.exclude_conditions || {},
     evidenceId: row.source_evidence_id || '', verificationStatus: row.verification_status, sortOrder: row.sort_order,
+    reviewNote: row.review_note || '', reviewedBy: row.reviewed_by || '', reviewedAt: row.reviewed_at,
+    reviewVersion: Number(row.review_version || 1),
   }
+}
+
+function fitmentRisks(row) {
+  const risks = []
+  if (!row.vehicle_platform_id) risks.push({ code: 'missingPlatform', label: '缺少标准平台编码', blocking: true })
+  if (!(row.year_from && row.year_to) && !row.years) risks.push({ code: 'missingYears', label: '缺少年款边界', blocking: true })
+  if (!row.source_evidence_id) risks.push({ code: 'missingEvidence', label: '缺少关联证据', blocking: true })
+  if (!row.position && !(row.pr_codes || []).length && !Object.keys(row.include_conditions || {}).length && !Object.keys(row.exclude_conditions || {}).length) {
+    risks.push({ code: 'missingConditions', label: '适配条件过于宽泛', blocking: false })
+  }
+  return risks
 }
 
 function mapInterchange(row) {
@@ -71,6 +84,14 @@ function mapReviewEvent(row) {
   return {
     id: row.id, fromStatus: row.from_status, toStatus: row.to_status, action: row.action,
     note: row.note, assignee: row.assignee, changedBy: row.changed_by, changedAt: row.changed_at, skuVersion: row.sku_version,
+  }
+}
+
+function mapFitmentReviewEvent(row) {
+  return {
+    id: row.id, fitmentId: row.fitment_id, fromStatus: row.from_status, toStatus: row.to_status,
+    action: row.action, note: row.note, fitmentSnapshot: row.fitment_snapshot || {}, skuVersion: row.sku_version,
+    changedBy: row.changed_by, changedAt: row.changed_at,
   }
 }
 
@@ -98,6 +119,7 @@ function mapSku(row, children = {}) {
     interchanges: (children.interchanges || []).map(mapInterchange),
     changes: (children.changes || []).map(mapChange),
     reviewEvents: (children.reviewEvents || []).map(mapReviewEvent),
+    fitmentReviewEvents: (children.fitmentReviewEvents || []).map(mapFitmentReviewEvent),
   }
 }
 
@@ -128,11 +150,20 @@ function transitionError(message) {
   return error
 }
 
+function fitmentReviewError(message, statusCode = 400, errorCode = 'INVALID_FITMENT_REVIEW', details) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  error.errorCode = errorCode
+  if (details) error.details = details
+  return error
+}
+
 const qualityIssueExpression = `ARRAY_REMOVE(ARRAY[
   CASE WHEN s.canonical_name_zh='' AND s.canonical_name_en='' THEN 'identity' END,
   CASE WHEN (s.brand_code='' AND s.brand_label='') OR (s.category_code='' AND s.category_label='') THEN 'classification' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_part_identifier qi WHERE qi.sku_id=s.id AND qi.is_primary AND qi.normalized_value<>'') THEN 'primaryIdentifier' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id) THEN 'fitment' END,
+  CASE WHEN EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id AND qf.verification_status<>'verified') THEN 'fitmentReview' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_source_evidence qe WHERE qe.sku_id=s.id AND (qe.source_system<>'' OR qe.source_record_id<>'' OR qe.catalog_path<>'' OR qe.raw_payload<>'{}'::jsonb)) THEN 'evidence' END,
   CASE WHEN EXISTS (
     SELECT 1 FROM catalog_part_identifier own_i
@@ -155,7 +186,8 @@ export function createCatalogRepository(pool) {
     const interchanges = await client.query('SELECT * FROM catalog_interchange_relation WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
     const changes = includeChanges ? await client.query('SELECT * FROM catalog_change_log WHERE sku_id=$1 ORDER BY version DESC, changed_at DESC', [skuId]) : null
     const reviewEvents = includeChanges ? await client.query('SELECT * FROM catalog_review_event WHERE sku_id=$1 ORDER BY changed_at DESC', [skuId]) : null
-    return { identifiers: identifiers.rows, evidence: evidence.rows, fitments: fitments.rows, interchanges: interchanges.rows, changes: changes?.rows || [], reviewEvents: reviewEvents?.rows || [] }
+    const fitmentReviewEvents = includeChanges ? await client.query('SELECT * FROM catalog_fitment_review_event WHERE sku_id=$1 ORDER BY changed_at DESC', [skuId]) : null
+    return { identifiers: identifiers.rows, evidence: evidence.rows, fitments: fitments.rows, interchanges: interchanges.rows, changes: changes?.rows || [], reviewEvents: reviewEvents?.rows || [], fitmentReviewEvents: fitmentReviewEvents?.rows || [] }
   }
 
   async function addChange(client, skuId, version, action, input, actor, details = {}) {
@@ -196,11 +228,12 @@ export function createCatalogRepository(pool) {
 
     for (const item of input.fitments) {
       await client.query(`INSERT INTO catalog_fitment
-        (id,sku_id,vehicle_platform_id,vehicle_label,years,year_from,year_to,engine_codes,market_codes,pr_codes,body_styles,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,sort_order)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16,$17)`,
+        (id,sku_id,vehicle_platform_id,vehicle_label,years,year_from,year_to,engine_codes,market_codes,pr_codes,body_styles,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,review_note,reviewed_by,reviewed_at,review_version,sort_order)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19::timestamptz,$20,$21)`,
       [item.id || randomUUID(), skuId, item.vehiclePlatformId || null, item.vehicleLabel, item.years, item.yearFrom, item.yearTo,
         item.engineCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.position, JSON.stringify(item.includeConditions),
-        JSON.stringify(item.excludeConditions), evidenceIds.get(item.evidenceKey || item.evidenceId) || null, item.verificationStatus, item.sortOrder])
+        JSON.stringify(item.excludeConditions), evidenceIds.get(item.evidenceKey || item.evidenceId) || null, item.verificationStatus,
+        item.reviewNote || '', item.reviewedBy || '', item.reviewedAt || null, item.reviewVersion || 1, item.sortOrder])
     }
 
     for (const item of input.interchanges) {
@@ -543,6 +576,95 @@ export function createCatalogRepository(pool) {
       }
     },
 
+    async fitmentReviewQueue({ state = 'pending', query = '', page = 1, pageSize = 50 } = {}) {
+      const allowedStates = new Set(['', 'pending', 'verified', 'rejected', 'conflict'])
+      if (!allowedStates.has(state)) throw fitmentReviewError('不支持的适配审核状态')
+      const safePage = Math.max(1, Number(page) || 1)
+      const safeSize = Math.min(100, Math.max(1, Number(pageSize) || 50))
+      const clauses = ["s.lifecycle_status<>'discontinued'"]
+      const values = []
+      if (state) { values.push(state); clauses.push(`f.verification_status=$${values.length}`) }
+      const keyword = String(query || '').trim().toLowerCase()
+      if (keyword) {
+        values.push(`%${keyword}%`, `%${normalizeSearchIdentifier(keyword)}%`)
+        clauses.push(`(lower(concat_ws(' ',s.sku_code,s.canonical_name_zh,s.brand_label,f.vehicle_label,f.vehicle_platform_id,f.years,f.position)) LIKE $${values.length - 1}
+          OR EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.normalized_value LIKE $${values.length}))`)
+      }
+      const where = `WHERE ${clauses.join(' AND ')}`
+      const base = `FROM catalog_fitment f
+        JOIN catalog_sku s ON s.id=f.sku_id
+        LEFT JOIN catalog_source_evidence e ON e.id=f.source_evidence_id`
+      const countValues = [...values]
+      const [count, statusCounts] = await Promise.all([
+        pool.query(`SELECT count(*)::int AS total ${base} ${where}`, countValues),
+        pool.query(`SELECT f.verification_status,count(*)::int AS count ${base} WHERE s.lifecycle_status<>'discontinued' GROUP BY f.verification_status`),
+      ])
+      values.push(safeSize, (safePage - 1) * safeSize)
+      const { rows } = await pool.query(`SELECT f.*,s.sku_code,s.canonical_name_zh,s.brand_label,s.lifecycle_status,s.version AS sku_version,
+        (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
+        e.source_system,e.source_record_id,e.catalog_path,e.figure_position,e.original_name,e.confidence AS evidence_confidence
+        ${base} ${where}
+        ORDER BY CASE f.verification_status WHEN 'pending' THEN 0 WHEN 'conflict' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
+          s.updated_at DESC,f.sort_order LIMIT $${values.length - 1} OFFSET $${values.length}`, values)
+      return {
+        items: rows.map((row) => ({
+          id: row.id, skuId: row.sku_id, skuCode: row.sku_code, skuName: row.canonical_name_zh || '未命名零件',
+          brand: row.brand_label || '', primaryOe: row.primary_identifier || '', lifecycleStatus: row.lifecycle_status,
+          skuVersion: row.sku_version, fitment: mapFitment(row), risks: fitmentRisks(row),
+          evidence: row.source_evidence_id ? {
+            id: row.source_evidence_id, sourceSystem: row.source_system || '', sourceRecordId: row.source_record_id || '',
+            catalogPath: row.catalog_path || '', figurePosition: row.figure_position || '', originalName: row.original_name || '',
+            confidence: row.evidence_confidence || 'pending',
+          } : null,
+        })),
+        total: count.rows[0].total, page: safePage, pageSize: safeSize,
+        statusCounts: Object.fromEntries(statusCounts.rows.map((row) => [row.verification_status, row.count])),
+      }
+    },
+
+    async reviewFitment(id, input, actor = '系统操作员') {
+      const expectedSkuVersion = Number(input?.expectedSkuVersion)
+      const expectedReviewVersion = Number(input?.expectedReviewVersion)
+      const decision = String(input?.decision || '').trim()
+      const note = String(input?.note || '').trim()
+      const targetStatus = { approve: 'verified', reject: 'rejected', conflict: 'conflict' }[decision]
+      if (!targetStatus) throw fitmentReviewError('请选择有效的适配审核结论')
+      if (!Number.isInteger(expectedSkuVersion) || expectedSkuVersion < 1) throw fitmentReviewError('expectedSkuVersion 必须是正整数')
+      if (!Number.isInteger(expectedReviewVersion) || expectedReviewVersion < 1) throw fitmentReviewError('expectedReviewVersion 必须是正整数')
+      if (!note) throw fitmentReviewError('请填写适配审核结论')
+      return withTransaction(pool, async (client) => {
+        const current = (await client.query(`SELECT f.*,s.version AS sku_version,s.lifecycle_status
+          FROM catalog_fitment f JOIN catalog_sku s ON s.id=f.sku_id WHERE f.id=$1 FOR UPDATE OF f,s`, [id])).rows[0]
+        if (!current) return null
+        if (current.sku_version !== expectedSkuVersion) throw versionConflict(current.sku_version)
+        if (current.review_version !== expectedReviewVersion) {
+          throw fitmentReviewError(`适配关系已被其他操作更新（当前版本 v${current.review_version}）`, 409, 'FITMENT_REVIEW_VERSION_CONFLICT', { currentVersion: current.review_version })
+        }
+        const risks = fitmentRisks(current)
+        const blockingRisks = risks.filter((risk) => risk.blocking)
+        if (decision === 'approve' && blockingRisks.length) {
+          throw fitmentReviewError('适配关系仍缺少必要边界，暂时不能通过', 422, 'FITMENT_REVIEW_BLOCKED', { risks: blockingRisks })
+        }
+        const { rows } = await client.query(`UPDATE catalog_fitment SET verification_status=$2,review_note=$3,reviewed_by=$4,
+          reviewed_at=now(),review_version=review_version+1 WHERE id=$1 RETURNING *`, [id, targetStatus, note, actor])
+        const sku = (await client.query(`UPDATE catalog_sku SET
+          lifecycle_status=CASE WHEN lifecycle_status='verified' AND $3<>'verified' THEN 'draft' ELSE lifecycle_status END,
+          verification_level=CASE WHEN lifecycle_status='verified' AND $3<>'verified' THEN 'unverified' ELSE verification_level END,
+          updated_by=$2,updated_at=now(),version=version+1 WHERE id=$1 RETURNING *`, [current.sku_id, actor, targetStatus])).rows[0]
+        const fitment = mapFitment(rows[0])
+        await client.query(`INSERT INTO catalog_fitment_review_event
+          (id,sku_id,fitment_id,from_status,to_status,action,note,fitment_snapshot,sku_version,changed_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)`, [randomUUID(), current.sku_id, id, current.verification_status,
+          targetStatus, decision, note, JSON.stringify(fitment), sku.version, actor])
+        const aggregate = await getWith(client, current.sku_id)
+        await addChange(client, current.sku_id, sku.version, `fitment_${decision}`, aggregate, actor, {
+          fitmentId: id, vehiclePlatformId: fitment.vehiclePlatformId, vehicleLabel: fitment.vehicleLabel,
+          fitmentStatus: targetStatus, reviewNote: note,
+        })
+        return { sku: await getWith(client, current.sku_id, true), fitment, risks: fitmentRisks(rows[0]) }
+      })
+    },
+
     async metrics({ days = 30 } = {}) {
       const safeDays = Math.min(90, Math.max(7, Number(days) || 30))
       const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000)
@@ -637,6 +759,7 @@ export function createCatalogRepository(pool) {
           fitments: items.reduce((sum, item) => sum + item.fitments.length, 0),
           evidence: items.reduce((sum, item) => sum + item.evidence.length, 0),
           changes: items.reduce((sum, item) => sum + item.changes.length, 0),
+          fitmentReviewEvents: items.reduce((sum, item) => sum + item.fitmentReviewEvents.length, 0),
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,
         },

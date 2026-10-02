@@ -77,7 +77,14 @@ CatalogSku
 | `include_conditions` | jsonb | 必须满足条件 |
 | `exclude_conditions` | jsonb | 排除条件 |
 | `source_evidence_id` | UUID | 每条适配必须可追溯 |
-| `verification_status` | enum | pending/verified/rejected |
+| `verification_status` | enum | pending/verified/rejected/conflict |
+| `review_note` | text | 最近一次审核结论 |
+| `reviewed_by/reviewed_at` | text/timestamptz | 最近审核人和时间 |
+| `review_version` | integer | 适配关系独立乐观锁版本 |
+
+### `catalog_fitment_review_event`
+
+适配审核事件采用追加写模型，保存 `sku_id`、`fitment_id`、前后状态、`approve/reject/conflict` 动作、必填结论、完整适配快照、当时 SKU 版本、操作人与时间。即使后续编辑重新生成适配子记录，历史判断仍保留在 SKU 审计链中。适配审核会同时写入 `catalog_change_log`，因此版本恢复、导出审计包和变更记录能够解释一条关系为何通过或被退回。
 
 ### `source_evidence`
 

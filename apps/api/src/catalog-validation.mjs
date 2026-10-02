@@ -107,7 +107,9 @@ function normalizeFitment(item, index) {
     engineCodes: stringList(item.engineCodes), marketCodes: stringList(item.marketCodes), prCodes: stringList(item.prCodes),
     bodyStyles: stringList(item.bodyStyles), position: text(item.position), includeConditions: object(item.includeConditions),
     excludeConditions: object(item.excludeConditions), evidenceId: text(item.evidenceId), evidenceKey: text(item.evidenceKey),
-    verificationStatus: text(item.verificationStatus) || 'pending', sortOrder: index,
+    verificationStatus: text(item.verificationStatus) || 'pending', reviewNote: text(item.reviewNote), reviewedBy: text(item.reviewedBy),
+    reviewedAt: text(item.reviewedAt), reviewVersion: Number.isInteger(Number(item.reviewVersion)) && Number(item.reviewVersion) > 0 ? Number(item.reviewVersion) : 1,
+    sortOrder: index,
   }
 }
 
@@ -166,6 +168,31 @@ export function normalizeCatalogInput(input = {}, existing = null) {
   return { ...normalized, lifecycleStatus: existing?.lifecycleStatus || 'draft', verificationLevel: existing?.verificationLevel || 'unverified', ...catalogQuality(normalized) }
 }
 
+function fitmentReviewFingerprint(item) {
+  return JSON.stringify({
+    vehiclePlatformId: item.vehiclePlatformId, vehicleLabel: item.vehicleLabel, years: item.years, yearFrom: item.yearFrom, yearTo: item.yearTo,
+    engineCodes: item.engineCodes, marketCodes: item.marketCodes, prCodes: item.prCodes, bodyStyles: item.bodyStyles, position: item.position,
+    includeConditions: item.includeConditions, excludeConditions: item.excludeConditions,
+  })
+}
+
+export function sanitizeCatalogFitmentReviews(input, existing = null) {
+  const existingById = new Map((existing?.fitments || []).filter((item) => item.id).map((item) => [item.id, item]))
+  return {
+    ...input,
+    fitments: input.fitments.map((item) => {
+      const previous = existingById.get(item.id)
+      if (previous && fitmentReviewFingerprint(item) === fitmentReviewFingerprint(previous)) {
+        return {
+          ...item, verificationStatus: previous.verificationStatus || 'pending', reviewNote: previous.reviewNote || '',
+          reviewedBy: previous.reviewedBy || '', reviewedAt: previous.reviewedAt || '', reviewVersion: previous.reviewVersion || 1,
+        }
+      }
+      return { ...item, verificationStatus: 'pending', reviewNote: '', reviewedBy: '', reviewedAt: '', reviewVersion: 1 }
+    }),
+  }
+}
+
 export function validateCatalogVerifiable(input) {
   const quality = catalogQuality(input)
   if (quality.issues.length) {
@@ -176,5 +203,17 @@ export function validateCatalogVerifiable(input) {
     throw error
   }
   return { ...input, ...quality }
+}
+
+export function validateCatalogFitmentsReviewed(input) {
+  const pending = input.fitments.filter((item) => item.verificationStatus !== 'verified')
+  if (pending.length) {
+    const error = new Error('仍有适配关系未通过专项审核')
+    error.statusCode = 422
+    error.errorCode = 'FITMENT_REVIEW_REQUIRED'
+    error.details = { issues: ['fitmentReview'], fitmentIds: pending.map((item) => item.id).filter(Boolean) }
+    throw error
+  }
+  return input
 }
 import { createHash } from 'node:crypto'

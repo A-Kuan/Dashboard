@@ -42,6 +42,8 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/skus/:id/changes`：读取变更历史及当时的完整快照。
 - `POST /api/v2/catalog/skus/:id/restore`：提交 `expectedVersion`、`sourceVersion` 和必填的 `reason`，把历史快照中的业务资料恢复为一个新的草稿版本。
 - `GET /api/v2/catalog/quality`：读取数据质量与审核队列，可按 `issue`、`status`、`assignee` 筛选。
+- `GET /api/v2/catalog/fitments/review`：读取适配专项审核队列，可按 `state` 与关键词筛选，并返回平台、年款、条件、证据和阻断风险。
+- `POST /api/v2/catalog/fitments/:id/review`：资料审核员提交 `expectedSkuVersion`、`expectedReviewVersion`、必填结论和 `approve/reject/conflict` 决定。
 - `GET /api/v2/catalog/conflicts`：读取有效 SKU 之间的规范化编号冲突及已有处理结论。
 - `POST /api/v2/catalog/conflicts/resolve`：对一组 SKU 与编号写入带版本锁的人工判断和依据。
 - `POST /api/v2/catalog/conflicts/merge-preview`：在不写入数据的前提下，预览主 SKU、停用 SKU、迁移内容、去重数量及不会自动覆盖的主资料差异。
@@ -66,7 +68,9 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 批量状态操作返回 `succeeded`、`failed`、`results` 和 `failures`。部分失败不会撤销已经成功的记录，也不会跳过单条资料原有的审核事件与变更快照；调用方需要明确展示失败原因并允许重新选择处理。
 
-质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。
+质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、适配专项审核、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。适配关系可以在 SKU 提交审核前后处理，但所有关系必须处于 `verified` 才能批准整条 SKU。录入员不能自行写入已通过状态；新增或实质修改平台、年款、发动机、PR 码、位置、包含/排除条件时，关系自动回到 `pending`。
+
+适配审批要求平台编码、年款边界和来源证据齐全；缺失任一项时返回 `422 FITMENT_REVIEW_BLOCKED`。审核会同时提升适配关系版本和 SKU 版本，写入不可覆盖的 `catalog_fitment_review_event` 及 SKU 变更快照。并发版本不一致分别返回 `CATALOG_VERSION_CONFLICT` 或 `FITMENT_REVIEW_VERSION_CONFLICT`。`catalog.review_fitment` 仅授予资料审核和资料管理员角色。
 
 编号冲突支持三种结论：`shared_reference`（合法共用参考号）、`separate_scope`（适用范围不同）和 `merge_required`（确认为重复、待合并）。前两种结论会解除对应 SKU 对之间的质量阻断；`merge_required` 继续保留冲突，防止资料在真正合并前通过审核。每次判断必须填写依据，同时提升两条 SKU 的版本并分别写入 `resolve_identifier_conflict` 变更快照。
 
@@ -134,8 +138,11 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
     "evidenceKey": "epc-1"
   }],
   "fitments": [{
+    "vehiclePlatformId": "95B",
     "vehicleLabel": "Porsche Macan (95B)",
     "years": "2014-2018",
+    "yearFrom": 2014,
+    "yearTo": 2018,
     "engineCodes": ["CYP"],
     "evidenceKey": "epc-1"
   }]
