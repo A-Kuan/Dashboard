@@ -79,6 +79,20 @@ test('separates process health from database readiness', async () => {
   await unavailable.close()
 })
 
+test('serves the versioned SKU import specification and CSV template', async () => {
+  const app = buildApp({ logger: false })
+  const specification = await app.inject('/api/v2/catalog/import-template')
+  assert.equal(specification.statusCode, 200)
+  assert.equal(specification.json().schemaVersion, 'catalog-import-template-v1')
+  assert.equal(specification.json().fields.find((field) => field.key === 'primaryOe').required, true)
+  const csv = await app.inject('/api/v2/catalog/import-template?format=csv')
+  assert.equal(csv.statusCode, 200)
+  assert.match(csv.headers['content-type'], /^text\/csv/)
+  assert.match(csv.headers['content-disposition'], /hushanxing-sku-import-template\.csv/)
+  assert.match(csv.body, /中文名称,英文名称/)
+  await app.close()
+})
+
 test('creates, lists, reads and updates a SKU', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })

@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { normalizeCatalogInput, normalizeIdentifierValue } from './catalog-validation.mjs'
-
-const maxRows = 500
+import { buildImportPreflightReport, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
 
 function text(value) {
   return String(value ?? '').trim()
@@ -60,6 +59,7 @@ function mapJob(row, rows = [], attempts = []) {
     importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
     createdAt: row.created_at, committedAt: row.committed_at, version: row.version,
     attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
+    preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows }),
     rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
   }
 }
@@ -104,7 +104,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
       const rows = Array.isArray(input?.rows) ? input.rows : []
       if (!sourceName) throw invalid('sourceName 不能为空')
       if (!rows.length) throw invalid('导入文件没有可处理的数据行')
-      if (rows.length > maxRows) throw invalid(`单次最多导入 ${maxRows} 行`)
+      if (rows.length > catalogImportTemplateSpec.maxRows) throw invalid(`单次最多导入 ${catalogImportTemplateSpec.maxRows} 行`)
 
       const intakeId = randomUUID()
       const normalizedRows = rows.map((row, index) => normalizeRow(row, index + 2, sourceName, intakeId))

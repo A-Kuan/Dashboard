@@ -3,6 +3,7 @@ import { normalizeSkuInput, requireSkuVersion, validatePublishableSku } from './
 import { normalizeVehicleInput, requireVehicleVersion } from './vehicle-validation.mjs'
 import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, validateCatalogVerifiable } from './catalog-validation.mjs'
 import { catalogRoles, requireCatalogCapability, resolveCatalogActor } from './catalog-access.mjs'
+import { catalogImportTemplateCsv, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
 
 const transitionCapabilities = {
   submit_review: 'catalog.submit',
@@ -46,6 +47,15 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       request.log.warn({ err: error, code: error.code }, 'readiness check failed')
       return reply.code(503).send({ status: 'not_ready', service: 'dashboard-sku-api', error: error.code || 'DATABASE_UNAVAILABLE' })
     }
+  })
+  app.get('/api/v2/catalog/import-template', async (request, reply) => {
+    const format = String(request.query?.format || 'json').toLowerCase()
+    if (format === 'json') return catalogImportTemplateSpec
+    if (format === 'csv') {
+      reply.header('content-disposition', 'attachment; filename="hushanxing-sku-import-template.csv"')
+      return reply.type('text/csv; charset=utf-8').send(catalogImportTemplateCsv())
+    }
+    return reply.code(400).send({ error: 'INVALID_IMPORT_TEMPLATE_FORMAT', message: '仅支持 JSON 或 CSV 模板' })
   })
   app.get('/api/v2/catalog/session', async (request) => {
     const actor = resolveCatalogActor(request)

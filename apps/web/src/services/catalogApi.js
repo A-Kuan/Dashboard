@@ -180,6 +180,31 @@ export function parseCatalogCsv(text) {
   ))
 }
 
+export function getCatalogImportTemplate() {
+  return request('/api/v2/catalog/import-template')
+}
+
+export async function downloadCatalogImportTemplate() {
+  const response = await fetch(`${apiBase}/api/v2/catalog/import-template?format=csv`, {
+    headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.message || `模板下载失败（${response.status}）`)
+  }
+  const disposition = response.headers.get('content-disposition') || ''
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'hushanxing-sku-import-template.csv'
+  const url = window.URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+  return { filename }
+}
+
 export function previewCatalogImport(sourceName, rows) {
   return request('/api/v2/catalog/imports', { method: 'POST', body: JSON.stringify({ sourceName, rows }) })
 }

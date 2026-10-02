@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, Check, CheckCircle, ClockCounterClockwise, DownloadSimple, FileCsv, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { commitCatalogImport, getCatalogImport, listCatalogImports, parseCatalogCsv, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, listCatalogImports, parseCatalogCsv, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
 import '../sku-import.css'
-
-const template = `中文名称,英文名称,品牌,分类,单位,主 OE,车型,年款范围,适配条件,来源系统,来源记录ID
-前刹车片,"Brake pad set, front",Porsche OE,制动系统 / 制动片,件,95B 698 151 H,Macan (95B),2014-2018,前轴且排除 PSCB,Porsche PET,698-05-12`
 
 const rowState = {
   ready: { label: '可导入', className: 'ready' },
@@ -16,6 +13,13 @@ const rowState = {
   retrying: { label: '正在重试', className: 'duplicate' },
 }
 
+const preflightDecision = {
+  ready: { title: '可安全进入试运行', note: '未发现阻断项或重复记录。', className: 'ready' },
+  ready_with_warnings: { title: '可导入，建议后续补全', note: '必需字段已通过，但部分业务资料仍不完整。', className: 'warning' },
+  review_required: { title: '需要人工确认重复项', note: '已有资料中存在相同或高度相似的 OE 编号。', className: 'warning' },
+  blocked: { title: '存在阻断项', note: '不完整行不会写入，请先修正原文件。', className: 'blocked' },
+}
+
 const jobState = {
   preview: { label: '待确认', className: 'duplicate' }, committing: { label: '写入中', className: 'duplicate' },
   retrying: { label: '重试中', className: 'duplicate' }, completed: { label: '已完成', className: 'ready' }, partial: { label: '部分失败', className: 'invalid' },
@@ -24,15 +28,6 @@ const jobState = {
 function displayTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
-}
-
-function downloadTemplate() {
-  const url = URL.createObjectURL(new Blob([`\uFEFF${template}`], { type: 'text/csv;charset=utf-8' }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = 'SKU资料导入模板.csv'
-  anchor.click()
-  URL.revokeObjectURL(url)
 }
 
 export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
@@ -49,6 +44,15 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [historyState, setHistoryState] = useState('')
   const [historyLoading, setHistoryLoading] = useState(false)
   const [selectedJob, setSelectedJob] = useState(null)
+  const [templateSpec, setTemplateSpec] = useState(null)
+  const [fieldGuideOpen, setFieldGuideOpen] = useState(false)
+  const [templateBusy, setTemplateBusy] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    getCatalogImportTemplate().then((result) => { if (active) setTemplateSpec(result) }).catch(() => {})
+    return () => { active = false }
+  }, [])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -70,6 +74,19 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     setHistoryLoading(true)
     setError('')
     try { setSelectedJob(await getCatalogImport(id)) } catch (reason) { setError(reason.message || '批次详情加载失败') } finally { setHistoryLoading(false) }
+  }
+
+  const downloadTemplate = async () => {
+    setTemplateBusy(true)
+    setError('')
+    try {
+      const result = await downloadCatalogImportTemplate()
+      onNotify?.(`已下载 ${result.filename}`)
+    } catch (reason) {
+      setError(reason.message || '模板下载失败')
+    } finally {
+      setTemplateBusy(false)
+    }
   }
 
   const handleFile = async (file) => {
@@ -151,14 +168,23 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
         <div className="sku-import-body">
           {mode === 'new' && step === 'upload' ? <>
             <input ref={inputRef} type="file" accept=".csv,text/csv" hidden onChange={(event) => handleFile(event.target.files?.[0])} />
-            <button className={`sku-import-dropzone ${dragging ? 'dragging' : ''}`} type="button" onClick={() => inputRef.current?.click()} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); handleFile(event.dataTransfer.files?.[0]) }}>
-              <span><UploadSimple size={28} weight="bold" /></span><strong>{busy ? '正在预检查…' : '选择或拖入 CSV 文件'}</strong><small>最多 500 行、2 MB；不会直接写入资料库</small>
-            </button>
-            <div className="sku-import-guidance"><div><strong>必需列</strong><span>中文名称或英文名称、主 OE</span></div><div><strong>建议列</strong><span>品牌、分类、车型、年款、来源系统</span></div><button type="button" onClick={downloadTemplate}><DownloadSimple size={17} />下载 CSV 模板</button></div>
+            <div className="sku-import-onboarding">
+              <button className={`sku-import-dropzone ${dragging ? 'dragging' : ''}`} type="button" onClick={() => inputRef.current?.click()} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); handleFile(event.dataTransfer.files?.[0]) }}>
+                <span><UploadSimple size={28} weight="bold" /></span><strong>{busy ? '正在预检查…' : '选择或拖入 CSV 文件'}</strong><small>最多 {templateSpec?.maxRows || 500} 行、2 MB；不会直接写入资料库</small>
+              </button>
+              <aside className="sku-import-readiness">
+                <div className="sku-import-readiness-title"><span><ClipboardText size={20} weight="duotone" /></span><div><strong>先用标准模板整理</strong><small>{templateSpec?.schemaVersion || '正在读取字段规范…'}</small></div></div>
+                <ol><li><b>1</b><span><strong>保留原始编号</strong><small>OE 分隔格式与来源记录不要改写</small></span></li><li><b>2</b><span><strong>补齐适配边界</strong><small>车型、年款与排除条件尽量一起填写</small></span></li><li><b>3</b><span><strong>先预检查再写入</strong><small>重复和阻断项都会由人确认</small></span></li></ol>
+                <div><button className="primary-template" type="button" disabled={templateBusy} onClick={downloadTemplate}><DownloadSimple size={17} />{templateBusy ? '正在下载…' : '下载标准模板'}</button><button type="button" aria-expanded={fieldGuideOpen} onClick={() => setFieldGuideOpen((value) => !value)}>查看字段说明 <CaretDown className={fieldGuideOpen ? 'open' : ''} size={15} /></button></div>
+              </aside>
+            </div>
+            {fieldGuideOpen ? <section className="sku-import-field-guide"><header><div><strong>字段说明</strong><span>模板与导入校验使用同一版规范</span></div><em>{templateSpec?.fields?.length || 0} 个字段</em></header><div>{(templateSpec?.fields || []).map((field) => <article key={field.key}><span><strong>{field.label}</strong>{field.required === 'one_of_name' ? <i>二选一</i> : field.required ? <i className="required">必需</i> : field.recommended ? <i>建议</i> : <i className="optional">可选</i>}</span><p>{field.description}</p><small>示例：{field.example || '—'}</small></article>)}</div></section> : null}
           </> : null}
 
           {mode === 'new' && step === 'preview' ? <>
+            {job.preflight ? (() => { const decision = preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>警告</dt><dd>{job.preflight.warningCount} 项</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
             <div className="sku-import-summary"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
+            {job.preflight ? <div className="sku-preflight-grid"><section><header><strong>资料覆盖率</strong><span>不阻断导入，但会影响后续核验</span></header><div className="sku-preflight-coverage">{job.preflight.coverage.map((item) => <div key={item.field}><span><b>{item.label}</b><em>{item.present}/{item.total} · {item.percent}%</em></span><i><b style={{ width: `${item.percent}%` }} /></i></div>)}</div></section><section><header><strong>问题汇总</strong><span>按严重程度与影响行数排序</span></header><div className="sku-preflight-issues">{job.preflight.issueSummary.slice(0, 5).map((issue) => <div className={issue.severity} key={issue.code}><span>{issue.severity === 'error' ? <WarningCircle size={16} weight="fill" /> : <WarningCircle size={16} />}</span><p><strong>{issue.message}</strong><small>{issue.count} 行受影响</small></p></div>)}{!job.preflight.issueSummary.length ? <div className="clear"><span><CheckCircle size={17} weight="fill" /></span><p><strong>未发现字段问题</strong><small>可继续检查逐行结果</small></p></div> : null}</div></section></div> : null}
             <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? `匹配 ${row.duplicateMatches.length} 条已有资料` : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
             <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>疑似重复项默认不选中。勾选表示你已确认它应作为独立 SKU 写入，系统不会自动覆盖已有资料。</span></div>
           </> : null}
