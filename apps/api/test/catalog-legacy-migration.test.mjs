@@ -45,19 +45,49 @@ test('blocks legacy records without an identifier and flags unresolved dictionar
   assert.ok(mapped.issues.some((issue) => issue.code === 'unmappedBrand' && !issue.blocking))
 })
 
+test('applies reviewed dictionary overrides without changing the legacy snapshot', () => {
+  const extended = {
+    ...dictionaries,
+    sku_brand: { items: [...dictionaries.sku_brand.items, { value: 'AUDI', label: 'Audi', enabled: true }] },
+    unit: { items: [...dictionaries.unit.items, { value: 'set', label: '套', enabled: true }] },
+  }
+  const snapshot = legacySnapshot()
+  const mapped = mapLegacySku(snapshot, extended, { brandCode: 'AUDI', unitCode: 'set' })
+  assert.equal(mapped.input.identity.brandCode, 'AUDI')
+  assert.equal(mapped.input.identity.unitCode, 'set')
+  assert.equal(snapshot.sku.brand, 'Porsche')
+  assert.equal(mapped.mapping.brand.overridden, true)
+  assert.throws(() => mapLegacySku(snapshot, extended, { categoryCode: 'MISSING' }), /不在当前字典中/)
+})
+
 test('legacy migration routes are read-visible but writes require import capability', async () => {
   const repository = {
     preview: async () => ({ items: [], total: 0, summary: { pending: 0 } }),
     commit: async (_input, actor) => ({ id: 'batch-1', state: 'succeeded', createdBy: actor }),
     getBatch: async (id) => id === 'batch-1' ? { id, state: 'succeeded' } : null,
+    createPlan: async (_input, actor) => ({ id: 'plan-1', state: 'submitted', version: 1, createdBy: actor }),
+    listPlans: async () => ({ items: [], total: 0 }),
+    getPlan: async (id) => id === 'plan-1' ? { id, state: 'submitted', version: 1 } : null,
+    reviewPlan: async (id, input, actor) => ({ id, state: input.decision === 'approve' ? 'approved' : 'rejected', reviewedBy: actor }),
+    commitPlan: async (id, _input, actor) => ({ id, state: 'committed', committedBy: actor }),
   }
   const app = buildApp({ catalogLegacyMigrationRepository: repository, logger: false })
   const preview = await app.inject('/api/v2/catalog/legacy-migration-preview')
   assert.equal(preview.statusCode, 200)
   const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { items: [], reason: '测试' } })
   assert.equal(denied.statusCode, 403)
-  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '迁移员' }, payload: { items: [{ legacySkuId: 'legacy-1', sourceHash: 'hash' }], reason: '经审核迁移' } })
-  assert.equal(created.statusCode, 201)
-  assert.equal(created.json().createdBy, '迁移员')
+  const directCommit = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migrations', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '迁移员' }, payload: { items: [{ legacySkuId: 'legacy-1', sourceHash: 'hash' }], reason: '经审核迁移' } })
+  assert.equal(directCommit.statusCode, 409)
+  assert.equal(directCommit.json().error, 'LEGACY_MIGRATION_PLAN_REQUIRED')
+  const planDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { items: [], reason: '测试' } })
+  assert.equal(planDenied.statusCode, 403)
+  const planCreated = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '迁移员' }, payload: { items: [{ legacySkuId: 'legacy-1' }], reason: '提交审核' } })
+  assert.equal(planCreated.statusCode, 201)
+  assert.equal(planCreated.json().state, 'submitted')
+  const reviewDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/review', headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedVersion: 1, decision: 'approve' } })
+  assert.equal(reviewDenied.statusCode, 403)
+  const reviewed = await app.inject({ method: 'POST', url: '/api/v2/catalog/legacy-migration-plans/plan-1/review', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '审核员' }, payload: { expectedVersion: 1, decision: 'approve' } })
+  assert.equal(reviewed.statusCode, 200)
+  assert.equal(reviewed.json().reviewedBy, '审核员')
   await app.close()
 })

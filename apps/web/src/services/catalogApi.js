@@ -36,9 +36,29 @@ export function getLegacySkuMigrationPreview({ query = '', page = 1, pageSize = 
   return request(`/api/v2/catalog/legacy-migration-preview?${params}`)
 }
 
-export function commitLegacySkuMigration(items, reason) {
-  return request('/api/v2/catalog/legacy-migrations', {
-    method: 'POST', body: JSON.stringify({ items: items.map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash })), reason }),
+export function createLegacyMigrationPlan(items, reason) {
+  return request('/api/v2/catalog/legacy-migration-plans', { method: 'POST', body: JSON.stringify({ items, reason }) })
+}
+
+export function listLegacyMigrationPlans({ state = '', limit = 30 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (state) params.set('state', state)
+  return request(`/api/v2/catalog/legacy-migration-plans?${params}`)
+}
+
+export function getLegacyMigrationPlan(id) {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(id)}`)
+}
+
+export function reviewLegacyMigrationPlan(plan, decision, note = '') {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(plan.id)}/review`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: plan.version, decision, note }),
+  })
+}
+
+export function commitLegacyMigrationPlan(plan) {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(plan.id)}/commit`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: plan.version }),
   })
 }
 
