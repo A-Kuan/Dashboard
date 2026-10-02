@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, Copy, DownloadSimple, FileCsv, FingerprintSimple, MagnifyingGlass, PencilSimple, Plus, Power, ShieldCheck, SlidersHorizontal, Trash, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, resolveCatalogImportValues, retryCatalogImport, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules, updateCatalogImportValueMappings } from '../services/catalogApi'
+import { applyCatalogImportRules, catalogImportFieldDefinitions, cloneCatalogImportMapping, commitCatalogImport, createCatalogDictionaryProposal, downloadCatalogImportTemplate, getCatalogDictionaryConfig, getCatalogImport, getCatalogImportMapping, getCatalogImportTemplate, getCatalogSession, inspectCatalogCsv, listCatalogDictionaryProposals, listCatalogImportMappings, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, resolveCatalogImportValues, retryCatalogImport, reviewCatalogDictionaryProposal, saveCatalogImportMapping, updateCatalogImportMapping, updateCatalogImportMappingRules, updateCatalogImportValueMappings } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
@@ -29,6 +29,8 @@ const jobState = {
 const profileChangeLabel = { create: '创建方案', update_mapping: '更新字段映射', update_rules: '更新导入规则', update_value_mappings: '更新值映射', resolve_value_mapping: '批次异常学习', rename: '重命名', deactivate: '停用方案', reactivate: '恢复方案', clone: '复制方案' }
 const transformRuleLabel = { normalizeFullWidth: '全角转半角', trimText: '清理首尾空白', collapseWhitespace: '合并连续空白', uppercaseOe: 'OE 编号转大写' }
 const valueMappingFieldLabel = { brand: '品牌', category: '分类', unit: '单位' }
+const valueMappingDictionaryCode = { brand: 'sku_brand', category: 'part_category', unit: 'unit' }
+const proposalStateLabel = { pending: '待审核', approved: '已通过', rejected: '已驳回' }
 
 function displayTime(value) {
   if (!value) return '—'
@@ -93,12 +95,37 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [profileValueMappingsDraft, setProfileValueMappingsDraft] = useState(null)
   const [profileBusy, setProfileBusy] = useState(false)
   const [valueResolutionDraft, setValueResolutionDraft] = useState({})
+  const [dictionaryConfig, setDictionaryConfig] = useState({ version: 0, dictionaries: {} })
+  const [catalogSession, setCatalogSession] = useState(null)
+  const [proposalDraft, setProposalDraft] = useState({})
+  const [proposalBusy, setProposalBusy] = useState(false)
+  const [governanceItems, setGovernanceItems] = useState([])
+  const [governanceState, setGovernanceState] = useState('pending')
+  const [governanceLoading, setGovernanceLoading] = useState(false)
+  const [proposalReviewNotes, setProposalReviewNotes] = useState({})
 
   useEffect(() => {
     let active = true
     getCatalogImportTemplate().then((result) => { if (active) setTemplateSpec(result) }).catch(() => {})
+    getCatalogDictionaryConfig().then((result) => { if (active) setDictionaryConfig(result) }).catch(() => {})
+    getCatalogSession().then((result) => { if (active) setCatalogSession(result) }).catch(() => {})
     return () => { active = false }
   }, [])
+
+  const loadGovernance = useCallback(async () => {
+    setGovernanceLoading(true)
+    setError('')
+    try {
+      const result = await listCatalogDictionaryProposals(governanceState)
+      setGovernanceItems(result.items || [])
+    } catch (reason) {
+      setError(reason.message || '标准值申请加载失败')
+    } finally {
+      setGovernanceLoading(false)
+    }
+  }, [governanceState])
+
+  useEffect(() => { if (mode === 'governance') loadGovernance() }, [loadGovernance, mode])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -295,7 +322,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   }
 
   const toggleRow = (row) => {
-    if (!['ready', 'duplicate', 'review'].includes(row.state)) return
+    if (!['ready', 'duplicate'].includes(row.state)) return
     setSelected((current) => {
       const next = new Set(current)
       if (next.has(row.id)) next.delete(row.id)
@@ -347,16 +374,56 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     setBusy(true)
     setError('')
     try {
-      const result = await resolveCatalogImportValues(job, resolutions)
+      const result = await resolveCatalogImportValues(job, dictionaryConfig.version, resolutions)
       setJob(result)
       setSelected(new Set(result.rows.filter((row) => row.state === 'ready').map((row) => row.id)))
       setValueResolutionDraft({})
       onNotify?.(`已学习 ${resolutions.length} 条供应商值，并重新检查当前批次`)
     } catch (reason) {
       if (['IMPORT_VERSION_CONFLICT', 'IMPORT_MAPPING_VERSION_CONFLICT'].includes(reason.code)) setJob(await getCatalogImport(job.id).catch(() => job))
+      if (reason.code === 'DICTIONARY_VERSION_CONFLICT') setDictionaryConfig(await getCatalogDictionaryConfig().catch(() => dictionaryConfig))
       setError(reason.message || '异常值处理失败')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const submitDictionaryProposal = async (item) => {
+    const key = `${item.field}:${item.value}`
+    const draft = proposalDraft[key] || {}
+    if (!String(draft.proposedValue || '').trim() || !String(draft.reason || '').trim()) return setError('请填写建议标准值和申请原因')
+    setProposalBusy(true)
+    setError('')
+    try {
+      const result = await createCatalogDictionaryProposal({
+        field: item.field, sourceValue: item.value, proposedValue: draft.proposedValue, reason: draft.reason,
+        importJobId: job.id, mappingProfileId: job.mappingProfileId,
+      })
+      setProposalDraft((current) => ({ ...current, [key]: { ...draft, open: false, submitted: true, proposalId: result.id } }))
+      onNotify?.(result.duplicateProposal ? '已有相同标准值申请，已关联现有待审项' : '标准值申请已提交，审核通过后可用于映射')
+    } catch (reason) {
+      setError(reason.message || '标准值申请提交失败')
+    } finally {
+      setProposalBusy(false)
+    }
+  }
+
+  const reviewDictionaryProposal = async (proposal, decision) => {
+    const note = String(proposalReviewNotes[proposal.id] || '').trim()
+    if (!note) return setError('请先填写审核说明')
+    setProposalBusy(true)
+    setError('')
+    try {
+      await reviewCatalogDictionaryProposal(proposal, decision, note)
+      const nextConfig = await getCatalogDictionaryConfig()
+      setDictionaryConfig(nextConfig)
+      setProposalReviewNotes((current) => ({ ...current, [proposal.id]: '' }))
+      await loadGovernance()
+      onNotify?.(decision === 'approve' ? `“${proposal.proposedValue}”已加入标准字典 v${nextConfig.version}` : `“${proposal.proposedValue}”申请已驳回`)
+    } catch (reason) {
+      setError(reason.message || '标准值申请审核失败')
+    } finally {
+      setProposalBusy(false)
     }
   }
 
@@ -402,6 +469,10 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     }
     return grouped
   }, new Map()).values()] : []
+  const standardValueOptions = Object.fromEntries(Object.entries(valueMappingDictionaryCode).map(([field, code]) => [field,
+    (dictionaryConfig.dictionaries?.[code]?.items || []).filter((item) => item.enabled !== false && item.value !== '__all__'),
+  ]))
+  const canConfigure = catalogSession?.capabilities?.includes('catalog.configure') ?? false
 
   return (
     <div className="sku-modal-backdrop" onMouseDown={onClose}>
@@ -412,8 +483,8 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
         </header>
 
         <div className="sku-import-modebar">
-          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setStep('upload'); setMappingContext(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button><button type="button" className={mode === 'profiles' ? 'active' : ''} onClick={() => { setMode('profiles'); setSelectedProfile(null); setProfileAction(''); setError('') }}><ArrowsLeftRight size={17} />映射方案</button></div>
-          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '字段映射', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, mapping: 1, preview: 2, result: 3 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : mode === 'history' ? <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label> : <span className="sku-profile-policy">版本化管理 · 历史记录不会删除</span>}
+          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setStep('upload'); setMappingContext(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button><button type="button" className={mode === 'profiles' ? 'active' : ''} onClick={() => { setMode('profiles'); setSelectedProfile(null); setProfileAction(''); setError('') }}><ArrowsLeftRight size={17} />映射方案</button><button type="button" className={mode === 'governance' ? 'active' : ''} onClick={() => { setMode('governance'); setError('') }}><ShieldCheck size={17} />标准值治理</button></div>
+          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '字段映射', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, mapping: 1, preview: 2, result: 3 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : mode === 'history' ? <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label> : mode === 'governance' ? <span className="sku-profile-policy">字典 v{dictionaryConfig.version || '—'} · {canConfigure ? '管理员审核' : '只读查看'}</span> : <span className="sku-profile-policy">版本化管理 · 历史记录不会删除</span>}
         </div>
 
         <div className="sku-import-body">
@@ -448,9 +519,9 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             {job.preflight ? (() => { const decision = job.preflight.reviewRows && !job.preflight.duplicateMatches ? { title: '需要确认未识别的供应商值', note: '异常行默认不选中，请核对映射或明确按原值写入。', className: 'warning' } : preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>值待映射</dt><dd>{job.preflight.reviewRows || 0} 条</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
             <div className="sku-import-summary has-review"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="review"><span>值待映射</span><strong>{job.reviewRows || 0}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
             {job.preflight ? <div className="sku-preflight-grid"><section><header><strong>资料覆盖率</strong><span>不阻断导入，但会影响后续核验</span></header><div className="sku-preflight-coverage">{job.preflight.coverage.map((item) => <div key={item.field}><span><b>{item.label}</b><em>{item.present}/{item.total} · {item.percent}%</em></span><i><b style={{ width: `${item.percent}%` }} /></i></div>)}</div></section><section><header><strong>问题汇总</strong><span>按严重程度与影响行数排序</span></header><div className="sku-preflight-issues">{job.preflight.issueSummary.slice(0, 5).map((issue) => <div className={issue.severity} key={issue.code}><span>{issue.severity === 'error' ? <WarningCircle size={16} weight="fill" /> : <WarningCircle size={16} />}</span><p><strong>{issue.message}</strong><small>{issue.count} 行受影响</small></p></div>)}{!job.preflight.issueSummary.length ? <div className="clear"><span><CheckCircle size={17} weight="fill" /></span><p><strong>未发现字段问题</strong><small>可继续检查逐行结果</small></p></div> : null}</div></section></div> : null}
-            {valueReviewQueue.length ? <section className="sku-value-review-queue"><header><div><span><WarningCircle size={19} weight="fill" /></span><div><strong>供应商值异常队列</strong><small>填写标准值后会保存到“{job.mappingSnapshot?.name || '当前供应商方案'}”，并立即重新检查当前批次。</small></div></div><div className="sku-value-review-actions"><b>{valueReviewQueue.length} 个未识别值</b><button type="button" disabled={busy || !Object.values(valueResolutionDraft).some((value) => String(value).trim())} onClick={resolveValueExceptions}>{busy ? '正在重新检查…' : '保存并重新检查'}</button></div></header><div>{valueReviewQueue.map((item) => { const key = `${item.field}:${item.value}`; return <article key={key}><div><span>{valueMappingFieldLabel[item.field] || item.field}</span><strong>{item.value}</strong><small>文件第 {item.rows.join('、')} 行</small></div><ArrowRight size={15} /><label><span>标准值</span><input aria-label={`${valueMappingFieldLabel[item.field] || item.field} ${item.value} 的标准值`} value={valueResolutionDraft[key] || ''} onChange={(event) => setValueResolutionDraft((current) => ({ ...current, [key]: event.target.value }))} placeholder="输入资料库标准值" /></label></article> })}</div><footer><CheckCircle size={16} weight="fill" /><span>本次保存会生成方案 v{Number(job.mappingSnapshot?.version || 0) + 1}，原始供应商值仍保留在来源证据中。</span></footer></section> : null}
-            <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? duplicateMessage(row) : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
-            <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>疑似重复项默认不选中。勾选表示你已确认它应作为独立 SKU 写入，系统不会自动覆盖已有资料。</span></div>
+            {valueReviewQueue.length ? <section className="sku-value-review-queue"><header><div><span><WarningCircle size={19} weight="fill" /></span><div><strong>供应商值异常队列</strong><small>只能选择当前启用的标准字典值；无合适候选时提交新增申请。</small></div></div><div className="sku-value-review-actions"><b>{valueReviewQueue.length} 个未识别值</b><button type="button" disabled={busy || !Object.values(valueResolutionDraft).some(Boolean)} onClick={resolveValueExceptions}>{busy ? '正在重新检查…' : '保存并重新检查'}</button></div></header><div>{valueReviewQueue.map((item) => { const key = `${item.field}:${item.value}`; const draft = proposalDraft[key] || {}; return <article key={key}><div><span>{valueMappingFieldLabel[item.field] || item.field}</span><strong>{item.value}</strong><small>文件第 {item.rows.join('、')} 行</small></div><ArrowRight size={15} /><label><span>资料库标准值</span><select aria-label={`${valueMappingFieldLabel[item.field] || item.field} ${item.value} 的标准值`} value={valueResolutionDraft[key] || ''} onChange={(event) => setValueResolutionDraft((current) => ({ ...current, [key]: event.target.value }))}><option value="">选择启用字典值</option>{(standardValueOptions[item.field] || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button className="request-standard-value" type="button" disabled={draft.submitted} onClick={() => setProposalDraft((current) => ({ ...current, [key]: { ...draft, open: !draft.open } }))}>{draft.submitted ? '已提交新增申请' : '没有合适项？申请新增'}</button></label>{draft.open ? <div className="sku-value-proposal-form"><label><span>建议标准值</span><input aria-label={`${item.value} 建议标准值`} value={draft.proposedValue || ''} onChange={(event) => setProposalDraft((current) => ({ ...current, [key]: { ...draft, proposedValue: event.target.value } }))} placeholder="例如：BOSCH" /></label><label><span>申请原因</span><input aria-label={`${item.value} 申请原因`} value={draft.reason || ''} onChange={(event) => setProposalDraft((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} placeholder="说明标准化依据" /></label><button type="button" disabled={proposalBusy || !String(draft.proposedValue || '').trim() || !String(draft.reason || '').trim()} onClick={() => submitDictionaryProposal(item)}>{proposalBusy ? '正在提交…' : '提交审核'}</button></div> : null}</article> })}</div><footer><CheckCircle size={16} weight="fill" /><span>字典 v{dictionaryConfig.version || '—'} · 保存映射会生成方案 v{Number(job.mappingSnapshot?.version || 0) + 1}，原始供应商值仍保留。</span></footer></section> : null}
+            <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={['invalid', 'review'].includes(row.state)} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? duplicateMessage(row) : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
+            <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>值待映射行必须完成标准化后才能写入；疑似重复项仍需明确勾选，系统不会自动覆盖已有资料。</span></div>
           </> : null}
 
           {mode === 'new' && step === 'result' ? <div className="sku-import-result"><span><CheckCircle size={36} weight="fill" /></span><h3>导入批次已完成</h3><p>成功写入 {job.importedRows} 条，失败 {job.failedRows} 条；未选择或不可导入的行未写入。</p><div><strong>{job.sourceName}</strong><span>批次 {job.id.slice(0, 8)} · 版本 {job.version}</span></div><button type="button" onClick={() => { setMode('history'); setSelectedJob(job) }}>查看本次导入记录 <ArrowRight size={16} /></button></div> : null}
@@ -466,6 +537,12 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             <div className="history-detail-title"><div><h3>{selectedJob.sourceName}</h3><p>批次 {selectedJob.id.slice(0, 8)} · 指纹 {selectedJob.contentFingerprint || '—'} · 创建于 {displayTime(selectedJob.createdAt)}{selectedJob.mappingSnapshot?.name ? ` · 映射方案 ${selectedJob.mappingSnapshot.name}` : ''}</p></div><span className={`import-state ${(jobState[selectedJob.state] || {}).className || 'skipped'}`}>{(jobState[selectedJob.state] || {}).label || selectedJob.state}</span></div>
             <div className="sku-import-summary"><div><span>总行数</span><strong>{selectedJob.totalRows}</strong></div><div className="ready"><span>成功写入</span><strong>{selectedJob.importedRows}</strong></div><div className="duplicate"><span>跳过 / 无效</span><strong>{selectedJob.rows.filter((row) => ['skipped', 'invalid'].includes(row.state)).length}</strong></div><div className="invalid"><span>写入失败</span><strong>{selectedJob.failedRows}</strong></div></div>
             <div className="history-detail-grid"><section><h4>逐行结果</h4><div className="history-row-list">{selectedJob.rows.map((row) => { const state = rowState[row.state] || { label: row.state, className: 'skipped' }; const identity = row.payload?.identity || {}; const primary = row.payload?.identifiers?.find((item) => item.isPrimary); return <div key={row.id}><span>{row.rowNumber}</span><span><strong>{identity.nameZh || identity.nameEn || '未命名'}</strong><small>{primary?.rawValue || '无主 OE'}</small></span><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.errorMessage || row.issues?.map((item) => item.message).join('、') || '—'}</small></div> })}</div></section><section><h4>执行记录</h4><div className="history-attempts">{selectedJob.attempts.map((attempt) => <div key={attempt.id}><span><ArrowsClockwise size={18} weight="bold" /></span><div><strong>{attempt.attemptType === 'retry' ? `第 ${attempt.attemptNumber} 次 · 失败重试` : '首次写入'}</strong><small>{attempt.startedBy} · {displayTime(attempt.startedAt)}</small><p>选中 {attempt.selectedRows} · 成功 {attempt.importedRows} · 失败 {attempt.failedRows}</p></div></div>)}{!selectedJob.attempts.length ? <p className="history-no-attempt">尚未执行写入</p> : null}</div></section></div>
+          </div> : null}
+
+          {mode === 'governance' ? <div className="sku-governance-manager">
+            <header><div><h3>标准值治理</h3><p>供应商无法匹配现有品牌、分类或单位时，先申请、再由管理员纳入字典。</p></div><dl><div><dt>当前列表</dt><dd>{governanceItems.length}</dd></div><div><dt>字典版本</dt><dd>v{dictionaryConfig.version || '—'}</dd></div><div><dt>审核权限</dt><dd>{canConfigure ? '管理员' : '只读'}</dd></div></dl></header>
+            <div className="sku-governance-toolbar"><div><ShieldCheck size={18} weight="duotone" /><span>通过后进入正式标准字典；驳回不会改动供应商映射或当前批次。</span></div><select aria-label="标准值申请状态" value={governanceState} onChange={(event) => setGovernanceState(event.target.value)}><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option><option value="">全部记录</option></select></div>
+            <div className="sku-governance-list"><div className="sku-governance-list-head"><span>字段 / 来源值</span><span>建议标准值</span><span>申请依据</span><span>申请人 / 时间</span><span>状态与处理</span></div>{governanceItems.map((proposal) => <article key={proposal.id}><div><span>{valueMappingFieldLabel[proposal.field] || proposal.field}</span><strong>{proposal.sourceValue}</strong><small>申请 {proposal.id.slice(0, 8)}</small></div><div><strong>{proposal.proposedValue}</strong><small>{proposal.dictionaryCode}</small></div><div><p>{proposal.reason}</p>{proposal.reviewNote ? <small>审核：{proposal.reviewNote}</small> : null}</div><div><strong>{proposal.requestedBy}</strong><small>{displayTime(proposal.createdAt)}</small></div><div><span className={`proposal-state ${proposal.state}`}>{proposalStateLabel[proposal.state] || proposal.state}</span>{proposal.state === 'pending' && canConfigure ? <div className="sku-governance-review"><input aria-label={`${proposal.proposedValue} 审核说明`} value={proposalReviewNotes[proposal.id] || ''} onChange={(event) => setProposalReviewNotes((current) => ({ ...current, [proposal.id]: event.target.value }))} placeholder="填写审核说明" /><span><button type="button" disabled={proposalBusy || !String(proposalReviewNotes[proposal.id] || '').trim()} onClick={() => reviewDictionaryProposal(proposal, 'reject')}>驳回</button><button type="button" className="approve" disabled={proposalBusy || !String(proposalReviewNotes[proposal.id] || '').trim()} onClick={() => reviewDictionaryProposal(proposal, 'approve')}>通过并入字典</button></span></div> : <small>{proposal.reviewedBy ? `${proposal.reviewedBy} · ${displayTime(proposal.reviewedAt)}` : canConfigure ? '等待处理' : '仅管理员可审核'}</small>}</div></article>)}{!governanceItems.length && !governanceLoading ? <div className="sku-governance-empty"><ShieldCheck size={34} weight="duotone" /><strong>当前没有{proposalStateLabel[governanceState] || ''}申请</strong><span>异常值只能映射到启用字典，新的标准值会先进入这里。</span></div> : null}</div>
           </div> : null}
 
           {mode === 'profiles' ? <div className="sku-profile-manager">
@@ -496,7 +573,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
           {mode === 'new' && step === 'mapping' ? <button className="primary" type="button" disabled={busy || !mappingReady} onClick={confirmMapping}>{busy ? '正在预检查…' : '确认映射并预检查'}</button> : null}
           {mode === 'new' && step === 'preview' ? <button className="primary" type="button" disabled={busy || !selected.size} onClick={commit}>{busy ? '正在写入…' : `写入 ${selected.size} 条草稿`}</button> : null}
           {mode === 'new' && step === 'result' ? <button className="primary" type="button" onClick={onClose}>完成并返回资料库</button> : null}
-          {['history', 'profiles'].includes(mode) ? <button className="secondary" type="button" onClick={onClose}>关闭</button> : null}
+          {['history', 'profiles', 'governance'].includes(mode) ? <button className="secondary" type="button" onClick={onClose}>关闭</button> : null}
           {mode === 'history' && selectedJob?.state === 'partial' ? <button className="primary" type="button" disabled={busy} onClick={retryFailed}><ArrowsClockwise size={17} />{busy ? '正在重试…' : `重试 ${selectedJob.failedRows} 条失败记录`}</button> : null}
         </footer>
       </section>

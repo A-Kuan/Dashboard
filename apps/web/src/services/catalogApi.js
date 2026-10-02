@@ -141,6 +141,10 @@ export async function getCatalogDictionaries() {
   return (await request('/api/v1/dictionaries')).dictionaries || {}
 }
 
+export function getCatalogDictionaryConfig() {
+  return request('/api/v1/dictionaries')
+}
+
 export const catalogImportFieldDefinitions = [
   { key: 'nameZh', label: '中文名称', required: 'one_of_name', aliases: ['nameZh', '中文名称', '零件名称', '配件名称', '产品名称', '商品名称', '品名', '供应商品名'] },
   { key: 'nameEn', label: '英文名称', required: 'one_of_name', aliases: ['nameEn', '英文名称', '英文品名', 'English Name', 'Part Name'] },
@@ -355,14 +359,31 @@ export function commitCatalogImport(jobId, expectedVersion, rowIds) {
   return request(`/api/v2/catalog/imports/${jobId}/commit`, { method: 'POST', body: JSON.stringify({ expectedVersion, rowIds }) })
 }
 
-export function resolveCatalogImportValues(job, resolutions) {
+export function resolveCatalogImportValues(job, dictionaryVersion, resolutions) {
   return request(`/api/v2/catalog/imports/${job.id}/resolve-values`, {
     method: 'POST',
     body: JSON.stringify({
       expectedVersion: job.version,
       expectedProfileVersion: job.mappingSnapshot?.version,
+      expectedDictionaryVersion: dictionaryVersion,
       resolutions,
     }),
+  })
+}
+
+export function listCatalogDictionaryProposals(state = 'pending') {
+  const params = new URLSearchParams()
+  if (state) params.set('state', state)
+  return request(`/api/v2/catalog/dictionary-proposals?${params}`)
+}
+
+export function createCatalogDictionaryProposal(input) {
+  return request('/api/v2/catalog/dictionary-proposals', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function reviewCatalogDictionaryProposal(proposal, decision, reviewNote) {
+  return request(`/api/v2/catalog/dictionary-proposals/${proposal.id}/review`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: proposal.version, decision, reviewNote }),
   })
 }
 

@@ -35,7 +35,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
 
@@ -147,11 +147,15 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.put('/api/v1/dictionaries', async (request, reply) => {
     if (!dictionaryRepository) return reply.code(503).send({ error: 'DICTIONARY_SERVICE_UNAVAILABLE', message: '字典服务未配置' })
-    return dictionaryRepository.save(request.body, request.headers['x-operator-name'] || '系统操作员')
+    const actor = requireCatalogCapability(request, reply, 'catalog.configure')
+    if (!actor) return
+    return dictionaryRepository.save(request.body, actor.name)
   })
   app.post('/api/v1/dictionaries/reset', async (request, reply) => {
     if (!dictionaryRepository) return reply.code(503).send({ error: 'DICTIONARY_SERVICE_UNAVAILABLE', message: '字典服务未配置' })
-    return dictionaryRepository.reset(request.headers['x-operator-name'] || '系统操作员')
+    const actor = requireCatalogCapability(request, reply, 'catalog.configure')
+    if (!actor) return
+    return dictionaryRepository.reset(actor.name)
   })
 
   app.post('/api/v2/catalog/intakes', async (request, reply) => {
@@ -408,6 +412,27 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const job = await catalogImportRepository.resolveValues(request.params.id, request.body, actor.name)
     if (!job) return reply.code(404).send({ error: 'CATALOG_IMPORT_NOT_FOUND', message: '导入批次不存在' })
     return job
+  })
+  app.get('/api/v2/catalog/dictionary-proposals', async (request, reply) => {
+    if (!catalogDictionaryGovernanceRepository) return reply.code(503).send({ error: 'CATALOG_DICTIONARY_GOVERNANCE_UNAVAILABLE', message: '标准值治理服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogDictionaryGovernanceRepository.list({ state: request.query?.state })
+  })
+  app.post('/api/v2/catalog/dictionary-proposals', async (request, reply) => {
+    if (!catalogDictionaryGovernanceRepository) return reply.code(503).send({ error: 'CATALOG_DICTIONARY_GOVERNANCE_UNAVAILABLE', message: '标准值治理服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    const proposal = await catalogDictionaryGovernanceRepository.create(request.body, actor.name)
+    return reply.code(proposal.duplicateProposal ? 200 : 201).send(proposal)
+  })
+  app.post('/api/v2/catalog/dictionary-proposals/:id/review', async (request, reply) => {
+    if (!catalogDictionaryGovernanceRepository) return reply.code(503).send({ error: 'CATALOG_DICTIONARY_GOVERNANCE_UNAVAILABLE', message: '标准值治理服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.configure')
+    if (!actor) return
+    const proposal = await catalogDictionaryGovernanceRepository.review(request.params.id, request.body, actor.name)
+    if (!proposal) return reply.code(404).send({ error: 'CATALOG_DICTIONARY_PROPOSAL_NOT_FOUND', message: '标准值申请不存在' })
+    return proposal
   })
   app.post('/api/v2/catalog/imports/:id/commit', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })

@@ -605,6 +605,30 @@ test('catalog v2 matches and saves versioned supplier mapping profiles', async (
   await app.close()
 })
 
+test('catalog v2 governs proposed dictionary values with admin-only review', async () => {
+  const proposals = [{ id: 'proposal-1', field: 'brand', sourceValue: '新品牌中国', proposedValue: 'NEW-BRAND', state: 'pending', version: 1 }]
+  const catalogDictionaryGovernanceRepository = {
+    async list({ state }) { return { items: state ? proposals.filter((item) => item.state === state) : proposals, total: proposals.length } },
+    async create(input, actor) { const proposal = { id: `proposal-${proposals.length + 1}`, ...input, state: 'pending', version: 1, requestedBy: actor }; proposals.push(proposal); return proposal },
+    async review(id, input, actor) { const proposal = proposals.find((item) => item.id === id); if (!proposal) return null; Object.assign(proposal, { state: input.decision === 'approve' ? 'approved' : 'rejected', version: proposal.version + 1, reviewedBy: actor, reviewNote: input.reviewNote }); return proposal },
+  }
+  const app = buildApp({ catalogDictionaryGovernanceRepository, logger: false })
+  const list = await app.inject('/api/v2/catalog/dictionary-proposals?state=pending')
+  assert.equal(list.statusCode, 200)
+  assert.equal(list.json().items[0].proposedValue, 'NEW-BRAND')
+  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/dictionary-proposals', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '录入员甲' }, payload: { field: 'unit', sourceValue: 'PCS', proposedValue: '包', reason: '供应商包装单位' } })
+  assert.equal(created.statusCode, 201)
+  assert.equal(created.json().requestedBy, '录入员甲')
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/dictionary-proposals/proposal-1/review', headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedVersion: 1, decision: 'approve', reviewNote: '无权操作' } })
+  assert.equal(denied.statusCode, 403)
+  assert.equal(denied.json().details.capability, 'catalog.configure')
+  const approved = await app.inject({ method: 'POST', url: '/api/v2/catalog/dictionary-proposals/proposal-1/review', payload: { expectedVersion: 1, decision: 'approve', reviewNote: '资料完整，同意加入' } })
+  assert.equal(approved.statusCode, 200)
+  assert.equal(approved.json().state, 'approved')
+  assert.equal(approved.json().reviewedBy, 'hushanxing-workbench')
+  await app.close()
+})
+
 test('catalog v2 preserves import attempts and retries only failed rows', async () => {
   const app = buildApp({ catalogImportRepository: createCatalogImportRepository(), logger: false })
   const preview = (await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {

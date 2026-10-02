@@ -250,11 +250,13 @@ export function createCatalogImportRepository(pool, catalogRepository) {
     async resolveValues(id, input, actor = '系统操作员') {
       const expectedVersion = Number(input?.expectedVersion)
       const expectedProfileVersion = Number(input?.expectedProfileVersion)
+      const expectedDictionaryVersion = Number(input?.expectedDictionaryVersion)
       const resolutions = (Array.isArray(input?.resolutions) ? input.resolutions : []).map((item) => ({
         field: text(item?.field), source: text(item?.source), target: text(item?.target),
       }))
       if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw invalid('expectedVersion 必须是正整数')
       if (!Number.isInteger(expectedProfileVersion) || expectedProfileVersion < 1) throw invalid('expectedProfileVersion 必须是正整数')
+      if (!Number.isInteger(expectedDictionaryVersion) || expectedDictionaryVersion < 1) throw invalid('expectedDictionaryVersion 必须是正整数')
       if (!resolutions.length) throw invalid('至少填写一个标准值')
       if (resolutions.length > 100) throw invalid('单次最多处理 100 个异常值')
       if (resolutions.some((item) => !['brand', 'category', 'unit'].includes(item.field) || !item.source || !item.target)) throw invalid('异常值映射不完整')
@@ -285,6 +287,17 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           error.errorCode = 'IMPORT_MAPPING_VERSION_CONFLICT'
           throw error
         }
+        const dictionaryConfiguration = (await client.query("SELECT payload,version FROM app_configuration WHERE key='dictionaries' FOR SHARE")).rows[0]
+        if (!dictionaryConfiguration) throw invalid('系统字典尚未初始化')
+        if (dictionaryConfiguration.version !== expectedDictionaryVersion) {
+          const error = new Error('标准值字典已更新，请刷新候选值后再试')
+          error.statusCode = 409
+          error.errorCode = 'DICTIONARY_VERSION_CONFLICT'
+          throw error
+        }
+        const dictionaryCodes = { brand: 'sku_brand', category: 'part_category', unit: 'unit' }
+        const invalidTarget = resolutions.find((item) => !(dictionaryConfiguration.payload?.dictionaries?.[dictionaryCodes[item.field]]?.items || []).some((option) => option.enabled !== false && option.value !== '__all__' && text(option.value) === item.target))
+        if (invalidTarget) throw invalid(`${({ brand: '品牌', category: '分类', unit: '单位' })[invalidTarget.field]}标准值“${invalidTarget.target}”不在当前启用字典中`)
         const currentRows = (await client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id])).rows
         const unresolved = new Set(currentRows.flatMap((row) => (row.issues || []).flatMap((issue) => issue.severity === 'review' ? [`${issue.field}:${normalizeValueMappingKey(issue.value)}`] : [])))
         if (resolutions.some((item) => !unresolved.has(`${item.field}:${normalizeValueMappingKey(item.source)}`))) throw invalid('包含当前批次中不存在或已经处理的异常值')
@@ -359,7 +372,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           throw error
         }
         const result = await client.query(`SELECT * FROM catalog_import_row WHERE job_id=$1 AND id=ANY($2::text[]) ORDER BY row_number`, [id, selectedIds])
-        if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate', 'review'].includes(row.state))) throw invalid('选择中包含不可导入的记录')
+        if (result.rows.length !== selectedIds.length || result.rows.some((row) => !['ready', 'duplicate'].includes(row.state))) throw invalid('选择中包含未完成标准化或不可导入的记录')
         await client.query("UPDATE catalog_import_job SET state='committing',version=version+1 WHERE id=$1", [id])
         const attemptId = randomUUID()
         await client.query(`INSERT INTO catalog_import_attempt (id,job_id,attempt_number,attempt_type,selected_rows,started_by)
