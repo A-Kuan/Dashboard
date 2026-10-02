@@ -35,6 +35,29 @@ function fakeRepository() {
   }
 }
 
+function fakeRunRepository() {
+  const runs = []
+  return {
+    async start({ connectorId, requestContext, retryOf = '' }, actor) {
+      const run = { id: `run-${runs.length + 1}`, connectorId, state: 'running', requestContext, responseSummary: {}, previewId: '', retryOf, error: null, createdBy: actor, startedAt: new Date().toISOString(), completedAt: null }
+      runs.push(run)
+      return { ...run }
+    },
+    async succeed(id, { previewId, responseSummary }) {
+      const run = runs.find((item) => item.id === id)
+      Object.assign(run, { state: 'succeeded', previewId, responseSummary, completedAt: new Date().toISOString(), error: null })
+      return { ...run }
+    },
+    async fail(id, { errorCode, errorMessage }) {
+      const run = runs.find((item) => item.id === id)
+      Object.assign(run, { state: 'failed', error: { code: errorCode, message: errorMessage }, completedAt: new Date().toISOString() })
+      return { ...run }
+    },
+    async get(id) { return runs.find((item) => item.id === id) || null },
+    async list() { return { items: runs.map((item) => ({ ...item })), total: runs.length, page: 1, pageSize: 20 } },
+  }
+}
+
 test('EPC preview validates provenance, explains matches and commits only explicit decisions', async () => {
   const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), logger: false })
   const invalidVin = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-previews', payload: { vin: 'INVALID', sourceSystem: 'Porsche PET', items: [{ oe: '95B 698 151 H', originalName: 'Brake pad set' }] } })
@@ -88,7 +111,7 @@ test('collects a normalized connector response without bypassing the write previ
       }
     },
   }] })
-  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, catalogEpcConnectorRunRepository: fakeRunRepository(), logger: false })
   const connectors = await app.inject('/api/v2/catalog/epc-connectors')
   assert.equal(connectors.statusCode, 200)
   assert.equal(connectors.json().items[0].state, 'ready')
@@ -99,6 +122,7 @@ test('collects a normalized connector response without bypassing the write previ
   assert.equal(collected.json().sourceContext.connectorRequestId, 'request-1')
   assert.equal(collected.json().assets[0].figureCode, '601-05')
   assert.equal(collected.json().items[0].decisionState, 'pending')
+  assert.equal(collected.json().connectorRun.state, 'succeeded')
   await app.close()
 })
 
@@ -106,12 +130,14 @@ test('reports an unconfigured connector without exposing credentials', async () 
   const catalogEpcConnectorService = createCatalogEpcConnectorService({ connectors: [{
     id: 'external-epc', label: 'External EPC', description: 'pending', configured: false, capabilities: [],
   }] })
-  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const runRepository = fakeRunRepository()
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, catalogEpcConnectorRunRepository: runRepository, logger: false })
   const listed = (await app.inject('/api/v2/catalog/epc-connectors')).json().items[0]
   assert.deepEqual(Object.keys(listed).sort(), ['capabilities', 'description', 'id', 'label', 'schemaVersion', 'state'])
   const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/external-epc/collect', payload: { vin: 'WP1ZZZ95ZHLB12345' } })
   assert.equal(response.statusCode, 503)
   assert.equal(response.json().error, 'EPC_CONNECTOR_NOT_CONFIGURED')
+  assert.equal((await runRepository.list()).items[0].state, 'failed')
   await app.close()
 })
 
@@ -126,10 +152,43 @@ test('rejects unsafe connector assets before creating a preview', async () => {
       }
     },
   }] })
-  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, logger: false })
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, catalogEpcConnectorRunRepository: fakeRunRepository(), logger: false })
   const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/unsafe-epc/collect', payload: { catalogPath: 'fixture' } })
   assert.equal(response.statusCode, 400)
   assert.equal(response.json().error, 'INVALID_EPC_CONNECTOR_RESPONSE')
+  await app.close()
+})
+
+test('retains failed connector runs and retries them as a linked attempt', async () => {
+  let fail = true
+  const connector = {
+    id: 'retry-epc', label: 'Retry EPC', description: 'fixture', configured: true, capabilities: [],
+    async collect(input) {
+      if (fail) {
+        const error = new Error('上游临时不可用')
+        error.statusCode = 502
+        error.errorCode = 'EPC_CONNECTOR_UPSTREAM_ERROR'
+        throw error
+      }
+      return { schemaVersion: 'hushanxing-epc-connector-v1', sourceSystem: 'Retry EPC', catalogPath: input.catalogPath, items: [{ oe: 'RETRY-001', originalName: 'Retry fixture part' }] }
+    },
+  }
+  const catalogEpcConnectorService = createCatalogEpcConnectorService({ connectors: [connector] })
+  const runRepository = fakeRunRepository()
+  const app = buildApp({ catalogEpcIntakeRepository: fakeRepository(), catalogEpcConnectorService, catalogEpcConnectorRunRepository: runRepository, logger: false })
+  const failed = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connectors/retry-epc/collect', payload: { catalogPath: 'fixture / retry' } })
+  assert.equal(failed.statusCode, 502)
+  assert.equal(failed.json().details.connectorRunId, 'run-1')
+  assert.equal((await app.inject('/api/v2/catalog/epc-connector-runs/run-1')).json().state, 'failed')
+
+  fail = false
+  const retried = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-connector-runs/run-1/retry' })
+  assert.equal(retried.statusCode, 201)
+  assert.equal(retried.json().connectorRun.state, 'succeeded')
+  assert.equal(retried.json().connectorRun.retryOf, 'run-1')
+  const history = (await app.inject('/api/v2/catalog/epc-connector-runs')).json()
+  assert.equal(history.total, 2)
+  assert.deepEqual(history.items.map((item) => item.state), ['failed', 'succeeded'])
   await app.close()
 })
 

@@ -781,7 +781,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions, epcConnectorRuns] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -802,6 +802,7 @@ export function createCatalogRepository(pool) {
         pool.query('SELECT * FROM catalog_epc_preview ORDER BY created_at,id'),
         pool.query('SELECT * FROM catalog_epc_preview_item ORDER BY preview_id,row_number'),
         pool.query('SELECT * FROM catalog_epc_publish_decision ORDER BY decided_at,id'),
+        pool.query('SELECT * FROM catalog_epc_connector_run ORDER BY started_at,id'),
       ])
       const relations = {
         identifierResolutions: resolutions.rows.map((row) => ({
@@ -862,6 +863,12 @@ export function createCatalogRepository(pool) {
           targetSkuId: row.target_sku_id, sourceSnapshot: row.source_snapshot, writeSnapshot: row.write_snapshot,
           decidedBy: row.decided_by, decidedAt: row.decided_at,
         })),
+        epcConnectorRuns: epcConnectorRuns.rows.map((row) => ({
+          id: row.id, connectorId: row.connector_id, state: row.state, requestContext: row.request_context,
+          responseSummary: row.response_summary, previewId: row.preview_id, retryOf: row.retry_of,
+          errorCode: row.error_code, errorMessage: row.error_message, createdBy: row.created_by,
+          startedAt: row.started_at, completedAt: row.completed_at,
+        })),
       }
       const payload = { items, relations }
       const checksum = createHash('sha256').update(JSON.stringify(payload)).digest('hex')
@@ -883,6 +890,7 @@ export function createCatalogRepository(pool) {
           epcPreviews: relations.epcPreviews.length,
           epcPreviewItems: relations.epcPreviewItems.length,
           epcPublishDecisions: relations.epcPublishDecisions.length,
+          epcConnectorRuns: relations.epcConnectorRuns.length,
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,
         },

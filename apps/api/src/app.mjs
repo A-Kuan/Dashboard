@@ -5,6 +5,7 @@ import { normalizeCatalogInput, normalizeIntakeInput, requireCatalogVersion, san
 import { catalogRoles, requireCatalogCapability, resolveCatalogActor } from './catalog-access.mjs'
 import { catalogImportTemplateCsv, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
 import { normalizeEpcCommitInput, normalizeEpcPreviewInput } from './catalog-epc-validation.mjs'
+import { normalizeEpcConnectorCollectInput } from './catalog-epc-connector-validation.mjs'
 
 const transitionCapabilities = {
   submit_review: 'catalog.submit',
@@ -36,7 +37,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -48,6 +49,24 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     conflict.errorCode = 'FITMENT_CONFLICT_BLOCKED'
     conflict.details = { issues: ['fitmentConflict'], conflicts: conflicts.items.slice(0, 20) }
     throw conflict
+  }
+  const executeEpcConnector = async ({ connectorId, rawInput, actor, retryOf = '' }) => {
+    const input = normalizeEpcConnectorCollectInput(rawInput)
+    const run = await catalogEpcConnectorRunRepository.start({ connectorId, requestContext: input, retryOf }, actor)
+    try {
+      const result = await catalogEpcConnectorService.collect(connectorId, input)
+      const preview = await catalogEpcIntakeRepository.createPreview(result.previewInput, actor)
+      const completedRun = await catalogEpcConnectorRunRepository.succeed(run.id, {
+        previewId: preview.id,
+        responseSummary: { sourceSystem: preview.sourceSystem, catalogPath: preview.catalogPath, items: preview.items.length, assets: preview.assets?.length || 0 },
+      })
+      return { ...preview, connector: result.connector, connectorRun: completedRun }
+    } catch (error) {
+      const safeMessage = /^EPC_CONNECTOR_/.test(error.errorCode || '') ? error.message : '采集后处理失败'
+      await catalogEpcConnectorRunRepository.fail(run.id, { errorCode: error.errorCode || 'EPC_CONNECTOR_PROCESSING_FAILED', errorMessage: safeMessage }).catch(() => {})
+      error.details = { ...(error.details || {}), connectorRunId: run.id }
+      throw error
+    }
   }
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
@@ -194,12 +213,32 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     return catalogEpcConnectorService.list()
   })
   app.post('/api/v2/catalog/epc-connectors/:id/collect', async (request, reply) => {
-    if (!catalogEpcConnectorService || !catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_SERVICE_UNAVAILABLE', message: 'EPC 连接器服务未配置' })
+    if (!catalogEpcConnectorService || !catalogEpcIntakeRepository || !catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_SERVICE_UNAVAILABLE', message: 'EPC 连接器服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.edit')
     if (!actor) return
-    const result = await catalogEpcConnectorService.collect(request.params.id, request.body)
-    const preview = await catalogEpcIntakeRepository.createPreview(result.previewInput, actor.name)
-    return reply.code(201).send({ ...preview, connector: result.connector })
+    return reply.code(201).send(await executeEpcConnector({ connectorId: request.params.id, rawInput: request.body, actor: actor.name }))
+  })
+  app.get('/api/v2/catalog/epc-connector-runs', async (request, reply) => {
+    if (!catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_RUN_SERVICE_UNAVAILABLE', message: 'EPC 连接器运行记录服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogEpcConnectorRunRepository.list({ state: request.query?.state, connectorId: request.query?.connectorId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/catalog/epc-connector-runs/:id', async (request, reply) => {
+    if (!catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_RUN_SERVICE_UNAVAILABLE', message: 'EPC 连接器运行记录服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const run = await catalogEpcConnectorRunRepository.get(request.params.id)
+    return run || reply.code(404).send({ error: 'EPC_CONNECTOR_RUN_NOT_FOUND', message: '连接器运行记录不存在' })
+  })
+  app.post('/api/v2/catalog/epc-connector-runs/:id/retry', async (request, reply) => {
+    if (!catalogEpcConnectorService || !catalogEpcIntakeRepository || !catalogEpcConnectorRunRepository) return reply.code(503).send({ error: 'EPC_CONNECTOR_RUN_SERVICE_UNAVAILABLE', message: 'EPC 连接器运行记录服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    const previous = await catalogEpcConnectorRunRepository.get(request.params.id)
+    if (!previous) return reply.code(404).send({ error: 'EPC_CONNECTOR_RUN_NOT_FOUND', message: '连接器运行记录不存在' })
+    if (previous.state !== 'failed') return reply.code(409).send({ error: 'EPC_CONNECTOR_RUN_NOT_RETRYABLE', message: '只有失败的采集任务可以重试' })
+    return reply.code(201).send(await executeEpcConnector({ connectorId: previous.connectorId, rawInput: previous.requestContext, actor: actor.name, retryOf: previous.id }))
   })
   app.get('/api/v2/catalog/epc-previews', async (request, reply) => {
     if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })

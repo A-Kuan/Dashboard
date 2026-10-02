@@ -128,6 +128,8 @@ CatalogSku
 
 外部 EPC 连接器不新增供应商专属业务表。连接器标识、版本化合同、上游请求编号和采集时间保存在 `catalog_intake.source_context`；图组、图片或文档的来源地址、图组编码、内容类型、校验值和元数据保存在该批次的不可变 `raw_payload.assets`。当前记录代表上游资源引用，不代表文件已经进入自有对象存储。
 
+`catalog_epc_connector_run` 为每次外部调用保存独立运行记录。`request_context` 只包含规范化 VIN、目录路径和图组编码；服务地址与令牌不进入数据库。状态从 `running` 单向进入 `succeeded` 或 `failed`，成功关联 `preview_id` 和结果摘要，失败保存安全错误；重试通过 `retry_of` 建立新记录，不修改原失败事实。
+
 ### 商业域
 
 `supplier_offer` 保存 `supplier_id`、`supplier_part_number`、采购单位、币种、含税价、MOQ、交期、有效期和来源；`inventory_balance` 保存仓库/库位、现有量、锁定量、在途量和快照时间。`oem_reference` 单独作为来源价格类型，只读展示，禁止写入商业价格枚举。

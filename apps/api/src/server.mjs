@@ -11,6 +11,7 @@ import { createCatalogDictionaryGovernanceRepository } from './catalog-dictionar
 import { createCatalogPlatformRepository } from './catalog-platform-repository.mjs'
 import { createCatalogEpcIntakeRepository } from './catalog-epc-intake-repository.mjs'
 import { createCatalogEpcConnectorService } from './catalog-epc-connector-service.mjs'
+import { createCatalogEpcConnectorRunRepository } from './catalog-epc-connector-run-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
 
 const pool = createPool()
@@ -30,6 +31,7 @@ const app = buildApp({
   catalogPlatformRepository,
   catalogEpcIntakeRepository,
   catalogEpcConnectorService: createCatalogEpcConnectorService(),
+  catalogEpcConnectorRunRepository: createCatalogEpcConnectorRunRepository(pool),
   readinessCheck: async () => {
     const schema = await migrationReadiness(pool)
     const database = (await pool.query('SELECT current_database() AS name')).rows[0].name

@@ -70,6 +70,8 @@ SKU 资料库不是库存表，也不是简单商品列表。它是虎山行的�
 - `GET /api/v2/catalog/epc-previews`：分页读取批次历史、状态和处理进度。
 - `GET /api/v2/catalog/epc-connectors`：读取连接器能力与配置状态，不返回地址或密钥。
 - `POST /api/v2/catalog/epc-connectors/:id/collect`：从已配置服务采集目录证据并进入同一匹配预览。
+- `GET /api/v2/catalog/epc-connector-runs`：读取成功、失败和重试链路。
+- `POST /api/v2/catalog/epc-connector-runs/:id/retry`：保留原失败记录并建立关联的重试运行。
 - `POST /api/v2/catalog/epc-previews/:id/commit`：按版本锁写入明确选择的决定。
 - `POST /api/v2/catalog/skus`：从采集结果或空白草稿创建 SKU。
 - `PATCH /api/v2/catalog/skus/:id`：带版本号更新草稿。
@@ -81,7 +83,7 @@ SKU 资料库不是库存表，也不是简单商品列表。它是虎山行的�
 ## 当前交付范围
 
 - 已实现：SKU 列表首页、搜索、状态筛选、同屏核验详情、详情标签切换和可收起导航。
-- 已实现：供应商无关的 EPC 连接器合同、EPC/VIN 写入前匹配预览、批次历史与断点续办、逐条人工决定、图组资源引用、原始证据留存、草稿写入和追加式决策审计。
+- 已实现：供应商无关的 EPC 连接器合同、采集运行历史与失败重试、EPC/VIN 写入前匹配预览、批次历史与断点续办、逐条人工决定、图组资源引用、原始证据留存、草稿写入和追加式决策审计。
 - 已实现：SKU 持久化、审核状态、适配专项审核、车型平台/版本、冲突治理、批量导入、权限能力和可校验备份。
 - 首页的库存、价格与订单信息仍是视觉原型模拟数据，不写入资料库。
 - 暂未实现：真实品牌 EPC/VIN 服务凭据、目录插图对象存储和正式统一身份登录。

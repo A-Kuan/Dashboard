@@ -86,3 +86,13 @@ VIN、目录路径或图组编码至少填写一项。服务可以按自身能�
 - `INVALID_EPC_CONNECTOR_RESPONSE`：返回数据不符合版本化合同。
 
 采集成功后仍只创建 `catalog_epc_preview`，不会直接写入或覆盖 SKU。连接器标识、合同版本、请求编号和采集时间进入来源上下文；图组资源进入原始批次载荷并随审计导出保留。
+
+## 运行记录与重试
+
+每次外部采集都会先建立不可删除的运行记录，再调用上游：
+
+- `GET /api/v2/catalog/epc-connector-runs?state=&connectorId=&page=&pageSize=`：分页读取运行历史。
+- `GET /api/v2/catalog/epc-connector-runs/:id`：读取查询上下文、结果摘要、错误和关联预览。
+- `POST /api/v2/catalog/epc-connector-runs/:id/retry`：仅允许重试 `failed` 记录；使用原查询上下文创建新的运行记录。
+
+运行状态为 `running`、`succeeded` 或 `failed`。重试不会覆盖原失败记录，新记录通过 `retryOf` 指回原记录；成功运行保存预览编号、来源系统、目录、零件数和资源数，失败运行只保存安全错误码和文案。运行记录进入 JSON 审计包及其 SHA-256 内容校验。

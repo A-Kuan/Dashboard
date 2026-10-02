@@ -19,7 +19,7 @@ const pool = createPool({ max: 1 })
 const counts = {}
 let schemaMigrations = []
 try {
-  for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_fitment_review_event', 'catalog_vehicle_platform', 'catalog_vehicle_platform_change_event', 'catalog_vehicle_variant', 'catalog_vehicle_variant_change_event', 'catalog_fitment_scope_resolution', 'catalog_source_evidence', 'catalog_change_log', 'catalog_epc_preview', 'catalog_epc_preview_item', 'catalog_epc_publish_decision', 'catalog_import_job', 'catalog_import_mapping_profile', 'catalog_import_mapping_profile_change', 'catalog_import_value_resolution', 'catalog_dictionary_proposal', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
+  for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_fitment_review_event', 'catalog_vehicle_platform', 'catalog_vehicle_platform_change_event', 'catalog_vehicle_variant', 'catalog_vehicle_variant_change_event', 'catalog_fitment_scope_resolution', 'catalog_source_evidence', 'catalog_change_log', 'catalog_intake', 'catalog_epc_preview', 'catalog_epc_preview_item', 'catalog_epc_publish_decision', 'catalog_epc_connector_run', 'catalog_import_job', 'catalog_import_mapping_profile', 'catalog_import_mapping_profile_change', 'catalog_import_value_resolution', 'catalog_dictionary_proposal', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }

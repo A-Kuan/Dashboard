@@ -35,6 +35,9 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 - `GET /api/v2/catalog/epc-connectors`：返回连接器标识、显示名、能力、合同版本和 `ready` / `needs_configuration` 状态；服务地址和令牌永不返回前端。
 - `POST /api/v2/catalog/epc-connectors/:id/collect`：按 `hushanxing-epc-connector-v1` 合同采集 VIN、图组、零件与资源引用，校验后创建普通 EPC 预览；连接器不得绕过人工决定直接写入 SKU。
+- `GET /api/v2/catalog/epc-connector-runs?state=&connectorId=&page=&pageSize=`：分页读取连接器运行历史；请求上下文不含地址或令牌。
+- `GET /api/v2/catalog/epc-connector-runs/:id`：读取单次运行、错误、结果摘要、关联预览和重试来源。
+- `POST /api/v2/catalog/epc-connector-runs/:id/retry`：仅重试失败运行；复制原查询上下文并新建运行记录，原记录不可覆盖。
 - `POST /api/v2/catalog/epc-previews`：提交 VIN、来源系统、目录路径与最多 100 条 EPC 零件记录；服务端保存不可变原始批次，并返回 OE、车型平台和车型版本的匹配解释。该接口不写入 SKU。
 - `GET /api/v2/catalog/epc-previews?state=&page=&pageSize=`：读取预览批次历史。每个摘要包含 `progress.total`、`progress.pending` 和 `progress.processed`，供列表直接显示完成度。
 - `GET /api/v2/catalog/epc-previews/:id`：读取逐条候选、来源快照、已执行决定和结果 SKU。
