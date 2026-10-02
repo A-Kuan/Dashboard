@@ -15,7 +15,7 @@ function fakeRepository() {
       previews.push(preview)
       return preview
     },
-    async list() { return { items: previews, total: previews.length, page: 1, pageSize: 20 } },
+    async list() { return { items: previews.map((preview) => ({ ...preview, progress: { total: preview.items.length, pending: preview.items.filter((item) => item.decisionState === 'pending').length, processed: preview.items.filter((item) => item.decisionState !== 'pending').length } })), total: previews.length, page: 1, pageSize: 20 } },
     async get(id) { return previews.find((item) => item.id === id) || null },
     async commit(id, input, actor) {
       const preview = previews.find((item) => item.id === id)
@@ -48,6 +48,10 @@ test('EPC preview validates provenance, explains matches and commits only explic
   assert.equal(created.json().items[0].normalizedOe, '95B698151H')
   assert.equal(created.json().items[0].matchState, 'exact')
   assert.deepEqual(created.json().items[1].rawPayload, { position: 6 })
+  const history = await app.inject('/api/v2/catalog/epc-previews')
+  assert.equal(history.statusCode, 200)
+  assert.equal(history.json().items[0].progress.pending, 2)
+  assert.equal((await app.inject('/api/v2/catalog/epc-previews/preview-1')).json().items.length, 2)
 
   const committed = await app.inject({ method: 'POST', url: '/api/v2/catalog/epc-previews/preview-1/commit', payload: {
     expectedVersion: 1, decisions: [{ itemId: 'item-1', action: 'attach_evidence', targetSkuId: 'sku-existing' }],
@@ -56,6 +60,7 @@ test('EPC preview validates provenance, explains matches and commits only explic
   assert.equal(committed.json().state, 'partial')
   assert.equal(committed.json().items[0].decisionState, 'attached')
   assert.equal(committed.json().items[1].decisionState, 'pending')
+  assert.equal((await app.inject('/api/v2/catalog/epc-previews')).json().items[0].progress.processed, 1)
   await app.close()
 })
 

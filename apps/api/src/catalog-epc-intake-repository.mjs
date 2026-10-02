@@ -113,10 +113,19 @@ export function createCatalogEpcIntakeRepository(pool) {
       const params = []
       const where = state ? (params.push(state), `WHERE p.state=$${params.length}`) : ''
       params.push(safeSize, (safePage - 1) * safeSize)
-      const rows = (await pool.query(`SELECT p.* FROM catalog_epc_preview p ${where} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params)).rows
+      const rows = (await pool.query(`SELECT p.*,
+        count(i.id)::int AS item_total,
+        count(i.id) FILTER (WHERE i.decision_state='pending')::int AS item_pending,
+        count(i.id) FILTER (WHERE i.decision_state<>'pending')::int AS item_processed
+        FROM catalog_epc_preview p LEFT JOIN catalog_epc_preview_item i ON i.preview_id=p.id
+        ${where} GROUP BY p.id ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params)).rows
       const totalParams = state ? [state] : []
       const total = Number((await pool.query(`SELECT count(*)::int AS total FROM catalog_epc_preview p ${where}`, totalParams)).rows[0].total)
-      return { items: rows.map((row) => ({ id: row.id, state: row.state, vin: row.vin, sourceSystem: row.source_system, catalogPath: row.catalog_path, summary: row.summary, version: row.version, createdBy: row.created_by, createdAt: row.created_at })), total, page: safePage, pageSize: safeSize }
+      return { items: rows.map((row) => ({
+        id: row.id, state: row.state, vin: row.vin, sourceSystem: row.source_system, catalogPath: row.catalog_path,
+        summary: row.summary, progress: { total: row.item_total, pending: row.item_pending, processed: row.item_processed },
+        version: row.version, createdBy: row.created_by, createdAt: row.created_at,
+      })), total, page: safePage, pageSize: safeSize }
     },
 
     async commit(id, input, actor = '系统操作员') {

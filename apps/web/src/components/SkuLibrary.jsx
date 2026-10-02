@@ -208,7 +208,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuEpcIntake onBack={() => setEpcOpen(false)} onComplete={() => { setEpcOpen(false); loadCatalog() }} onNotify={notify} />
+        <SkuEpcIntake onBack={() => { setEpcOpen(false); loadCatalog() }} onComplete={(result) => { const resultId = result.items.find((item) => item.resultingSkuId)?.resultingSkuId; setEpcOpen(false); if (resultId) setSelectedId(resultId); loadCatalog() }} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )

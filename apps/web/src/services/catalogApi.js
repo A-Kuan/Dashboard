@@ -152,6 +152,16 @@ export function createCatalogEpcPreview(input) {
   return request('/api/v2/catalog/epc-previews', { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function listCatalogEpcPreviews({ state = '', page = 1, pageSize = 50 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (state) params.set('state', state)
+  return request(`/api/v2/catalog/epc-previews?${params}`)
+}
+
+export function getCatalogEpcPreview(id) {
+  return request(`/api/v2/catalog/epc-previews/${encodeURIComponent(id)}`)
+}
+
 export function commitCatalogEpcPreview(preview, decisions) {
   return request(`/api/v2/catalog/epc-previews/${encodeURIComponent(preview.id)}/commit`, {
     method: 'POST', body: JSON.stringify({ expectedVersion: preview.version, decisions }),

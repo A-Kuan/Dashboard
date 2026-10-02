@@ -164,6 +164,12 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   const committed = await (await commitResponse).json()
   const skuId = committed.items[0].resultingSkuId
   expect(skuId).toBeTruthy()
+  await expect(page.getByRole('button', { name: '完成并返回资料库' })).toBeVisible()
+  await page.getByRole('button', { name: '返回批次记录' }).click()
+  await expect(page.getByRole('heading', { name: 'EPC 批次记录' })).toBeVisible()
+  await expect(page.getByText('已完成 · 1/1')).toBeVisible()
+  await expect(page.getByText(/Cayenne 9YA \/ 615-05/)).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-epc-history-1680.png', fullPage: false })
 
   const created = await (await page.request.get(`/api/v2/catalog/skus/${skuId}`)).json()
   const completed = await page.request.patch(`/api/v2/catalog/skus/${skuId}`, { data: {
@@ -177,9 +183,36 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   expect(completed.ok()).toBeTruthy()
   const submitted = await page.request.post(`/api/v2/catalog/skus/${skuId}/transition`, { data: { expectedVersion: (await completed.json()).version, action: 'submit_review', assignee: '资料审核员' } })
   expect(submitted.ok()).toBeTruthy()
-  await page.goto('./#/sku')
+  await page.getByRole('button', { name: '返回资料库' }).click()
   await expect(page.getByRole('heading', { name: 'SKU 资料库' })).toBeVisible()
   await expect(page.getByText('前制动盘', { exact: true }).first()).toBeVisible()
+})
+
+test('resumes a partial EPC batch without repeating completed decisions', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const preview = await (await page.request.post('/api/v2/catalog/epc-previews', { headers, data: {
+    sourceSystem: 'Audi ETKA', catalogPath: 'Q7 4M / 121-05', items: [
+      { oe: 'RESUME-EPC-001', originalName: 'Source row one', sourceRecordId: '121-05-01' },
+      { oe: 'RESUME-EPC-002', originalName: 'Source row two', sourceRecordId: '121-05-02' },
+    ],
+  } })).json()
+  const partial = await page.request.post(`/api/v2/catalog/epc-previews/${preview.id}/commit`, { headers, data: { expectedVersion: preview.version, decisions: [{ itemId: preview.items[0].id, action: 'skip' }] } })
+  expect(partial.ok()).toBeTruthy()
+  expect((await partial.json()).state).toBe('partial')
+
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '新建 SKU' }).click()
+  await page.getByRole('button', { name: /从 EPC \/ VIN 创建/ }).click()
+  await page.getByRole('button', { name: /批次记录/ }).click()
+  await expect(page.getByText('处理中 · 1/2')).toBeVisible()
+  await page.getByRole('button', { name: /Audi ETKA/ }).click()
+  await expect(page.getByText('已跳过', { exact: true })).toBeVisible()
+  await expect(page.getByText('建议新建', { exact: true }).first()).toBeVisible()
+  await page.getByText('跳过本条', { exact: true }).click()
+  await page.getByRole('button', { name: '确认写入所选记录' }).click()
+  await expect(page.getByRole('button', { name: '完成并返回资料库' })).toBeVisible()
+  await page.getByRole('button', { name: '返回批次记录' }).click()
+  await expect(page.getByText('已完成 · 2/2')).toBeVisible()
 })
 
 test('reviews a submitted SKU in the data quality workspace', async ({ page }) => {
@@ -410,7 +443,7 @@ test('manages supplier mapping profiles without deleting audit history', async (
   await expect(rulesDialog.locator('.sku-mapping-rule-preview')).toContainText('MANN-FILTER')
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-rule-preview-1680.png', fullPage: false })
   await rulesDialog.getByRole('button', { name: '确认映射并预检查' }).click()
-  await expect(rulesDialog.getByText('燃油 滤芯', { exact: true })).toBeVisible()
+  await expect(rulesDialog.getByText('燃油 滤芯', { exact: true }).first()).toBeVisible()
   await expect(rulesDialog.getByText('AB-123', { exact: true })).toBeVisible()
   await expect(rulesDialog.getByText('MANN-FILTER', { exact: true })).toBeVisible()
   await rulesDialog.getByRole('button', { name: '关闭' }).first().click()

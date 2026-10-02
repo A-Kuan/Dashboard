@@ -34,11 +34,11 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 ### EPC / VIN 写入前预览
 
 - `POST /api/v2/catalog/epc-previews`：提交 VIN、来源系统、目录路径与最多 100 条 EPC 零件记录；服务端保存不可变原始批次，并返回 OE、车型平台和车型版本的匹配解释。该接口不写入 SKU。
-- `GET /api/v2/catalog/epc-previews?state=&page=&pageSize=`：读取预览批次历史。
+- `GET /api/v2/catalog/epc-previews?state=&page=&pageSize=`：读取预览批次历史。每个摘要包含 `progress.total`、`progress.pending` 和 `progress.processed`，供列表直接显示完成度。
 - `GET /api/v2/catalog/epc-previews/:id`：读取逐条候选、来源快照、已执行决定和结果 SKU。
 - `POST /api/v2/catalog/epc-previews/:id/commit`：提交 `expectedVersion` 和明确的逐条 `create_sku`、`attach_evidence` 或 `skip` 决定。未选择行保持待处理；附加证据不会覆盖现有人工名称、分类、编号或价格；新资料只生成草稿，适配默认为待核验。
 
-同一规范 OE 唯一命中时返回 `exact`，无命中返回 `new`，多条命中返回 `ambiguous`。前端不得把 `ambiguous` 自动写入任意候选；所有决定写入追加式审计表。
+同一规范 OE 唯一命中时返回 `exact`，无命中返回 `new`，多条命中返回 `ambiguous`。前端不得把 `ambiguous` 自动写入任意候选；所有决定写入追加式审计表。提交可以只包含部分待处理行：已处理行保持只读，批次进入 `partial`，后续按最新 `version` 继续提交剩余行；当 `pending` 为 0 时进入 `completed`。
 
 ### SKU 资料
 
