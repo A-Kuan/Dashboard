@@ -237,12 +237,124 @@ function planView(plan, items = [], events = []) {
     reviewedByRole: plan.reviewed_by_role, reviewedAt: plan.reviewed_at, reviewNote: plan.review_note,
     committedBatchId: plan.committed_batch_id, committedBy: plan.committed_by, committedById: plan.committed_by_id,
     committedByRole: plan.committed_by_role, committedAt: plan.committed_at,
+    acceptanceState: plan.acceptance_state || 'pending', acceptanceBy: plan.acceptance_by || '',
+    acceptanceById: plan.acceptance_by_id || '', acceptanceByRole: plan.acceptance_by_role || '',
+    acceptanceAt: plan.acceptance_at, acceptanceNote: plan.acceptance_note || '', acceptanceSnapshot: plan.acceptance_snapshot || {},
     items: items.map((item) => ({
       id: item.id, legacySkuId: item.legacy_sku_id, sourceHash: item.source_hash, decision: item.decision,
       exclusionReason: item.exclusion_reason, overrides: item.overrides, preview: item.preview_snapshot, sortOrder: item.sort_order,
     })),
     events: events.map((event) => ({ id: event.id, action: event.action, actorId: event.actor_id, actorName: event.actor_name,
       actorRole: event.actor_role, identityProvider: event.identity_provider, note: event.note, payload: event.payload, createdAt: event.created_at })),
+  }
+}
+
+function acceptanceIssue(code, label, blocking = true) {
+  return { code, label, blocking }
+}
+
+async function buildPlanAcceptance(client, plan) {
+  const base = {
+    planId: plan.id,
+    planVersion: plan.version,
+    batchId: plan.committed_batch_id || '',
+    acceptanceState: plan.acceptance_state || 'pending',
+    acceptedBy: plan.acceptance_by || '',
+    acceptedById: plan.acceptance_by_id || '',
+    acceptedAt: plan.acceptance_at,
+    acceptanceNote: plan.acceptance_note || '',
+    checkedAt: new Date().toISOString(),
+  }
+  if (!plan.committed_batch_id) return {
+    ...base, ready: false, drifted: false, status: 'not_committed',
+    summary: { total: Number(plan.migrate_count || 0), verified: 0, inReview: 0, draft: 0, needsAttention: Number(plan.migrate_count || 0), missing: 0 },
+    items: [],
+  }
+  const batch = (await client.query('SELECT * FROM catalog_legacy_migration_batch WHERE id=$1', [plan.committed_batch_id])).rows[0]
+  const migrationItems = (await client.query('SELECT * FROM catalog_legacy_migration_item WHERE batch_id=$1 ORDER BY created_at,id', [plan.committed_batch_id])).rows
+  const catalogIds = migrationItems.map((item) => item.catalog_sku_id).filter(Boolean)
+  const skuRows = catalogIds.length ? (await client.query(`SELECT s.*,
+    (SELECT count(*)::int FROM catalog_part_identifier i WHERE i.sku_id=s.id) AS identifier_count,
+    EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary AND i.normalized_value<>'') AS has_primary_identifier,
+    (SELECT count(*)::int FROM catalog_source_evidence e WHERE e.sku_id=s.id AND (e.source_system<>'' OR e.source_record_id<>'' OR e.catalog_path<>'' OR e.raw_payload<>'{}'::jsonb)) AS evidence_count,
+    (SELECT count(*)::int FROM catalog_fitment f WHERE f.sku_id=s.id) AS fitment_count,
+    (SELECT count(*)::int FROM catalog_fitment f WHERE f.sku_id=s.id AND f.verification_status<>'verified') AS pending_fitment_count,
+    (SELECT count(DISTINCT own_i.normalized_value)::int FROM catalog_part_identifier own_i
+      JOIN catalog_part_identifier other_i ON other_i.normalized_value=own_i.normalized_value AND other_i.sku_id<>own_i.sku_id
+      JOIN catalog_sku other_s ON other_s.id=other_i.sku_id AND other_s.lifecycle_status<>'discontinued'
+      WHERE own_i.sku_id=s.id AND NOT EXISTS (SELECT 1 FROM catalog_identifier_resolution r
+        WHERE r.normalized_value=own_i.normalized_value AND r.active AND r.resolution_type IN ('shared_reference','separate_scope')
+          AND ((r.sku_id_a=own_i.sku_id AND r.sku_id_b=other_i.sku_id) OR (r.sku_id_a=other_i.sku_id AND r.sku_id_b=own_i.sku_id)))) AS duplicate_identifier_count,
+    (SELECT count(*)::int FROM catalog_fitment f
+      LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)
+      LEFT JOIN catalog_vehicle_variant v ON v.id=f.variant_master_id
+      WHERE f.sku_id=s.id AND (p.id IS NULL OR p.lifecycle_status<>'active' OR (f.variant_master_id IS NOT NULL AND v.lifecycle_status<>'active')
+        OR (f.year_from IS NOT NULL AND p.year_from IS NOT NULL AND f.year_from<p.year_from)
+        OR (f.year_to IS NOT NULL AND p.year_to IS NOT NULL AND f.year_to>p.year_to)
+        OR (f.year_from IS NOT NULL AND v.year_from IS NOT NULL AND f.year_from<v.year_from)
+        OR (f.year_to IS NOT NULL AND v.year_to IS NOT NULL AND f.year_to>v.year_to))) AS invalid_fitment_count
+    FROM catalog_sku s WHERE s.id=ANY($1::text[]) FOR SHARE OF s`, [catalogIds])).rows : []
+  const skuById = new Map(skuRows.map((row) => [row.id, row]))
+  const legacyRows = await loadLegacyRows(client)
+  const legacyHashById = new Map(legacyRows.map((row) => [row.sku.id, hashSnapshot(snapshotFromRow(row))]))
+  const items = migrationItems.map((migration) => {
+    const sku = skuById.get(migration.catalog_sku_id)
+    const issues = []
+    if (migration.state !== 'migrated') issues.push(acceptanceIssue('migrationIncomplete', '迁移结果不是成功写入状态'))
+    if (!sku) issues.push(acceptanceIssue('catalogSkuMissing', '迁移生成的 SKU 已不存在'))
+    if (sku) {
+      if (!(sku.canonical_name_zh || sku.canonical_name_en)) issues.push(acceptanceIssue('identity', '缺少配件名称'))
+      if (!(sku.brand_code || sku.brand_label) || !(sku.category_code || sku.category_label)) issues.push(acceptanceIssue('classification', '品牌或分类尚未标准化'))
+      if (!sku.has_primary_identifier) issues.push(acceptanceIssue('primaryIdentifier', '缺少主编号'))
+      if (!Number(sku.evidence_count)) issues.push(acceptanceIssue('evidence', '缺少可回溯来源证据'))
+      if (!Number(sku.fitment_count)) issues.push(acceptanceIssue('fitment', '缺少适配关系'))
+      if (Number(sku.pending_fitment_count)) issues.push(acceptanceIssue('fitmentReview', `${sku.pending_fitment_count} 条适配尚未核验`))
+      if (Number(sku.invalid_fitment_count)) issues.push(acceptanceIssue('fitmentConflict', `${sku.invalid_fitment_count} 条适配不符合当前车型平台边界`))
+      if (Number(sku.duplicate_identifier_count)) issues.push(acceptanceIssue('duplicateIdentifier', `${sku.duplicate_identifier_count} 个零件编号存在未解决冲突`))
+      if (Number(sku.completeness_score) < 100) issues.push(acceptanceIssue('completeness', `资料完整度为 ${sku.completeness_score}%`))
+      if (sku.lifecycle_status !== 'verified' || sku.verification_level !== 'verified') issues.push(acceptanceIssue('skuReview', sku.lifecycle_status === 'review' ? 'SKU 正在等待审核' : 'SKU 尚未提交并通过审核'))
+    }
+    const currentSourceHash = legacyHashById.get(migration.legacy_sku_id) || ''
+    const sourceChanged = Boolean(currentSourceHash && currentSourceHash !== migration.source_hash)
+    if (!currentSourceHash) issues.push(acceptanceIssue('legacySourceMissing', '迁移后旧资料已不存在，验收以保留的来源快照为准', false))
+    if (sourceChanged) issues.push(acceptanceIssue('legacySourceChanged', '迁移后旧资料又发生变化，请确认是否需要补录', false))
+    const blockingIssues = issues.filter((issue) => issue.blocking)
+    const workflowState = !sku ? 'missing' : !blockingIssues.length ? 'verified' : sku.lifecycle_status === 'review' ? 'in_review' : 'needs_attention'
+    return {
+      legacySkuId: migration.legacy_sku_id,
+      catalogSkuId: migration.catalog_sku_id || '',
+      skuCode: sku?.sku_code || migration.mapping_snapshot?.input?.identity?.skuCode || '',
+      name: sku?.canonical_name_zh || migration.mapping_snapshot?.input?.identity?.nameZh || '',
+      lifecycleStatus: sku?.lifecycle_status || 'missing',
+      verificationLevel: sku?.verification_level || '',
+      skuVersion: Number(sku?.version || 0),
+      completenessScore: Number(sku?.completeness_score || 0),
+      identifierCount: Number(sku?.identifier_count || 0), evidenceCount: Number(sku?.evidence_count || 0),
+      fitmentCount: Number(sku?.fitment_count || 0), pendingFitmentCount: Number(sku?.pending_fitment_count || 0),
+      duplicateIdentifierCount: Number(sku?.duplicate_identifier_count || 0), invalidFitmentCount: Number(sku?.invalid_fitment_count || 0),
+      workflowState, sourceChanged, issues,
+    }
+  })
+  const expected = Number(plan.migrate_count || 0)
+  const missingResults = Math.max(0, expected - migrationItems.length)
+  const verified = items.filter((item) => item.workflowState === 'verified').length
+  const inReview = items.filter((item) => item.workflowState === 'in_review').length
+  const missing = items.filter((item) => item.workflowState === 'missing').length + missingResults
+  const needsAttention = items.filter((item) => ['needs_attention', 'missing'].includes(item.workflowState)).length + missingResults
+  const draft = items.filter((item) => item.lifecycleStatus === 'draft').length
+  const ready = Boolean(batch) && batch.state === 'succeeded' && migrationItems.length === expected && items.length === expected
+    && items.every((item) => item.workflowState === 'verified')
+  const acceptedSnapshot = plan.acceptance_snapshot || {}
+  const acceptedIds = Array.isArray(acceptedSnapshot.catalogSkuIds) ? acceptedSnapshot.catalogSkuIds : []
+  const currentIds = items.map((item) => item.catalogSkuId).filter(Boolean).sort()
+  const acceptedVersions = acceptedSnapshot.skuVersions || {}
+  const versionChanged = items.some((item) => Number(acceptedVersions[item.catalogSkuId] || 0) !== item.skuVersion)
+  const drifted = plan.acceptance_state === 'accepted' && (!ready || versionChanged || JSON.stringify([...acceptedIds].sort()) !== JSON.stringify(currentIds))
+  return {
+    ...base, batchState: batch?.state || 'missing', ready, drifted,
+    status: ready ? (drifted ? 'accepted_drifted' : plan.acceptance_state === 'accepted' ? 'accepted' : 'ready') : plan.acceptance_state === 'accepted' ? 'accepted_drifted' : 'in_progress',
+    summary: { total: expected, verified, inReview, draft, needsAttention, missing },
+    items,
   }
 }
 
@@ -546,6 +658,48 @@ export function createCatalogLegacyMigrationRepository(pool) {
       } finally {
         client.release()
       }
+    },
+
+    async acceptancePlan(id) {
+      const client = await pool.connect()
+      try {
+        const plan = (await client.query('SELECT * FROM catalog_legacy_migration_plan WHERE id=$1', [id])).rows[0]
+        if (!plan) return null
+        return buildPlanAcceptance(client, plan)
+      } finally {
+        client.release()
+      }
+    },
+
+    async reviewAcceptance(id, rawInput, actor) {
+      const identity = actorDetails(actor)
+      const decision = rawInput?.decision === 'accept' ? 'accept' : rawInput?.decision === 'changes_required' ? 'changes_required' : ''
+      const note = text(rawInput?.note)
+      if (!decision) throw problem('INVALID_LEGACY_MIGRATION_ACCEPTANCE', '请选择验收通过或要求整改', 400)
+      if (decision === 'changes_required' && !note) throw problem('LEGACY_MIGRATION_ACCEPTANCE_NOTE_REQUIRED', '要求整改时必须填写原因', 400)
+      return withTransaction(pool, async (client) => {
+        const plan = (await client.query('SELECT * FROM catalog_legacy_migration_plan WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!plan) throw problem('LEGACY_MIGRATION_PLAN_NOT_FOUND', '迁移方案不存在', 404)
+        if (plan.state !== 'committed') throw problem('LEGACY_MIGRATION_ACCEPTANCE_STATE_CONFLICT', '只有已执行方案可以验收', 409, { state: plan.state })
+        if (plan.acceptance_state === 'accepted') throw problem('LEGACY_MIGRATION_ACCEPTANCE_STATE_CONFLICT', '该方案已经完成验收', 409, { acceptanceState: plan.acceptance_state })
+        if (Number(rawInput?.expectedVersion) !== plan.version) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案已被其他人更新，请刷新后重试', 409, { currentVersion: plan.version })
+        if (identity.id === plan.committed_by_id) throw problem('LEGACY_MIGRATION_SELF_ACCEPTANCE_FORBIDDEN', '迁移执行人不能验收自己的执行结果', 403)
+        const acceptance = await buildPlanAcceptance(client, plan)
+        if (decision === 'accept' && !acceptance.ready) throw problem('LEGACY_MIGRATION_ACCEPTANCE_FAILED', '迁移结果尚未达到验收条件', 409, { acceptance })
+        const snapshot = decision === 'accept' ? {
+          checkedAt: acceptance.checkedAt, summary: acceptance.summary,
+          catalogSkuIds: acceptance.items.map((item) => item.catalogSkuId).filter(Boolean),
+          skuVersions: Object.fromEntries(acceptance.items.map((item) => [item.catalogSkuId, item.skuVersion])),
+        } : { checkedAt: acceptance.checkedAt, summary: acceptance.summary }
+        const next = (await client.query(`UPDATE catalog_legacy_migration_plan SET acceptance_state=$2,acceptance_by=$3,
+          acceptance_by_id=$4,acceptance_by_role=$5,acceptance_at=now(),acceptance_note=$6,acceptance_snapshot=$7::jsonb,
+          version=version+1 WHERE id=$1 RETURNING *`, [id, decision === 'accept' ? 'accepted' : 'changes_required',
+          identity.name, identity.id, identity.role, note, JSON.stringify(snapshot)])).rows[0]
+        await insertPlanEvent(client, id, decision === 'accept' ? 'acceptance_passed' : 'acceptance_changes_required', identity, note, { summary: acceptance.summary })
+        const items = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
+        const events = (await client.query('SELECT * FROM catalog_legacy_migration_plan_event WHERE plan_id=$1 ORDER BY created_at,id', [id])).rows
+        return { ...planView(next, items, events), acceptance: await buildPlanAcceptance(client, next) }
+      })
     },
 
     async reviewPlan(id, rawInput, actor) {

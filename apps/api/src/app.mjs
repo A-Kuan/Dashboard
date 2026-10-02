@@ -175,6 +175,20 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return catalogLegacyMigrationRepository.commitPlan(request.params.id, request.body, actor)
   })
+  app.get('/api/v2/catalog/legacy-migration-plans/:id/acceptance', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.acceptancePlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_ACCEPTANCE_UNAVAILABLE', message: '迁移验收服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const acceptance = await catalogLegacyMigrationRepository.acceptancePlan(request.params.id)
+    if (!acceptance) return reply.code(404).send({ error: 'LEGACY_MIGRATION_PLAN_NOT_FOUND', message: '迁移方案不存在' })
+    return acceptance
+  })
+  app.post('/api/v2/catalog/legacy-migration-plans/:id/acceptance', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.reviewAcceptance) return reply.code(503).send({ error: 'LEGACY_MIGRATION_ACCEPTANCE_UNAVAILABLE', message: '迁移验收服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.migration.accept')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.reviewAcceptance(request.params.id, request.body, actor)
+  })
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {
     const item = await repository.get(request.params.id)

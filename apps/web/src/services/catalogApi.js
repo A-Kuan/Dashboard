@@ -72,6 +72,16 @@ export function commitLegacyMigrationPlan(plan) {
   })
 }
 
+export function getLegacyMigrationPlanAcceptance(id) {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(id)}/acceptance`)
+}
+
+export function reviewLegacyMigrationPlanAcceptance(plan, decision, note = '') {
+  return request(`/api/v2/catalog/legacy-migration-plans/${encodeURIComponent(plan.id)}/acceptance`, {
+    method: 'POST', body: JSON.stringify({ expectedVersion: plan.version, decision, note }),
+  })
+}
+
 function displayTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))

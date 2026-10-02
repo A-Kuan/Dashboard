@@ -11,6 +11,8 @@
 - `GET /api/v2/catalog/legacy-migration-plans/:id/preflight`：重新比对方案中的来源哈希、当前编号冲突、迁移状态和字典映射，返回逐条阻断原因；该检查只读，审核和执行时仍会在服务端强制再跑一次。
 - `POST /api/v2/catalog/legacy-migration-plans/:id/review`：独立审核角色批准或退回方案；稳定用户 ID 与提交人相同时拒绝自审，实时复核不通过时禁止批准。
 - `POST /api/v2/catalog/legacy-migration-plans/:id/commit`：仅资料管理员可执行已批准方案。服务端在占用方案后再次复核，并用单个数据库事务执行整个批次；任何一条失败都会整批回滚，不产生半批新资料。成功记录只写为 `draft / unverified`，旧表不修改、不删除。
+- `GET /api/v2/catalog/legacy-migration-plans/:id/acceptance`：读取迁移后的动态验收报告，逐条汇总目标 SKU、完整度、来源证据、主编号、适配专项审核和 SKU 审核状态，并标出迁移后旧来源变化。只有批次完整且所有目标 SKU 均达到 `verified` 才返回 `ready: true`。
+- `POST /api/v2/catalog/legacy-migration-plans/:id/acceptance`：资料审核员或管理员提交 `accept` 或 `changes_required`。执行人不能验收自己的批次；要求整改必须填写原因；未达到动态验收条件时服务端拒绝通过。验收快照、目标 SKU 版本和操作人写入不可覆盖的审批轨迹，验收后资料再次变化会显示漂移警告。
 - `POST /api/v2/catalog/legacy-migrations`：已关闭直接迁移，始终要求先走方案审批。
 - `GET /api/v2/catalog/legacy-migrations/:id`：读取批次与逐条成功、跳过、失败结果。
 
