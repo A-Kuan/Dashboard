@@ -39,3 +39,12 @@ UPDATE_QA_ARTIFACTS=1 npm run test:e2e
 ```
 
 提交这类图片前必须人工检查画面，不能把自动生成的变化直接当作视觉验收通过。
+
+## 持续集成
+
+每个合并请求和 `main` 分支更新都会触发 `Quality` 工作流：
+
+- `Unit tests and build` 验证 API、前端单元测试、Sites 包装和生产构建；
+- `Isolated browser regression` 启动专用 PostgreSQL 服务，并运行完整的一次性数据库浏览器回归。
+
+两项检查都通过后才应合并业务变更。工作流使用 Node.js 22，与本地和服务器运行时保持一致。
