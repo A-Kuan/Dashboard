@@ -126,7 +126,9 @@ CatalogSku
 
 `catalog_epc_publish_decision` 采用追加写模型，逐条保存 `create_sku`、`attach_evidence` 或 `skip` 决定、完整来源快照、写入结果、操作人与时间。同一预览行只能产生一个决定；未选择行保持待处理。附加到现有 SKU 时只新增来源证据并使资料回到待核验状态，不替换人工维护的身份、分类、价格或既有适配。新建结果固定为草稿，来源产生的适配固定为 `pending`。
 
-外部 EPC 连接器不新增供应商专属业务表。连接器标识、版本化合同、上游请求编号和采集时间保存在 `catalog_intake.source_context`；图组、图片或文档的来源地址、图组编码、内容类型、校验值和元数据保存在该批次的不可变 `raw_payload.assets`。当前记录代表上游资源引用，不代表文件已经进入自有对象存储。
+外部 EPC 连接器不新增供应商专属业务表。连接器标识、版本化合同、上游请求编号和采集时间保存在 `catalog_intake.source_context`；图组、图片或文档的来源地址、图组编码、内容类型、校验值和元数据同时保存在该批次的不可变 `raw_payload.assets` 与规范化 `catalog_epc_asset`。原始载荷始终代表上游事实，只有资源状态为 `stored` 时才代表已进入自有存储。
+
+`catalog_epc_asset` 保存原始地址、上游校验值、内容寻址键、实际内容类型、字节数、SHA-256、状态和错误；不覆盖来源事实。`catalog_epc_asset_attempt` 对每次 `mirror` 或 `verify` 操作追加保存开始、完成、结果校验值和安全错误。托管文件位于数据库之外，必须与数据库备份成对保护。
 
 `catalog_epc_connector_run` 为每次外部调用保存独立运行记录。`request_context` 只包含规范化 VIN、目录路径和图组编码；服务地址与令牌不进入数据库。状态从 `running` 单向进入 `succeeded` 或 `failed`，成功关联 `preview_id` 和结果摘要，失败保存安全错误；重试通过 `retry_of` 建立新记录，不修改原失败事实。
 

@@ -781,7 +781,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions, epcConnectorRuns] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions, epcIntakes, epcPreviews, epcPreviewItems, epcDecisions, epcConnectorRuns, epcAssets, epcAssetAttempts] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -803,6 +803,8 @@ export function createCatalogRepository(pool) {
         pool.query('SELECT * FROM catalog_epc_preview_item ORDER BY preview_id,row_number'),
         pool.query('SELECT * FROM catalog_epc_publish_decision ORDER BY decided_at,id'),
         pool.query('SELECT * FROM catalog_epc_connector_run ORDER BY started_at,id'),
+        pool.query('SELECT * FROM catalog_epc_asset ORDER BY created_at,id'),
+        pool.query('SELECT * FROM catalog_epc_asset_attempt ORDER BY started_at,id'),
       ])
       const relations = {
         identifierResolutions: resolutions.rows.map((row) => ({
@@ -869,6 +871,20 @@ export function createCatalogRepository(pool) {
           errorCode: row.error_code, errorMessage: row.error_message, createdBy: row.created_by,
           startedAt: row.started_at, completedAt: row.completed_at,
         })),
+        epcAssets: epcAssets.rows.map((row) => ({
+          id: row.id, intakeId: row.intake_id, type: row.asset_type, sourceUrl: row.source_url,
+          sourceRecordId: row.source_record_id, figureCode: row.figure_code, title: row.title,
+          declaredContentType: row.declared_content_type, expectedChecksum: row.expected_checksum,
+          metadata: row.metadata, state: row.state, storageKey: row.storage_key, contentType: row.content_type,
+          byteSize: Number(row.byte_size), checksumSha256: row.checksum_sha256, attempts: row.attempts,
+          errorCode: row.last_error_code, errorMessage: row.last_error_message, createdBy: row.created_by,
+          createdAt: row.created_at, updatedAt: row.updated_at, mirroredAt: row.mirrored_at, verifiedAt: row.verified_at, version: row.version,
+        })),
+        epcAssetAttempts: epcAssetAttempts.rows.map((row) => ({
+          id: row.id, assetId: row.asset_id, operation: row.operation, state: row.state,
+          errorCode: row.error_code, errorMessage: row.error_message, checksumSha256: row.checksum_sha256,
+          byteSize: Number(row.byte_size), createdBy: row.created_by, startedAt: row.started_at, completedAt: row.completed_at,
+        })),
       }
       const payload = { items, relations }
       const checksum = createHash('sha256').update(JSON.stringify(payload)).digest('hex')
@@ -891,6 +907,8 @@ export function createCatalogRepository(pool) {
           epcPreviewItems: relations.epcPreviewItems.length,
           epcPublishDecisions: relations.epcPublishDecisions.length,
           epcConnectorRuns: relations.epcConnectorRuns.length,
+          epcAssets: relations.epcAssets.length,
+          epcAssetAttempts: relations.epcAssetAttempts.length,
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,
         },

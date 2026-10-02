@@ -37,7 +37,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -252,6 +252,74 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!previous) return reply.code(404).send({ error: 'EPC_CONNECTOR_RUN_NOT_FOUND', message: '连接器运行记录不存在' })
     if (previous.state !== 'failed') return reply.code(409).send({ error: 'EPC_CONNECTOR_RUN_NOT_RETRYABLE', message: '只有失败的采集任务可以重试' })
     return reply.code(201).send(await executeEpcConnector({ connectorId: previous.connectorId, rawInput: previous.requestContext, actor: actor.name, retryOf: previous.id }))
+  })
+  app.get('/api/v2/catalog/epc-asset-storage', async (request, reply) => {
+    if (!catalogEpcAssetStorage) return reply.code(503).send({ error: 'EPC_ASSET_STORAGE_UNAVAILABLE', message: '目录资源存储服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogEpcAssetStorage.status()
+  })
+  app.get('/api/v2/catalog/epc-assets', async (request, reply) => {
+    if (!catalogEpcAssetRepository) return reply.code(503).send({ error: 'EPC_ASSET_SERVICE_UNAVAILABLE', message: '目录资源服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const state = String(request.query?.state || '')
+    if (state && !['pending', 'mirroring', 'stored', 'failed', 'corrupt'].includes(state)) return reply.code(400).send({ error: 'INVALID_EPC_ASSET_FILTER', message: '资源状态筛选无效' })
+    return catalogEpcAssetRepository.list({ intakeId: request.query?.intakeId, state, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/catalog/epc-assets/:id', async (request, reply) => {
+    if (!catalogEpcAssetRepository) return reply.code(503).send({ error: 'EPC_ASSET_SERVICE_UNAVAILABLE', message: '目录资源服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const asset = await catalogEpcAssetRepository.get(request.params.id, true)
+    return asset || reply.code(404).send({ error: 'EPC_ASSET_NOT_FOUND', message: '目录资源不存在' })
+  })
+  app.post('/api/v2/catalog/epc-assets/:id/mirror', async (request, reply) => {
+    if (!catalogEpcAssetRepository || !catalogEpcAssetStorage) return reply.code(503).send({ error: 'EPC_ASSET_SERVICE_UNAVAILABLE', message: '目录资源服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    const started = await catalogEpcAssetRepository.startMirror(request.params.id, actor.name)
+    if (!started) return reply.code(404).send({ error: 'EPC_ASSET_NOT_FOUND', message: '目录资源不存在' })
+    try {
+      const result = await catalogEpcAssetStorage.mirror(started.asset)
+      return await catalogEpcAssetRepository.finishMirror(started.asset.id, started.attemptId, result)
+    } catch (error) {
+      const errorCode = /^EPC_ASSET_/.test(error.errorCode || '') ? error.errorCode : 'EPC_ASSET_STORAGE_FAILED'
+      const errorMessage = /^EPC_ASSET_/.test(error.errorCode || '') ? error.message : '目录资源托管失败'
+      await catalogEpcAssetRepository.failMirror(started.asset.id, started.attemptId, errorCode, errorMessage).catch(() => {})
+      throw error
+    }
+  })
+  app.post('/api/v2/catalog/epc-assets/:id/verify', async (request, reply) => {
+    if (!catalogEpcAssetRepository || !catalogEpcAssetStorage) return reply.code(503).send({ error: 'EPC_ASSET_SERVICE_UNAVAILABLE', message: '目录资源服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
+    const started = await catalogEpcAssetRepository.startVerify(request.params.id, actor.name)
+    if (!started) return reply.code(404).send({ error: 'EPC_ASSET_NOT_FOUND', message: '目录资源不存在' })
+    try {
+      const result = await catalogEpcAssetStorage.verify(started.asset)
+      return await catalogEpcAssetRepository.finishVerify(started.asset.id, started.attemptId, result)
+    } catch (error) {
+      const errorCode = /^EPC_ASSET_/.test(error.errorCode || '') ? error.errorCode : 'EPC_ASSET_VERIFY_FAILED'
+      const errorMessage = /^EPC_ASSET_/.test(error.errorCode || '') ? error.message : '目录资源校验失败'
+      await catalogEpcAssetRepository.failVerify(started.asset.id, started.attemptId, errorCode, errorMessage).catch(() => {})
+      throw error
+    }
+  })
+  app.get('/api/v2/catalog/epc-assets/:id/content', async (request, reply) => {
+    if (!catalogEpcAssetRepository || !catalogEpcAssetStorage) return reply.code(503).send({ error: 'EPC_ASSET_SERVICE_UNAVAILABLE', message: '目录资源服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const asset = await catalogEpcAssetRepository.get(request.params.id, false)
+    if (!asset) return reply.code(404).send({ error: 'EPC_ASSET_NOT_FOUND', message: '目录资源不存在' })
+    if (asset.state !== 'stored') return reply.code(409).send({ error: 'EPC_ASSET_NOT_STORED', message: '目录资源尚未完成托管' })
+    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' }[asset.contentType] || 'bin'
+    reply.header('content-disposition', `inline; filename="epc-asset-${asset.id}.${extension}"`)
+    reply.header('content-length', String(asset.byteSize))
+    reply.header('cache-control', 'private, max-age=3600')
+    reply.header('x-content-type-options', 'nosniff')
+    reply.header('content-security-policy', "default-src 'none'; sandbox")
+    return reply.type(asset.contentType).send(await catalogEpcAssetStorage.open(asset))
   })
   app.get('/api/v2/catalog/epc-previews', async (request, reply) => {
     if (!catalogEpcIntakeRepository) return reply.code(503).send({ error: 'EPC_INTAKE_SERVICE_UNAVAILABLE', message: 'EPC 证据接入服务未配置' })
@@ -642,8 +710,8 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.setErrorHandler((error, _request, reply) => {
     if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在' })
     if (error.code === '23503') return reply.code(400).send({ error: 'INVALID_REFERENCE', message: '关联的数据不存在或已经失效' })
-    const safeConnectorError = /^EPC_CONNECTOR_(NOT_CONFIGURED|UPSTREAM_ERROR|UNAVAILABLE|TIMEOUT)$/.test(error.errorCode || '')
-    const status = error.statusCode && (error.statusCode < 500 || safeConnectorError) ? error.statusCode : 500
+    const safeExternalError = /^EPC_CONNECTOR_(NOT_CONFIGURED|UPSTREAM_ERROR|UNAVAILABLE|TIMEOUT)$/.test(error.errorCode || '') || /^EPC_ASSET_/.test(error.errorCode || '')
+    const status = error.statusCode && (error.statusCode < 500 || safeExternalError) ? error.statusCode : 500
     const payload = { error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message }
     if (status !== 500 && error.details) payload.details = error.details
     return reply.code(status).send(payload)

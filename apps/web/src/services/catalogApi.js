@@ -174,6 +174,18 @@ export function retryCatalogEpcConnectorRun(id) {
   return request(`/api/v2/catalog/epc-connector-runs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
 }
 
+export function getCatalogEpcAssetStorageStatus() {
+  return request('/api/v2/catalog/epc-asset-storage')
+}
+
+export function mirrorCatalogEpcAsset(id) {
+  return request(`/api/v2/catalog/epc-assets/${encodeURIComponent(id)}/mirror`, { method: 'POST', body: '{}' })
+}
+
+export function verifyCatalogEpcAsset(id) {
+  return request(`/api/v2/catalog/epc-assets/${encodeURIComponent(id)}/verify`, { method: 'POST', body: '{}' })
+}
+
 export function listCatalogEpcPreviews({ state = '', page = 1, pageSize = 50 } = {}) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (state) params.set('state', state)

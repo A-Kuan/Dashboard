@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
+import { insertCatalogEpcAssets, mapCatalogEpcAsset } from './catalog-epc-asset-repository.mjs'
 
 function compactDate() {
   const date = new Date()
@@ -32,11 +33,12 @@ async function getPreview(client, id) {
   const decisions = (await client.query('SELECT * FROM catalog_epc_publish_decision WHERE preview_id=$1 ORDER BY decided_at', [id])).rows.map((row) => ({
     id: row.id, itemId: row.item_id, decisionType: row.decision_type, targetSkuId: row.target_sku_id || '', decidedBy: row.decided_by, decidedAt: row.decided_at,
   }))
+  const assetRows = (await client.query('SELECT * FROM catalog_epc_asset WHERE intake_id=$1 ORDER BY created_at,id', [preview.intake_id])).rows
   return {
     id: preview.id, intakeId: preview.intake_id, state: preview.state, vin: preview.vin, sourceSystem: preview.source_system,
     catalogPath: preview.catalog_path, summary: preview.summary || {}, version: preview.version, createdBy: preview.created_by,
     createdAt: preview.created_at, updatedAt: preview.updated_at, sourceContext: preview.source_context || {},
-    assets: preview.intake_raw_payload?.assets || [], items, decisions,
+    assets: assetRows.length ? assetRows.map((row) => mapCatalogEpcAsset(row)) : preview.intake_raw_payload?.assets || [], items, decisions,
   }
 }
 
@@ -69,6 +71,7 @@ export function createCatalogEpcIntakeRepository(pool) {
         const previewId = randomUUID()
         await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
           VALUES ($1,'vin_epc','received',$2::jsonb,$3::jsonb,$4)`, [intakeId, JSON.stringify({ vin: input.vin, sourceSystem: input.sourceSystem, catalogPath: input.catalogPath, ...input.sourceContext }), JSON.stringify({ items: input.items, assets: input.assets || [] }), actor])
+        await insertCatalogEpcAssets(client, intakeId, input.assets || [], actor)
         const prepared = []
         for (let index = 0; index < input.items.length; index += 1) {
           const item = input.items[index]

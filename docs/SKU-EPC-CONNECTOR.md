@@ -75,7 +75,7 @@ VIN、目录路径或图组编码至少填写一项。服务可以按自身能�
 }
 ```
 
-`items` 继续使用现有 EPC 预览校验：一次最多 100 条，OE 和原始名称必填，车型适配仅形成候选。`assets` 一次最多 100 项，只允许 HTTP/HTTPS 来源；当前阶段保留资源地址、图组、内容类型和上游校验值，不把远程文件冒充为已进入对象存储。
+`items` 继续使用现有 EPC 预览校验：一次最多 100 条，OE 和原始名称必填，车型适配仅形成候选。`assets` 一次最多 100 项，只允许 HTTP/HTTPS 来源；系统先保存不可变来源地址、图组、内容类型和上游校验值，再由资料员明确触发托管，不把远程文件冒充为已进入自有存储。
 
 ## 错误语义
 
@@ -96,3 +96,15 @@ VIN、目录路径或图组编码至少填写一项。服务可以按自身能�
 - `POST /api/v2/catalog/epc-connector-runs/:id/retry`：仅允许重试 `failed` 记录；使用原查询上下文创建新的运行记录。
 
 运行状态为 `running`、`succeeded` 或 `failed`。重试不会覆盖原失败记录，新记录通过 `retryOf` 指回原记录；成功运行保存预览编号、来源系统、目录、零件数和资源数，失败运行只保存安全错误码和文案。运行记录进入 JSON 审计包及其 SHA-256 内容校验。
+
+## 目录资源托管
+
+连接器返回的图组、图片和 PDF 会在 `catalog_epc_asset` 中登记，状态依次为 `pending`、`mirroring`、`stored`；下载失败进入 `failed`，完整性校验失败进入 `corrupt`。每次托管或校验都在 `catalog_epc_asset_attempt` 留下不可覆盖的成功或失败记录。
+
+- `GET /api/v2/catalog/epc-asset-storage`：读取存储是否已配置、大小限制和域名白名单状态，不泄露服务器路径。
+- `GET /api/v2/catalog/epc-assets?intakeId=&state=&page=&pageSize=`：分页读取资源与状态汇总。
+- `POST /api/v2/catalog/epc-assets/:id/mirror`：由资料员明确触发下载；失败后可重试。
+- `POST /api/v2/catalog/epc-assets/:id/verify`：重新计算已托管文件的 SHA-256 和字节数。
+- `GET /api/v2/catalog/epc-assets/:id/content`：仅提供已托管文件，使用私有缓存、`nosniff` 和沙箱策略响应。
+
+托管服务只接受 PNG、JPEG、WebP、GIF 和 PDF，以文件魔数而不是扩展名识别类型；同时校验声明类型、可选的上游 SHA-256、最大字节数和下载超时。下载目标禁止本机、内网、链路本地、保留地址和非 80/443 端口，每次重定向都会重新解析并检查；生产环境还应配置来源域名白名单。文件以 SHA-256 内容寻址，相同内容只保存一份，但来源记录和操作记录各自保留。

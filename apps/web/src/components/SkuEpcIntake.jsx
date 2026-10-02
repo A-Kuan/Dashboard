@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, Check, CheckCircle, ClockCounterClockwise, CloudArrowDown, Database, ImageSquare, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
-import { collectCatalogEpcConnector, commitCatalogEpcPreview, createCatalogEpcPreview, getCatalogEpcPreview, listCatalogEpcConnectors, listCatalogEpcPreviews } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, ArrowSquareOut, ArrowsClockwise, Check, CheckCircle, ClockCounterClockwise, CloudArrowDown, CloudCheck, Database, ImageSquare, MagnifyingGlass as FileSearch, Plus, SealCheck, ShieldCheck, Trash, WarningCircle } from '@phosphor-icons/react'
+import { collectCatalogEpcConnector, commitCatalogEpcPreview, createCatalogEpcPreview, getCatalogEpcAssetStorageStatus, getCatalogEpcPreview, listCatalogEpcConnectors, listCatalogEpcPreviews, mirrorCatalogEpcAsset, verifyCatalogEpcAsset } from '../services/catalogApi'
 import { EpcConnectorRunCenter } from './EpcConnectorRunCenter'
 import '../sku-epc-intake.css'
 import '../sku-epc-connector.css'
@@ -34,6 +34,10 @@ const previewStateMeta = {
   preview: ['待处理', 'pending'], partial: ['处理中', 'partial'], completed: ['已完成', 'completed'],
 }
 
+const assetStateMeta = {
+  pending: ['待托管', 'pending'], mirroring: ['托管中', 'mirroring'], stored: ['已托管', 'stored'], failed: ['托管失败', 'failed'], corrupt: ['校验异常', 'corrupt'],
+}
+
 export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
   const [form, setForm] = useState({ vin: '', sourceSystem: 'Porsche PET', catalogPath: '', rows: [emptyRow()] })
   const [preview, setPreview] = useState(null)
@@ -48,6 +52,8 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
   const [connectors, setConnectors] = useState([])
   const [connectorInput, setConnectorInput] = useState({ connectorId: '', vin: '', catalogPath: '', groupCode: '' })
   const [connectorBusy, setConnectorBusy] = useState(false)
+  const [assetStorage, setAssetStorage] = useState({ configured: false })
+  const [assetBusyId, setAssetBusyId] = useState('')
   const selected = preview?.items.find((item) => item.id === selectedId) || preview?.items[0]
   const selectedDecisions = useMemo(() => preview?.items.filter((item) => decisions[item.id]?.selected && item.decisionState === 'pending') || [], [decisions, preview])
   const selectedAssets = useMemo(() => preview?.assets?.filter((asset) => !asset.sourceRecordId || asset.sourceRecordId === selected?.sourceRecordId) || [], [preview, selected])
@@ -65,6 +71,7 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
       setConnectors(result.items || [])
       setConnectorInput((current) => ({ ...current, connectorId: current.connectorId || result.items?.[0]?.id || '' }))
     }).catch(() => setConnectors([]))
+    getCatalogEpcAssetStorageStatus().then(setAssetStorage).catch(() => setAssetStorage({ configured: false }))
   }, [loadHistory])
 
   const openHistory = async (id) => {
@@ -102,6 +109,24 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
       setDecisions(previewDecisions(result)); loadHistory()
       onNotify?.(`已处理 ${selectedDecisions.length} 条 EPC 记录，人工字段保持不变`)
     } catch (nextError) { setError(nextError.message) } finally { setBusy(false) }
+  }
+
+  const operateAsset = async (asset, operation) => {
+    if (!asset?.id) return
+    setAssetBusyId(asset.id); setError('')
+    try {
+      if (operation === 'verify') await verifyCatalogEpcAsset(asset.id)
+      else await mirrorCatalogEpcAsset(asset.id)
+      const refreshed = await getCatalogEpcPreview(preview.id)
+      setPreview(refreshed)
+      onNotify?.(operation === 'verify' ? '图组资源完整性校验通过' : '图组资源已进入自有存储')
+    } catch (nextError) {
+      setError(nextError.message)
+      const refreshed = await getCatalogEpcPreview(preview.id).catch(() => null)
+      if (refreshed) setPreview(refreshed)
+    } finally {
+      setAssetBusyId('')
+    }
   }
 
   if (!preview && historyOpen && historyView === 'runs') return <EpcConnectorRunCenter
@@ -178,7 +203,7 @@ export function SkuEpcIntake({ onBack, onComplete, onNotify }) {
       <header className="epc-intake-topbar"><button type="button" onClick={() => { setPreview(null); setHistoryOpen(true); loadHistory() }}><ArrowLeft size={20} weight="bold" />返回批次记录</button><div><span>写入前匹配预览</span><h1>{preview.sourceSystem} · {preview.catalogPath || '未填写目录路径'}</h1><p>{preview.vin ? `VIN ${preview.vin}` : '无 VIN 上下文'} · 共 {preview.summary.total} 条 · v{preview.version}</p></div><div className="epc-summary-pills"><span className="exact">{preview.summary.exact} 精确</span><span className="new">{preview.summary.new} 新建</span><span className="ambiguous">{preview.summary.ambiguous} 待判断</span></div></header>
       <div className="epc-review-grid">
         <section className="epc-review-list"><header><div><h2>来源记录</h2><p>逐条选择是否写入</p></div><strong>{selectedDecisions.length} 已选</strong></header>{preview.items.map((item) => { const meta = statusMeta[item.matchState]; const decision = decisions[item.id] || {}; return <button type="button" className={`${selected?.id === item.id ? 'active' : ''} ${item.decisionState !== 'pending' ? 'done' : ''}`} key={item.id} onClick={() => setSelectedId(item.id)}><input type="checkbox" aria-label={`选择 ${item.oe}`} disabled={item.decisionState !== 'pending' || item.matchState === 'ambiguous'} checked={Boolean(decision.selected)} onClick={(event) => event.stopPropagation()} onChange={(event) => setDecisions((current) => ({ ...current, [item.id]: { ...current[item.id], selected: event.target.checked } }))} /><span><b>{item.oe}</b><strong>{item.originalName}</strong><small>{item.figurePosition || '无图例位置'}</small></span><em className={meta.className}>{item.decisionState === 'pending' ? meta.label : item.decisionState === 'created' ? '已新建' : item.decisionState === 'attached' ? '已附加' : '已跳过'}</em></button> })}</section>
-        <section className="epc-match-detail">{selected ? <><header><div><span>规范 OE</span><h2>{selected.oe}</h2><p>{selected.originalName}</p></div><span className={`epc-match-badge ${statusMeta[selected.matchState].className}`}><FileSearch size={20} weight="duotone" />{statusMeta[selected.matchState].label}</span></header><div className="epc-detail-scroll"><section><div className="epc-detail-title"><h3>来源快照</h3><span>只读</span></div><dl><div><dt>来源记录</dt><dd>{selected.sourceRecordId || '—'}</dd></div><div><dt>图例位置</dt><dd>{selected.figurePosition || '—'}</dd></div><div><dt>平台提示</dt><dd>{selected.vehicleContext.platformCode || '—'}</dd></div><div><dt>车型版本</dt><dd>{selected.vehicleContext.variantCode || '—'}</dd></div><div><dt>发动机</dt><dd>{selected.vehicleContext.engineCodes?.join(' / ') || '—'}</dd></div><div><dt>PR 码</dt><dd>{selected.vehicleContext.prCodes?.join(' / ') || '—'}</dd></div></dl></section>{selectedAssets.length ? <section><div className="epc-detail-title"><h3>图组资源</h3><span>{selectedAssets.length} 项留痕</span></div><div className="epc-asset-list">{selectedAssets.map((asset, index) => <a key={`${asset.sourceUrl}-${index}`} href={asset.sourceUrl} target="_blank" rel="noreferrer"><ImageSquare size={21} weight="duotone" /><span><strong>{asset.title || asset.figureCode || '目录资源'}</strong><small>{asset.type} · {asset.contentType || '类型待识别'}{asset.checksum ? ' · 已带校验值' : ''}</small></span><ArrowRight size={16} /></a>)}</div></section> : null}<section><div className="epc-detail-title"><h3>SKU 匹配解释</h3><span>{selected.matchCandidates.length} 个候选</span></div>{selected.matchCandidates.length ? selected.matchCandidates.map((candidate) => <article className="epc-candidate" key={candidate.id}><CheckCircle size={20} weight="fill" /><span><strong>{candidate.name || '未命名 SKU'}</strong><small>{candidate.skuCode} · v{candidate.version}</small></span><em>OE 完全一致</em></article>) : <div className="epc-no-candidate"><Database size={24} /><span><strong>没有相同 OE</strong><small>可建立草稿，名称仍需人工标准化。</small></span></div>}</section><section><div className="epc-detail-title"><h3>车型匹配解释</h3><span>{selected.platformMatch.id ? '平台已识别' : '未识别平台'}</span></div>{selected.platformMatch.id ? <article className="epc-platform-match"><ShieldCheck size={21} weight="fill" /><span><strong>{selected.platformMatch.label}</strong><small>{selected.platformMatch.code} · {selected.platformMatch.yearFrom || '—'}–{selected.platformMatch.yearTo || '—'}</small></span></article> : <div className="epc-no-candidate warning"><WarningCircle size={24} /><span><strong>平台未进入主数据</strong><small>仍可保存来源证据，但不会自动建立适配关系。</small></span></div>}{selected.variantCandidates.map((candidate) => <article className="epc-variant" key={candidate.id}><div><strong>{candidate.label}</strong><small>{candidate.code}</small></div><b>{candidate.score} 分</b><p>{candidate.reasons.join(' · ')}</p></article>)}</section></div></> : null}</section>
+        <section className="epc-match-detail">{selected ? <><header><div><span>规范 OE</span><h2>{selected.oe}</h2><p>{selected.originalName}</p></div><span className={`epc-match-badge ${statusMeta[selected.matchState].className}`}><FileSearch size={20} weight="duotone" />{statusMeta[selected.matchState].label}</span></header><div className="epc-detail-scroll"><section><div className="epc-detail-title"><h3>来源快照</h3><span>只读</span></div><dl><div><dt>来源记录</dt><dd>{selected.sourceRecordId || '—'}</dd></div><div><dt>图例位置</dt><dd>{selected.figurePosition || '—'}</dd></div><div><dt>平台提示</dt><dd>{selected.vehicleContext.platformCode || '—'}</dd></div><div><dt>车型版本</dt><dd>{selected.vehicleContext.variantCode || '—'}</dd></div><div><dt>发动机</dt><dd>{selected.vehicleContext.engineCodes?.join(' / ') || '—'}</dd></div><div><dt>PR 码</dt><dd>{selected.vehicleContext.prCodes?.join(' / ') || '—'}</dd></div></dl></section>{selectedAssets.length ? <section><div className="epc-detail-title"><h3>图组资源</h3><span>{selectedAssets.length} 项留痕</span></div><div className="epc-asset-list">{selectedAssets.map((asset, index) => { const state = assetStateMeta[asset.state] || ['外部引用', 'external']; const busyAsset = assetBusyId === asset.id; return <article key={asset.id || `${asset.sourceUrl}-${index}`} className={`epc-asset-row ${state[1]}`}><ImageSquare size={22} weight="duotone" /><span><strong>{asset.title || asset.figureCode || '目录资源'}</strong><small>{asset.type} · {asset.contentType || asset.declaredContentType || '类型待识别'}{asset.byteSize ? ` · ${(asset.byteSize / 1024).toFixed(1)} KB` : ''}</small><em className={state[1]}>{state[0]}{asset.attempts ? ` · ${asset.attempts} 次尝试` : ''}</em>{asset.error ? <small className="epc-asset-error">{asset.error.message}</small> : null}</span><div><a href={asset.contentUrl || asset.sourceUrl} target="_blank" rel="noreferrer" aria-label={asset.contentUrl ? `打开托管资源 ${asset.title || asset.figureCode || ''}` : `打开来源资源 ${asset.title || asset.figureCode || ''}`}><ArrowSquareOut size={17} /></a>{asset.id ? <button type="button" disabled={busyAsset || asset.state === 'mirroring' || !assetStorage.configured} onClick={() => operateAsset(asset, asset.state === 'stored' ? 'verify' : 'mirror')}>{asset.state === 'stored' ? <CloudCheck size={16} /> : <CloudArrowDown size={16} />}{busyAsset ? '处理中' : !assetStorage.configured ? '存储未配置' : asset.state === 'stored' ? '校验' : asset.state === 'failed' || asset.state === 'corrupt' ? '重新托管' : asset.state === 'mirroring' ? '托管中' : '托管'}</button> : null}</div></article> })}</div></section> : null}<section><div className="epc-detail-title"><h3>SKU 匹配解释</h3><span>{selected.matchCandidates.length} 个候选</span></div>{selected.matchCandidates.length ? selected.matchCandidates.map((candidate) => <article className="epc-candidate" key={candidate.id}><CheckCircle size={20} weight="fill" /><span><strong>{candidate.name || '未命名 SKU'}</strong><small>{candidate.skuCode} · v{candidate.version}</small></span><em>OE 完全一致</em></article>) : <div className="epc-no-candidate"><Database size={24} /><span><strong>没有相同 OE</strong><small>可建立草稿，名称仍需人工标准化。</small></span></div>}</section><section><div className="epc-detail-title"><h3>车型匹配解释</h3><span>{selected.platformMatch.id ? '平台已识别' : '未识别平台'}</span></div>{selected.platformMatch.id ? <article className="epc-platform-match"><ShieldCheck size={21} weight="fill" /><span><strong>{selected.platformMatch.label}</strong><small>{selected.platformMatch.code} · {selected.platformMatch.yearFrom || '—'}–{selected.platformMatch.yearTo || '—'}</small></span></article> : <div className="epc-no-candidate warning"><WarningCircle size={24} /><span><strong>平台未进入主数据</strong><small>仍可保存来源证据，但不会自动建立适配关系。</small></span></div>}{selected.variantCandidates.map((candidate) => <article className="epc-variant" key={candidate.id}><div><strong>{candidate.label}</strong><small>{candidate.code}</small></div><b>{candidate.score} 分</b><p>{candidate.reasons.join(' · ')}</p></article>)}</section></div></> : null}</section>
         <aside className="epc-decision-panel">
           <header><span>03</span><h2>写入决定</h2><p>系统不会自动覆盖现有名称、分类或价格。</p></header>
           {selected ? <div className="epc-decision-options">

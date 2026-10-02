@@ -114,7 +114,7 @@ test('collects a normalized connector response without bypassing the write previ
         schemaVersion: 'hushanxing-epc-connector-v1', requestId: 'request-1', collectedAt: '2026-10-02T05:00:00.000Z',
         vin: input.vin, sourceSystem: 'Porsche PET', catalogPath: '95B / 601-05',
         items: [{ oe: '95B 698 151 H', originalName: 'Brake pad set', sourceRecordId: '601-05-01', rawPayload: { quantity: 1 } }],
-        assets: [{ type: 'diagram', sourceUrl: 'https://assets.example.test/601-05.png', sourceRecordId: '601-05-01', figureCode: '601-05', checksum: 'sha256:fixture' }],
+        assets: [{ type: 'diagram', sourceUrl: 'https://assets.example.test/601-05.png', sourceRecordId: '601-05-01', figureCode: '601-05', checksum: `sha256:${'a'.repeat(64)}` }],
       }
     },
   }] })

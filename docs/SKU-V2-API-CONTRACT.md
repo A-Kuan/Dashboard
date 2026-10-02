@@ -38,6 +38,12 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/epc-connector-runs?state=&connectorId=&q=&from=&to=&page=&pageSize=`：按状态、连接器、VIN/目录关键字与日期分页读取连接器运行历史；请求上下文不含地址或令牌。
 - `GET /api/v2/catalog/epc-connector-runs/:id`：读取单次运行、错误、结果摘要、关联预览和重试来源。
 - `POST /api/v2/catalog/epc-connector-runs/:id/retry`：仅重试失败运行；复制原查询上下文并新建运行记录，原记录不可覆盖。
+- `GET /api/v2/catalog/epc-asset-storage`：读取资源托管能力状态，不返回服务器目录或凭据。
+- `GET /api/v2/catalog/epc-assets?intakeId=&state=&page=&pageSize=`：分页读取目录资源、状态汇总和安全错误。
+- `GET /api/v2/catalog/epc-assets/:id`：读取资源及追加式托管/校验尝试历史。
+- `POST /api/v2/catalog/epc-assets/:id/mirror`：明确触发受控托管；来源地址、类型和校验值不被改写。
+- `POST /api/v2/catalog/epc-assets/:id/verify`：校验已托管文件的完整性。
+- `GET /api/v2/catalog/epc-assets/:id/content`：读取已托管内容；未托管、丢失或损坏时拒绝响应。
 - `POST /api/v2/catalog/epc-previews`：提交 VIN、来源系统、目录路径与最多 100 条 EPC 零件记录；服务端保存不可变原始批次，并返回 OE、车型平台和车型版本的匹配解释。该接口不写入 SKU。
 - `GET /api/v2/catalog/epc-previews?state=&page=&pageSize=`：读取预览批次历史。每个摘要包含 `progress.total`、`progress.pending` 和 `progress.processed`，供列表直接显示完成度。
 - `GET /api/v2/catalog/epc-previews/:id`：读取逐条候选、来源快照、已执行决定和结果 SKU。

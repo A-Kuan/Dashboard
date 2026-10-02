@@ -37,6 +37,8 @@ export function normalizeEpcConnectorResponse(payload = {}, requestInput = {}, c
   const assets = list(payload.assets).map((asset, index) => {
     const assetType = text(asset?.type).toLowerCase()
     if (!allowedAssetTypes.has(assetType)) invalid(`assets[${index}].type 不受支持`, 'INVALID_EPC_CONNECTOR_RESPONSE')
+    const checksum = text(asset?.checksum).toLowerCase()
+    if (checksum && !/^sha256:[a-f0-9]{64}$/.test(checksum)) invalid(`assets[${index}].checksum 必须使用 sha256:<64位十六进制>`, 'INVALID_EPC_CONNECTOR_RESPONSE')
     return {
       type: assetType,
       sourceUrl: safeSourceUrl(asset?.sourceUrl, index),
@@ -44,7 +46,7 @@ export function normalizeEpcConnectorResponse(payload = {}, requestInput = {}, c
       figureCode: text(asset?.figureCode),
       title: text(asset?.title),
       contentType: text(asset?.contentType),
-      checksum: text(asset?.checksum),
+      checksum,
       metadata: object(asset?.metadata),
     }
   })
