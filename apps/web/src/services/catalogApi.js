@@ -1,4 +1,5 @@
-const apiBase = (import.meta.env?.VITE_API_BASE || '').replace(/\/$/, '')
+const defaultApiBase = import.meta.env?.BASE_URL && import.meta.env.BASE_URL !== '/' ? import.meta.env.BASE_URL : ''
+const apiBase = (import.meta.env?.VITE_API_BASE || defaultApiBase).replace(/\/$/, '')
 const operatorRoleKey = 'hushanxing.catalog.role'
 
 export function getStoredCatalogRole() {

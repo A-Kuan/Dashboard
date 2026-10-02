@@ -50,6 +50,7 @@ const changeActionLabels = {
   fitment_approve: '适配审核通过', fitment_reject: '适配退回补充', fitment_conflict: '适配标记冲突',
 }
 const pageSize = 30
+const allowDemoData = import.meta.env.DEV
 const emptyRecord = {
   id: 'empty', code: '—', name: '暂无匹配资料', englishName: '', primaryOe: '—', brand: '—', category: '—', status: 'draft', statusLabel: '无结果',
   fitmentCount: 0, completeness: 0, source: '—', updated: '—', identifiers: [], fitments: [], evidence: { system: '—', catalog: '—', figure: '—', originalName: '—', syncedAt: '—', confidence: '待核验' },
@@ -64,7 +65,7 @@ function changeTime(value) {
 export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
-  const [selectedId, setSelectedId] = useState(skuRecords[0].id)
+  const [selectedId, setSelectedId] = useState(allowDemoData ? skuRecords[0].id : 'empty')
   const [detailTab, setDetailTab] = useState('identity')
   const [sourceOpen, setSourceOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -77,8 +78,8 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [catalogSession, setCatalogSession] = useState(null)
   const [editorContext, setEditorContext] = useState(null)
   const [toast, setToast] = useState('')
-  const [allRecords, setAllRecords] = useState(skuRecords)
-  const [totalRecords, setTotalRecords] = useState(skuRecords.length)
+  const [allRecords, setAllRecords] = useState(allowDemoData ? skuRecords : [])
+  const [totalRecords, setTotalRecords] = useState(allowDemoData ? skuRecords.length : 0)
   const [dataMode, setDataMode] = useState('loading')
   const [page, setPage] = useState(1)
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -95,7 +96,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         setStatusCounts(result.statusCounts || {})
         setSelectedId((current) => result.records.some((item) => item.id === current) ? current : result.records[0].id)
         setDataMode('live')
-      } else if (!debouncedQuery && status === 'all' && page === 1) {
+      } else if (allowDemoData && !debouncedQuery && status === 'all' && page === 1) {
         setAllRecords(skuRecords)
         setTotalRecords(0)
         setStatusCounts({})
@@ -109,9 +110,10 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         setDataMode('live')
       }
     } catch {
-      setAllRecords(skuRecords)
-      setTotalRecords(skuRecords.length)
-      setDataMode('demo-offline')
+      setAllRecords(allowDemoData ? skuRecords : [])
+      setTotalRecords(allowDemoData ? skuRecords.length : 0)
+      setSelectedId(allowDemoData ? skuRecords[0].id : 'empty')
+      setDataMode(allowDemoData ? 'demo-offline' : 'offline')
     }
   }, [debouncedQuery, page, status])
 
@@ -135,7 +137,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   }, [allRecords, dataMode, selectedId])
 
   const records = useMemo(() => {
-    if (dataMode === 'live' || dataMode === 'loading') return allRecords
+    if (dataMode === 'live' || dataMode === 'loading' || dataMode === 'offline') return allRecords
     const keyword = query.trim().toLowerCase()
     return allRecords.filter((item) => {
       const statusMatches = status === 'all' || item.status === status
@@ -146,7 +148,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
   const selected = allRecords.find((item) => item.id === selectedId) || records[0] || allRecords[0] || emptyRecord
   const selectedRecords = records.filter((record) => selectedIds.includes(record.id))
-  const hasCapability = (capability) => catalogSession?.capabilities?.includes(capability) ?? true
+  const hasCapability = (capability) => catalogSession?.capabilities?.includes(capability) ?? false
   const statusFilters = useMemo(() => skuStatusFilters.map((item) => ({
     ...item,
     count: dataMode === 'live'
@@ -218,7 +220,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
+        <SkuQualityQueue capabilities={catalogSession?.capabilities || []} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )
@@ -243,8 +245,8 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         <div className="sku-content">
           <section className="sku-toolbar" aria-label="SKU 搜索和操作">
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
-            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.export') || dataMode === 'demo-offline'} onClick={() => setExportOpen(true)}><DownloadSimple size={20} weight="bold" />导出资料</button>
-            <button className="sku-secondary-action" type="button" onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
+            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.export') || dataMode !== 'live'} onClick={() => setExportOpen(true)}><DownloadSimple size={20} weight="bold" />导出资料</button>
+            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.read')} onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
             <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.import')} onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
             <button className="sku-primary-action" type="button" disabled={!hasCapability('catalog.edit')} onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
           </section>
@@ -259,7 +261,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
           <section className="sku-splitview">
             <article className="sku-list-panel">
               <div className={`sku-list-heading ${selectedRecords.length ? 'selection-active' : ''}`}>
-                {selectedRecords.length ? <div className="sku-bulk-bar"><strong>已选 {selectedRecords.length} 条</strong><button type="button" disabled={!hasCapability('catalog.submit') || selectedRecords.some((item) => item.status !== 'draft')} onClick={() => setBulkAction('submit_review')}>提交审核</button><button type="button" disabled={!hasCapability('catalog.assign') || selectedRecords.some((item) => item.status !== 'review')} onClick={() => setBulkAction('assign_review')}>分配审核人</button><button type="button" disabled={!hasCapability('catalog.lifecycle') || selectedRecords.some((item) => item.status !== 'verified')} onClick={() => setBulkAction('discontinue')}>停用资料</button><button type="button" onClick={() => setSelectedIds([])}>取消选择</button></div> : <><div><h2>零件资料</h2><span>{dataMode === 'live' ? `当前显示 ${records.length} 条真实资料` : dataMode === 'loading' ? '正在连接资料库…' : `当前显示 ${records.length} 条演示资料`}</span></div><div><button type="button" onClick={() => notify('高级筛选将在字段字典接入后开放')}><Funnel size={17} weight="bold" />筛选</button><button type="button" onClick={() => notify('当前采用已确定的表格 + 详情视图')}><SlidersHorizontal size={17} weight="bold" />视图</button></div></>}
+                {selectedRecords.length ? <div className="sku-bulk-bar"><strong>已选 {selectedRecords.length} 条</strong><button type="button" disabled={!hasCapability('catalog.submit') || selectedRecords.some((item) => item.status !== 'draft')} onClick={() => setBulkAction('submit_review')}>提交审核</button><button type="button" disabled={!hasCapability('catalog.assign') || selectedRecords.some((item) => item.status !== 'review')} onClick={() => setBulkAction('assign_review')}>分配审核人</button><button type="button" disabled={!hasCapability('catalog.lifecycle') || selectedRecords.some((item) => item.status !== 'verified')} onClick={() => setBulkAction('discontinue')}>停用资料</button><button type="button" onClick={() => setSelectedIds([])}>取消选择</button></div> : <><div><h2>零件资料</h2><span>{dataMode === 'live' ? `当前显示 ${records.length} 条真实资料` : dataMode === 'loading' ? '正在连接资料库…' : dataMode === 'offline' ? '资料库连接失败' : `当前显示 ${records.length} 条演示资料`}</span></div><div><button type="button" onClick={() => notify('高级筛选将在字段字典接入后开放')}><Funnel size={17} weight="bold" />筛选</button><button type="button" onClick={() => notify('当前采用已确定的表格 + 详情视图')}><SlidersHorizontal size={17} weight="bold" />视图</button></div></>}
               </div>
               <div className="sku-table-wrap">
                 <table className="sku-table">
@@ -278,9 +280,9 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
                     ))}
                   </tbody>
                 </table>
-                {!records.length ? <div className="sku-empty"><MagnifyingGlass size={34} /><strong>没有找到匹配的 SKU</strong><span>尝试更换关键词或状态筛选</span></div> : null}
+                {!records.length ? <div className="sku-empty"><MagnifyingGlass size={34} /><strong>{dataMode === 'offline' ? '资料库暂时无法连接' : totalRecords === 0 ? '还没有 SKU 资料' : '没有找到匹配的 SKU'}</strong><span>{dataMode === 'offline' ? '请稍后刷新，系统不会用演示数据替代真实资料。' : totalRecords === 0 ? '当前资料库为空，有录入权限的成员可以从 EPC、导入或手工建立。' : '尝试更换关键词或状态筛选'}</span></div> : null}
               </div>
-              <footer className="sku-list-footer"><span>{dataMode === 'live' ? `共 ${totalRecords} 条 SKU · 第 ${page} 页` : dataMode === 'demo-empty' ? '真实资料库为空，当前为演示数据' : dataMode === 'demo-offline' ? 'API 未连接，当前为演示数据' : '正在读取资料库'}</span><div><button type="button" disabled={dataMode !== 'live' || page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button><b>{page}</b><button type="button" disabled={dataMode !== 'live' || page * pageSize >= totalRecords} onClick={() => setPage((current) => current + 1)}>下一页</button></div></footer>
+              <footer className="sku-list-footer"><span>{dataMode === 'live' ? `共 ${totalRecords} 条 SKU · 第 ${page} 页` : dataMode === 'demo-empty' ? '真实资料库为空，当前为开发演示数据' : dataMode === 'demo-offline' ? 'API 未连接，当前为开发演示数据' : dataMode === 'offline' ? '资料库连接失败，未显示模拟数据' : '正在读取资料库'}</span><div><button type="button" disabled={dataMode !== 'live' || page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button><b>{page}</b><button type="button" disabled={dataMode !== 'live' || page * pageSize >= totalRecords} onClick={() => setPage((current) => current + 1)}>下一页</button></div></footer>
             </article>
 
             <aside className="sku-inspector">
