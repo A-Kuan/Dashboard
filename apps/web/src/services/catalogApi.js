@@ -141,11 +141,22 @@ export async function getCatalogDictionaries() {
   return (await request('/api/v1/dictionaries')).dictionaries || {}
 }
 
-const importHeaderAliases = {
-  nameZh: ['nameZh', '中文名称', '零件名称'], nameEn: ['nameEn', '英文名称'], brand: ['brand', '品牌'],
-  category: ['category', '分类', '零件分类'], unit: ['unit', '单位', '计量单位'], primaryOe: ['primaryOe', '主OE', '主 OE'],
-  vehicle: ['vehicle', '车型', '适配车型'], years: ['years', '年款', '年款范围'], condition: ['condition', '适配条件'],
-  sourceSystem: ['sourceSystem', '来源系统'], sourceRecordId: ['sourceRecordId', '来源记录', '来源记录ID'],
+export const catalogImportFieldDefinitions = [
+  { key: 'nameZh', label: '中文名称', required: 'one_of_name', aliases: ['nameZh', '中文名称', '零件名称', '配件名称', '产品名称', '商品名称', '品名', '供应商品名'] },
+  { key: 'nameEn', label: '英文名称', required: 'one_of_name', aliases: ['nameEn', '英文名称', '英文品名', 'English Name', 'Part Name'] },
+  { key: 'brand', label: '品牌', recommended: true, aliases: ['brand', '品牌', '厂牌', '制造商', '品牌名称'] },
+  { key: 'category', label: '分类', recommended: true, aliases: ['category', '分类', '零件分类', '产品分类', '商品分类'] },
+  { key: 'unit', label: '单位', aliases: ['unit', '单位', '计量单位'] },
+  { key: 'primaryOe', label: '主 OE', required: true, aliases: ['primaryOe', '主OE', '主 OE', 'OE', 'OE号', 'OE 号', 'OE编号', '原厂号', '原厂编号', 'OEM号', 'OEM编号', '零件号', '原厂编码'] },
+  { key: 'vehicle', label: '车型', recommended: true, aliases: ['vehicle', '车型', '适配车型', '适用车型', '适用车系', '车系'] },
+  { key: 'years', label: '年款范围', recommended: true, aliases: ['years', '年款', '年款范围', '适用年款', '生产年份'] },
+  { key: 'condition', label: '适配条件', recommended: true, aliases: ['condition', '适配条件', '安装位置', '限制条件', 'PR码', 'PR 码'] },
+  { key: 'sourceSystem', label: '来源系统', recommended: true, aliases: ['sourceSystem', '来源系统', '数据来源', '来源', '供应商来源'] },
+  { key: 'sourceRecordId', label: '来源记录ID', recommended: true, aliases: ['sourceRecordId', '来源记录', '来源记录ID', '记录ID', '图号', '行ID'] },
+]
+
+function normalizeImportHeader(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s_\-./\\()（）]+/g, '')
 }
 
 function parseCsvRows(text) {
@@ -168,16 +179,56 @@ function parseCsvRows(text) {
   return rows
 }
 
-export function parseCatalogCsv(text) {
+export function inspectCatalogCsv(text) {
   const parsed = parseCsvRows(String(text || ''))
   if (parsed.length < 2) throw new Error('CSV 至少需要表头和一行数据')
   const headers = parsed[0].map((header) => String(header).replace(/^\uFEFF/, '').trim())
-  const columnMap = Object.fromEntries(Object.entries(importHeaderAliases).map(([field, aliases]) => [field, headers.findIndex((header) => aliases.includes(header))]))
-  if (columnMap.nameZh < 0 && columnMap.nameEn < 0) throw new Error('CSV 缺少“中文名称”或 nameZh 列')
-  if (columnMap.primaryOe < 0) throw new Error('CSV 缺少“主 OE”或 primaryOe 列')
-  return parsed.slice(1).filter((row) => row.some((cell) => String(cell).trim())).map((row) => Object.fromEntries(
-    Object.entries(columnMap).map(([field, index]) => [field, index >= 0 ? String(row[index] || '').trim() : '']),
-  ))
+  if (!headers.some(Boolean)) throw new Error('CSV 表头不能为空')
+  const dataRows = parsed.slice(1).filter((row) => row.some((cell) => String(cell).trim()))
+  if (!dataRows.length) throw new Error('CSV 没有可处理的数据行')
+  const counts = new Map()
+  const columns = headers.map((label, index) => {
+    const displayLabel = label || `未命名列 ${index + 1}`
+    const count = (counts.get(displayLabel) || 0) + 1
+    counts.set(displayLabel, count)
+    const sample = dataRows.map((row) => String(row[index] || '').trim()).find(Boolean) || '—'
+    return { index, label: displayLabel, sourceKey: count === 1 ? displayLabel : `${displayLabel} #${count}`, sample }
+  })
+  const used = new Set()
+  const suggestedMapping = Object.fromEntries(catalogImportFieldDefinitions.map((field) => {
+    const aliases = new Set(field.aliases.map(normalizeImportHeader))
+    const column = columns.find((item) => !used.has(item.index) && aliases.has(normalizeImportHeader(item.label)))
+    if (column) used.add(column.index)
+    return [field.key, column?.index ?? -1]
+  }))
+  const canonicalHeaders = new Set(catalogImportFieldDefinitions.map((field) => field.label))
+  const requiredReady = (suggestedMapping.nameZh >= 0 || suggestedMapping.nameEn >= 0) && suggestedMapping.primaryOe >= 0
+  return {
+    headers, columns, dataRows, suggestedMapping,
+    isStandardTemplate: requiredReady && headers.every((header) => canonicalHeaders.has(header)),
+  }
+}
+
+export function mapCatalogCsvInspection(inspection, mapping = inspection?.suggestedMapping || {}) {
+  const selected = Object.entries(mapping).filter(([, index]) => Number(index) >= 0)
+  const selectedIndexes = selected.map(([, index]) => Number(index))
+  if (new Set(selectedIndexes).size !== selectedIndexes.length) throw new Error('同一原始列不能映射到多个 SKU 字段')
+  const isMapped = (value) => Number.isInteger(Number(value)) && Number(value) >= 0
+  if (!isMapped(mapping.nameZh) && !isMapped(mapping.nameEn)) throw new Error('请映射“中文名称”或“英文名称”')
+  if (!isMapped(mapping.primaryOe)) throw new Error('请映射“主 OE”字段')
+  return inspection.dataRows.map((row) => {
+    const mapped = Object.fromEntries(catalogImportFieldDefinitions.map((field) => {
+      const index = Number(mapping[field.key])
+      return [field.key, index >= 0 ? String(row[index] || '').trim() : '']
+    }))
+    mapped._sourceRow = Object.fromEntries(inspection.columns.map((column) => [column.sourceKey, String(row[column.index] || '').trim()]))
+    return mapped
+  })
+}
+
+export function parseCatalogCsv(text) {
+  const inspection = inspectCatalogCsv(text)
+  return mapCatalogCsvInspection(inspection, inspection.suggestedMapping)
 }
 
 export function getCatalogImportTemplate() {

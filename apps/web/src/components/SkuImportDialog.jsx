@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, FingerprintSimple, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, listCatalogImports, parseCatalogCsv, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, FingerprintSimple, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { catalogImportFieldDefinitions, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImports, mapCatalogCsvInspection, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
@@ -53,6 +53,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const [templateSpec, setTemplateSpec] = useState(null)
   const [fieldGuideOpen, setFieldGuideOpen] = useState(false)
   const [templateBusy, setTemplateBusy] = useState(false)
+  const [mappingContext, setMappingContext] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -95,6 +96,19 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     }
   }
 
+  const openPreview = async (sourceName, rows) => {
+    const preview = await previewCatalogImport(sourceName, rows)
+    if (preview.duplicateUpload && preview.state !== 'preview') {
+      setMode('history')
+      setSelectedJob(preview)
+      onNotify?.('文件内容已处理过，已打开原导入批次')
+      return
+    }
+    setJob(preview)
+    setSelected(new Set(preview.rows.filter((row) => row.state === 'ready').map((row) => row.id)))
+    setStep('preview')
+  }
+
   const handleFile = async (file) => {
     if (!file) return
     setError('')
@@ -102,19 +116,32 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     if (file.size > 2 * 1024 * 1024) return setError('文件超过 2 MB，请拆分后导入')
     setBusy(true)
     try {
-      const rows = parseCatalogCsv(await file.text())
-      const preview = await previewCatalogImport(file.name, rows)
-      if (preview.duplicateUpload && preview.state !== 'preview') {
-        setMode('history')
-        setSelectedJob(preview)
-        onNotify?.('文件内容已处理过，已打开原导入批次')
-        return
+      const inspection = inspectCatalogCsv(await file.text())
+      if (inspection.isStandardTemplate) await openPreview(file.name, mapCatalogCsvInspection(inspection, inspection.suggestedMapping))
+      else {
+        setMappingContext({ sourceName: file.name, inspection, mapping: { ...inspection.suggestedMapping } })
+        setStep('mapping')
       }
-      setJob(preview)
-      setSelected(new Set(preview.rows.filter((row) => row.state === 'ready').map((row) => row.id)))
-      setStep('preview')
     } catch (reason) {
       setError(reason.message || '文件解析失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const updateMapping = (field, index) => {
+    setMappingContext((current) => ({ ...current, mapping: { ...current.mapping, [field]: Number(index) } }))
+    setError('')
+  }
+
+  const confirmMapping = async () => {
+    if (!mappingContext) return
+    setBusy(true)
+    setError('')
+    try {
+      await openPreview(mappingContext.sourceName, mapCatalogCsvInspection(mappingContext.inspection, mappingContext.mapping))
+    } catch (reason) {
+      setError(reason.message || '字段映射无法进入预检查')
     } finally {
       setBusy(false)
     }
@@ -164,6 +191,12 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     }
   }
 
+  const mappingFields = catalogImportFieldDefinitions.map((field) => ({ ...field, ...(templateSpec?.fields?.find((item) => item.key === field.key) || {}) }))
+  const mapping = mappingContext?.mapping || {}
+  const mappedIndexes = Object.values(mapping).map(Number).filter((index) => index >= 0)
+  const mappingReady = (Number(mapping.nameZh) >= 0 || Number(mapping.nameEn) >= 0) && Number(mapping.primaryOe) >= 0 && new Set(mappedIndexes).size === mappedIndexes.length
+  const unmappedColumns = (mappingContext?.inspection.columns || []).filter((column) => !mappedIndexes.includes(column.index))
+
   return (
     <div className="sku-modal-backdrop" onMouseDown={onClose}>
       <section className="sku-import-dialog" role="dialog" aria-modal="true" aria-label="批量导入 SKU" onMouseDown={(event) => event.stopPropagation()}>
@@ -173,8 +206,8 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
         </header>
 
         <div className="sku-import-modebar">
-          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button></div>
-          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, preview: 1, result: 2 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label>}
+          <div><button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => { setMode('new'); setSelectedJob(null); setStep('upload'); setMappingContext(null); setError('') }}><UploadSimple size={17} />新建导入</button><button type="button" className={mode === 'history' ? 'active' : ''} onClick={() => { setMode('history'); setSelectedJob(null); setError('') }}><ClockCounterClockwise size={17} />导入记录</button></div>
+          {mode === 'new' ? <nav className="sku-import-steps" aria-label="导入步骤">{['选择文件', '字段映射', '预检查', '写入结果'].map((label, index) => { const current = { upload: 0, mapping: 1, preview: 2, result: 3 }[step]; return <span className={index === current ? 'active' : index < current ? 'done' : ''} key={label}><i>{index < current ? <Check size={13} weight="bold" /> : index + 1}</i>{label}</span> })}</nav> : <label className="sku-import-history-filter"><select aria-label="导入状态筛选" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setSelectedJob(null) }}><option value="">全部状态</option><option value="completed">已完成</option><option value="partial">部分失败</option><option value="preview">待确认</option></select></label>}
         </div>
 
         <div className="sku-import-body">
@@ -192,6 +225,12 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
             </div>
             {fieldGuideOpen ? <section className="sku-import-field-guide"><header><div><strong>字段说明</strong><span>模板与导入校验使用同一版规范</span></div><em>{templateSpec?.fields?.length || 0} 个字段</em></header><div>{(templateSpec?.fields || []).map((field) => <article key={field.key}><span><strong>{field.label}</strong>{field.required === 'one_of_name' ? <i>二选一</i> : field.required ? <i className="required">必需</i> : field.recommended ? <i>建议</i> : <i className="optional">可选</i>}</span><p>{field.description}</p><small>示例：{field.example || '—'}</small></article>)}</div></section> : null}
           </> : null}
+
+          {mode === 'new' && step === 'mapping' && mappingContext ? <section className="sku-import-mapping">
+            <header><div><span><ArrowsLeftRight size={22} weight="duotone" /></span><div><h3>确认供应商字段映射</h3><p>{mappingContext.sourceName} · {mappingContext.inspection.columns.length} 列 · {mappingContext.inspection.dataRows.length} 行数据</p></div></div><strong>{mappedIndexes.length} / {mappingFields.length} 字段已映射</strong></header>
+            <div className="sku-mapping-list">{mappingFields.map((field) => { const selectedIndex = Number(mapping[field.key]); const column = mappingContext.inspection.columns.find((item) => item.index === selectedIndex); return <article key={field.key}><div className="sku-mapping-target"><span><strong>{field.label}</strong>{field.required === 'one_of_name' ? <i>二选一</i> : field.required ? <i className="required">必需</i> : field.recommended ? <i>建议</i> : <i className="optional">可选</i>}</span><small>{field.description || '映射到 SKU 标准字段'}</small></div><ArrowRight size={17} /><label><select aria-label={`映射 ${field.label}`} value={selectedIndex >= 0 ? selectedIndex : -1} onChange={(event) => updateMapping(field.key, event.target.value)}><option value={-1}>不导入此字段</option>{mappingContext.inspection.columns.map((item) => <option key={item.index} value={item.index} disabled={mappedIndexes.includes(item.index) && item.index !== selectedIndex}>{item.label}</option>)}</select><span>{column ? `样例：${column.sample}` : '尚未选择原始列'}</span></label></article> })}</div>
+            <footer><div><strong>未映射原始列</strong><span>不写入 SKU 字段，但仍会保留在来源证据中</span></div><p>{unmappedColumns.length ? unmappedColumns.map((column) => <span key={column.index}>{column.label}</span>) : <em>全部原始列已映射</em>}</p></footer>
+          </section> : null}
 
           {mode === 'new' && step === 'preview' ? <>
             {job.duplicateUpload ? <section className="sku-import-duplicate-upload"><FingerprintSimple size={22} weight="duotone" /><div><strong>已找到相同内容的待确认批次</strong><span>系统没有新建重复批次；你可继续处理下方原批次。</span></div><code>{job.contentFingerprint}</code></section> : null}
@@ -221,8 +260,9 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
         </div>
 
         <footer className="sku-import-actions">
-          {mode === 'new' && step === 'preview' ? <button type="button" onClick={() => { setStep('upload'); setJob(null); setError('') }}><ArrowLeft size={17} />重新选择</button> : <span />}
+          {mode === 'new' && ['mapping', 'preview'].includes(step) ? <button type="button" onClick={() => { setStep('upload'); setJob(null); setMappingContext(null); setError('') }}><ArrowLeft size={17} />重新选择</button> : <span />}
           {mode === 'new' && step === 'upload' ? <button className="secondary" type="button" onClick={onClose}>取消</button> : null}
+          {mode === 'new' && step === 'mapping' ? <button className="primary" type="button" disabled={busy || !mappingReady} onClick={confirmMapping}>{busy ? '正在预检查…' : '确认映射并预检查'}</button> : null}
           {mode === 'new' && step === 'preview' ? <button className="primary" type="button" disabled={busy || !selected.size} onClick={commit}>{busy ? '正在写入…' : `写入 ${selected.size} 条草稿`}</button> : null}
           {mode === 'new' && step === 'result' ? <button className="primary" type="button" onClick={onClose}>完成并返回资料库</button> : null}
           {mode === 'history' ? <button className="secondary" type="button" onClick={onClose}>关闭</button> : null}

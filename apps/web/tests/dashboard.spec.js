@@ -179,6 +179,25 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await repeatedDialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
 })
 
+test('maps supplier CSV headers before creating an import preview', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const supplierCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n空调滤芯,4M0 819 439 B,MANN,Audi Q7 (4M),供应商特价批次'
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a.csv', mimeType: 'text/csv', buffer: Buffer.from(supplierCsv) })
+  await expect(dialog.getByRole('heading', { name: '确认供应商字段映射' })).toBeVisible()
+  await expect(dialog.getByLabel('映射 中文名称')).toHaveValue('0')
+  await expect(dialog.getByLabel('映射 主 OE')).toHaveValue('1')
+  await expect(dialog.getByLabel('映射 品牌')).toHaveValue('2')
+  await expect(dialog.getByLabel('映射 车型')).toHaveValue('3')
+  await expect(dialog.locator('.sku-import-mapping > footer p').getByText('内部备注', { exact: true })).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-mapping-1680.png', fullPage: false })
+  await dialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(dialog.getByText('空调滤芯', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('4M0 819 439 B', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '关闭' }).first().click()
+})
+
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByLabel('选择 前制动盘').check()
