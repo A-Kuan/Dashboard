@@ -49,6 +49,7 @@ npm run test:sites
 - 车型库发布前备份：`/opt/dashboard-sku-api/backups/20260928-before-069643d.dump`
 - 车型库与多图片联合发布前备份：`/opt/dashboard-sku-api/backups/20260928-before-adb6d54.dump`
 - SKU v2 与资源托管迁移前备份：`/opt/dashboard-sku-api/backups/20261002T0604Z-before-0cf9993f.dump`（SHA-256 `d1e60557a98b1812eee3419aafde0e91e67c45104c92ddbee2d59c1a2e3ad889`）
+- 旧 SKU 迁移预览发布前备份：`/opt/dashboard-sku-api/backups/20261002T070248Z-c790f499-dashboard_sku.dump`，配套清单 `.manifest.json`（SHA-256 `4190ea941198c1726c57b391218a39393821555dd10a4a70206ec55b8d9aedf4`，文件与清单权限均为 `0640`）
 
 API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
 
@@ -217,6 +218,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:production-sm
 `20260930-bf4e19b` 前端清理版发布后已在线验证：`apps/web` 仅保留虎山行工作台入口、组件、样式与专属资产，旧 SKU、车型库、字典管理前端模块、服务层和视觉资产均已移除；`/skus`、`/vehicles` 与 `/dictionaries` 不再暴露旧业务页面，统一显示工作台。旧静态零件资产返回 404，生产 bundle 不包含旧业务页面文案。API 服务和线上 17 条 SKU 数据按约定保留但不再由当前前端调用；本次未迁移数据库、未重启 API 或 Nginx，上一版 `20260930-40b8bbb` 保留用于回滚。
 
 `20261002-0cf9993f` API 与 `20261002-0caffeee` 前端联合发布后已在线验证：数据库从 7 个旧迁移升级到带校验账本的 26 个迁移，旧表中的 17 条 SKU、46 条 OE 关系和 1 条适配保持不变；新 `catalog_sku` 与 EPC 资源表保持空状态，未自动搬运旧数据。API `ready`、资源存储巡检、Nginx、静态资源和 systemd 服务均正常；资源目录位于 release 外部并使用 `dashboard-sku:dashboard-sku 750` 权限。生产身份默认只读，写请求返回 403；浏览器请求使用 `/sku-preview/api/`，显示“只读访客 / 只读查看”，不会用演示 SKU 代替真实空库，控制台无错误。回滚点为前端 `20260930-bf4e19b`、API `20260928-adb6d54`，迁移前数据库备份见上方清单。
+
+`20261002-fb938da5` API 与前端联合发布后已在线验证旧 SKU 受控迁移预览：迁移 `027_catalog_legacy_sku_migration.sql` 已执行，预览读取旧表 17 条 SKU、46 条 OE 关系与 1 条适配，未自动写入新资料库；`catalog_sku` 与三张迁移账本均保持 0 条。生产只读身份可查看映射、风险与来源变化，但迁移写请求仍返回 403。API `ready` 报告 27 个迁移，Nginx、静态入口与生产只读冒烟均通过。备份脚本同时修复多 PostgreSQL 版本环境下导出/校验工具错配，并以配套清单验证了本次迁移前备份。回滚点为前端 `20261002-0caffeee`、API `20261002-0cf9993f`；数据库不随应用回滚自动降级。
 
 ## 回滚
 

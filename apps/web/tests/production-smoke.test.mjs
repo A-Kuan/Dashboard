@@ -27,6 +27,18 @@ test('production workbench uses its real API without writing data', { skip: !bas
     assert.equal(await page.getByText('真实资料库为空，当前为开发演示数据', { exact: true }).isVisible().catch(() => false), false)
     assert.equal(await page.getByText('API 未连接，当前为开发演示数据', { exact: true }).isVisible().catch(() => false), false)
     if (!session.capabilities.includes('catalog.edit')) assert.equal(await page.getByRole('button', { name: '新建 SKU', exact: true }).isEnabled(), false)
+
+    await page.getByRole('button', { name: '旧资料迁移', exact: true }).click()
+    await page.getByRole('heading', { name: '旧 SKU 迁移预览', exact: true }).waitFor({ state: 'visible' })
+    await page.getByText('当前迁移范围', { exact: true }).waitFor({ state: 'visible' })
+    const legacyPreviewResponse = await page.request.get(new URL('api/v2/catalog/legacy-migration-preview', baseUrl).toString())
+    assert.equal(legacyPreviewResponse.ok(), true)
+    const legacyPreview = await legacyPreviewResponse.json()
+    assert.ok(Number.isInteger(legacyPreview.summary.total))
+    assert.equal(await page.getByText('已选择 0 条', { exact: false }).isVisible(), true)
+    assert.equal(await page.getByRole('button', { name: '确认迁移 0 条', exact: true }).isEnabled(), false)
+    if (!session.capabilities.includes('catalog.import')) assert.equal(await page.getByRole('button', { name: '选择全部建议项', exact: true }).isEnabled(), false)
+
     assert.ok(catalogRequests.length > 0)
     assert.ok(catalogRequests.every((url) => url.startsWith(new URL('api/', baseUrl).toString())))
     assert.deepEqual(consoleErrors, [])
