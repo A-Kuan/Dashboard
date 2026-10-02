@@ -41,6 +41,7 @@ const app = buildApp({
   catalogEpcAssetStorage: createCatalogEpcAssetStorage(),
   catalogLegacyMigrationRepository: createCatalogLegacyMigrationRepository(pool),
   releaseRevision,
+  getDatabasePoolStats: () => ({ totalCount: pool.totalCount, idleCount: pool.idleCount, waitingCount: pool.waitingCount }),
   readinessCheck: async () => {
     const schema = await migrationReadiness(pool)
     const database = (await pool.query('SELECT current_database() AS name')).rows[0].name

@@ -93,6 +93,7 @@ install -d -o dashboard-sku -g dashboard-sku -m 0750 "$release_path"
 REMOTE
 
 git archive --format=tar "${revision_sha}:apps/api" | ssh "${ssh_options[@]}" "$deploy_host" "tar -xf - -C '$release_path'"
+git show "${revision_sha}:deploy/run-api-restore-drill.sh" | ssh "${ssh_options[@]}" "$deploy_host" "cat >'$release_path/scripts/run-api-restore-drill.sh'"
 
 ssh "${ssh_options[@]}" "$deploy_host" bash -s -- "$release_path" "$revision_sha" "$deploy_root" <<'REMOTE'
 set -euo pipefail
@@ -102,6 +103,7 @@ deploy_root="$3"
 printf '%s\n' "$revision_sha" >"$release_path/REVISION"
 chown -R dashboard-sku:dashboard-sku "$release_path"
 chmod 0640 "$release_path/REVISION"
+chmod 0750 "$release_path/scripts/run-api-restore-drill.sh"
 cd "$release_path"
 sudo -u dashboard-sku npm ci --omit=dev
 sudo -u dashboard-sku npm test

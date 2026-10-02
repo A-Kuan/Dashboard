@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Dashboard SKU API operational integrity checks
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=dashboard-sku-operations-check.service
+
+[Install]
+WantedBy=timers.target

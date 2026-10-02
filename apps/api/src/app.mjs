@@ -6,6 +6,7 @@ import { catalogRoles, requireCatalogCapability, resolveCatalogActor } from './c
 import { catalogImportTemplateCsv, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
 import { normalizeEpcCommitInput, normalizeEpcPreviewInput } from './catalog-epc-validation.mjs'
 import { normalizeEpcConnectorCollectInput } from './catalog-epc-connector-validation.mjs'
+import { createHttpMetrics, createLoggerOptions, createRequestId, isOperationsRequestAuthorized, OperationalLogController } from './observability.mjs'
 
 const transitionCapabilities = {
   submit_review: 'catalog.submit',
@@ -37,8 +38,9 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
-  const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+  const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
+  const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
   const ensureNoFitmentConflicts = async (skuId) => {
@@ -70,14 +72,35 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     }
   }
 
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('x-request-id', request.id)
+  })
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (reply.statusCode < 400 || typeof payload !== 'string' || !payload.trimStart().startsWith('{')) return payload
+    try {
+      const body = JSON.parse(payload)
+      if (!body || Array.isArray(body) || typeof body !== 'object' || body.requestId) return payload
+      return JSON.stringify({ ...body, requestId: request.id })
+    } catch {
+      return payload
+    }
+  })
+  app.addHook('onResponse', async (request, reply) => {
+    metrics.record({ method: request.method, route: request.routeOptions?.url, statusCode: reply.statusCode, durationMs: reply.elapsedTime })
+  })
+
   app.get('/api/health', async () => ({ status: 'ok', ...serviceMetadata }))
   app.get('/api/ready', async (request, reply) => {
     try {
       return { status: 'ready', ...serviceMetadata, ...(await readinessCheck()) }
     } catch (error) {
       request.log.warn({ err: error, code: error.code }, 'readiness check failed')
-      return reply.code(503).send({ status: 'not_ready', ...serviceMetadata, error: error.code || 'DATABASE_UNAVAILABLE' })
+      return reply.code(503).send({ status: 'not_ready', ...serviceMetadata, error: error.code || 'DATABASE_UNAVAILABLE', requestId: request.id })
     }
+  })
+  app.get('/api/metrics', async (request, reply) => {
+    if (!isOperationsRequestAuthorized(request, operationsToken)) return reply.code(404).send({ error: 'NOT_FOUND', message: '资源不存在', requestId: request.id })
+    return reply.type('text/plain; version=0.0.4; charset=utf-8').send(metrics.render())
   })
   app.get('/api/v2/catalog/import-template', async (request, reply) => {
     const format = String(request.query?.format || 'json').toLowerCase()
@@ -778,13 +801,14 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     return job
   })
 
-  app.setErrorHandler((error, _request, reply) => {
-    if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在' })
-    if (error.code === '23503') return reply.code(400).send({ error: 'INVALID_REFERENCE', message: '关联的数据不存在或已经失效' })
+  app.setErrorHandler((error, request, reply) => {
+    if (error.code === '23505') return reply.code(409).send({ error: 'CONFLICT', message: '数据已存在', requestId: request.id })
+    if (error.code === '23503') return reply.code(400).send({ error: 'INVALID_REFERENCE', message: '关联的数据不存在或已经失效', requestId: request.id })
     const safeExternalError = /^EPC_CONNECTOR_(NOT_CONFIGURED|UPSTREAM_ERROR|UNAVAILABLE|TIMEOUT)$/.test(error.errorCode || '') || /^EPC_ASSET_/.test(error.errorCode || '')
     const status = error.statusCode && (error.statusCode < 500 || safeExternalError) ? error.statusCode : 500
-    const payload = { error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message }
+    const payload = { error: status === 500 ? 'INTERNAL_ERROR' : error.errorCode || 'INVALID_INPUT', message: status === 500 ? '服务器暂时无法处理请求' : error.message, requestId: request.id }
     if (status !== 500 && error.details) payload.details = error.details
+    if (status >= 500) request.log.error({ err: error, event: 'http.request.unhandled_error', errorCode: payload.error }, 'unhandled request error')
     return reply.code(status).send(payload)
   })
   return app
