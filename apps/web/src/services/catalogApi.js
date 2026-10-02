@@ -206,6 +206,29 @@ export function getCatalogMetrics(days = 30) {
   return request(`/api/v2/catalog/metrics?days=${encodeURIComponent(days)}`)
 }
 
+export async function downloadCatalogExport(format = 'json', status = '') {
+  const params = new URLSearchParams({ format })
+  if (status && status !== 'all') params.set('status', status)
+  const response = await fetch(`${apiBase}/api/v2/catalog/export?${params}`, {
+    headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.message || `导出失败（${response.status}）`)
+  }
+  const disposition = response.headers.get('content-disposition') || ''
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || `hushanxing-sku.${format}`
+  const url = window.URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+  return { filename }
+}
+
 export function listCatalogConflicts() {
   return request('/api/v2/catalog/conflicts')
 }

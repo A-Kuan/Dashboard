@@ -37,6 +37,14 @@ function createCatalogRepository() {
     async metrics({ days = 30 } = {}) {
       return { days: Number(days), statusCounts: { draft: items.filter((item) => item.lifecycleStatus === 'draft').length }, issueCounts: { fitment: items.filter((item) => item.completenessScore < 100).length }, completeness: { low: 1, medium: 0, complete: 0 }, reviews: { submitted: 0, approved: 0, rejected: 0, avg_hours: 0, overdue: 0 }, imports: { batches: 0, total_rows: 0, imported_rows: 0, failed_rows: 0, successRate: 0 }, activity: [] }
     },
+    async exportSnapshot({ status = '' } = {}) {
+      const selected = items.filter((item) => !status || item.lifecycleStatus === status).map((item) => ({ ...structuredClone(item), changes: structuredClone(changes.get(item.id) || []) }))
+      return {
+        schemaVersion: 'catalog-export-v1', exportId: 'export-1', generatedAt: '2026-10-02T00:00:00.000Z', filter: { status: status || 'all' },
+        counts: { skus: selected.length, identifiers: selected.reduce((sum, item) => sum + item.identifiers.length, 0), fitments: selected.reduce((sum, item) => sum + item.fitments.length, 0), evidence: selected.reduce((sum, item) => sum + item.evidence.length, 0), changes: selected.reduce((sum, item) => sum + item.changes.length, 0), identifierResolutions: resolutions.length, merges: 0 },
+        checksum: { algorithm: 'sha256', value: 'a'.repeat(64) }, items: selected, relations: { identifierResolutions: structuredClone(resolutions), merges: [] },
+      }
+    },
     async findDuplicates(identifier, exceptId) {
       return duplicateMatches(identifier, exceptId)
     },
@@ -331,6 +339,32 @@ test('catalog v2 exposes development roles and enforces write capabilities', asy
   const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', headers: { 'x-operator-role': 'catalog_editor', 'x-operator-name': '录入员甲' }, payload: { identity: { nameZh: '允许创建' } } })
   assert.equal(created.statusCode, 201)
   assert.equal(created.json().createdBy, '录入员甲')
+  await app.close()
+})
+
+test('catalog v2 exports an auditable JSON snapshot and an operations CSV', async () => {
+  const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
+  await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {
+    identity: { nameZh: '导出测试件', brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: 'EXPORT-01' }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'EXPORT-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: 'Cayenne (9YA)', years: '2018-2023', evidenceKey: 'source' }],
+  } })
+  const denied = await app.inject({ method: 'GET', url: '/api/v2/catalog/export?format=json', headers: { 'x-operator-role': 'catalog_reviewer' } })
+  assert.equal(denied.statusCode, 403)
+  const json = await app.inject('/api/v2/catalog/export?format=json&status=draft')
+  assert.equal(json.statusCode, 200)
+  assert.match(json.headers['content-disposition'], /hushanxing-sku-20261002-draft\.json/)
+  assert.equal(json.json().schemaVersion, 'catalog-export-v1')
+  assert.equal(json.json().counts.skus, 1)
+  assert.equal(json.json().checksum.value.length, 64)
+  assert.equal(json.json().items[0].changes[0].action, 'create_draft')
+  const csv = await app.inject('/api/v2/catalog/export?format=csv')
+  assert.equal(csv.statusCode, 200)
+  assert.match(csv.headers['content-type'], /^text\/csv/)
+  assert.match(csv.body, /SKU 编码,中文名称/)
+  assert.match(csv.body, /EXPORT-001/)
+  assert.equal((await app.inject('/api/v2/catalog/export?format=xlsx')).statusCode, 400)
   await app.close()
 })
 

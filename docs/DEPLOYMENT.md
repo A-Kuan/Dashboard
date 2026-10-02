@@ -63,6 +63,41 @@ sudo -u postgres pg_dump -p 5432 -Fc dashboard_sku > /opt/dashboard-sku-api/back
 sudo -u postgres psql -p 5432 -d dashboard_sku -c 'TRUNCATE TABLE sku CASCADE;'
 ```
 
+### 可校验数据库备份
+
+API 工程提供带清单的 PostgreSQL 自定义格式备份。清单记录文件大小、SHA-256、关键业务表行数和归档可读性检查结果；备份文件与清单必须成对保存。
+
+```bash
+cd /opt/dashboard-sku-api/current
+sudo -u dashboard-sku env \
+  PGDATABASE=dashboard_sku \
+  PGUSER=dashboard-sku \
+  CATALOG_BACKUP_DIR=/opt/dashboard-sku-api/backups \
+  RELEASE_REVISION=<git-sha> \
+  npm run backup
+
+npm run backup:verify -- /opt/dashboard-sku-api/backups/<backup>.manifest.json
+```
+
+每次数据库迁移、批量导入和正式数据清理前都必须生成新备份。备份脚本不会删除旧文件；保留策略由服务器任务负责，建议至少保留最近 14 份日备份和 8 份周备份。
+
+恢复不能直接覆盖生产库。先恢复到一次性验证库，核对清单中的关键表数量并执行 API 冒烟测试：
+
+```bash
+sudo -u postgres createdb dashboard_sku_restore_check_YYYYMMDD
+sudo -u postgres pg_restore --no-owner --no-privileges \
+  -d dashboard_sku_restore_check_YYYYMMDD \
+  /opt/dashboard-sku-api/backups/<backup>.dump
+
+PGDATABASE=dashboard_sku_restore_check_YYYYMMDD PGUSER=dashboard-sku npm run migrate
+sudo -u postgres psql -d dashboard_sku_restore_check_YYYYMMDD \
+  -c 'select count(*) from catalog_sku;'
+```
+
+只有恢复验证、关键表数量、接口测试和人工抽查均通过后，才能安排生产切换。切换完成后再删除一次性验证库。
+
+页面“导出资料”生成的 JSON/CSV 用于业务交接和人工核对，不替代数据库备份。JSON 审计包包含架构版本、计数与内容校验值；CSV 是便于 Excel 阅读的扁平视图。
+
 ## 发布结构
 
 ```text

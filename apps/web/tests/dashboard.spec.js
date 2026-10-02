@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 test.beforeEach(async ({ page }) => {
   const errors = []
@@ -172,6 +173,43 @@ test('supports controlled bulk review submission with per-record results', async
   await dialog.getByRole('button', { name: '返回资料库' }).click()
 })
 
+test('exports a full audit package and a readable business CSV', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const payload = {
+    identity: { nameZh: '导出验收测试件', brandCode: 'POR', brandLabel: 'Porsche OE', categoryCode: 'FILTER', categoryLabel: '滤清器' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: 'EXPORT-E2E-01' }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'EXPORT-E2E-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [{ vehicleLabel: 'Macan (95B)', years: '2014-2018', evidenceKey: 'source' }], interchanges: [],
+  }
+  expect((await page.request.post('/api/v2/catalog/skus', { headers, data: payload })).ok()).toBeTruthy()
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '导出资料' }).click()
+  const dialog = page.getByRole('dialog', { name: '导出 SKU 资料' })
+  await expect(dialog).toContainText('审计包自带完整性信息')
+  await expect(dialog).toContainText('业务导出不等于数据库备份')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-export-1680.png', fullPage: false })
+
+  const jsonDownloadPromise = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: '下载 JSON' }).click()
+  const jsonDownload = await jsonDownloadPromise
+  expect(jsonDownload.suggestedFilename()).toMatch(/^hushanxing-sku-\d{8}\.json$/)
+  const snapshot = JSON.parse(await readFile(await jsonDownload.path(), 'utf8'))
+  expect(snapshot.schemaVersion).toBe('catalog-export-v1')
+  expect(snapshot.checksum.value).toMatch(/^[a-f0-9]{64}$/)
+  expect(snapshot.items.some((item) => item.identity.nameZh === '导出验收测试件')).toBeTruthy()
+
+  await page.getByRole('button', { name: '导出资料' }).click()
+  const csvDialog = page.getByRole('dialog', { name: '导出 SKU 资料' })
+  await csvDialog.getByLabel(/业务表格/).check()
+  const csvDownloadPromise = page.waitForEvent('download')
+  await csvDialog.getByRole('button', { name: '下载 CSV' }).click()
+  const csvDownload = await csvDownloadPromise
+  expect(csvDownload.suggestedFilename()).toMatch(/^hushanxing-sku-\d{8}\.csv$/)
+  const csv = await readFile(await csvDownload.path(), 'utf8')
+  expect(csv).toContain('SKU 编码,中文名称')
+  expect(csv).toContain('EXPORT-E2E-001')
+})
+
 test('switches development roles and disables unauthorized operations', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '当前资料权限' }).click()
@@ -179,6 +217,7 @@ test('switches development roles and disables unauthorized operations', async ({
   await page.getByRole('button', { name: /只读查看/ }).click()
   await expect(page.getByRole('button', { name: '新建 SKU' })).toBeDisabled()
   await expect(page.getByRole('button', { name: '批量导入' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '导出资料' })).toBeDisabled()
   await page.getByRole('button', { name: '当前资料权限' }).click()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-role-permissions-1680.png', fullPage: false })
 })

@@ -8,6 +8,7 @@ import {
   ClipboardText,
   ClockCounterClockwise,
   Cube,
+  DownloadSimple,
   FileArrowUp,
   Funnel,
   MagnifyingGlass,
@@ -28,6 +29,7 @@ import { SkuQualityQueue } from './SkuQualityQueue'
 import { SkuVersionDialog } from './SkuVersionDialog'
 import { CatalogOperatorMenu } from './CatalogOperatorMenu'
 import { SkuBulkActionDialog } from './SkuBulkActionDialog'
+import { SkuExportDialog } from './SkuExportDialog'
 import { getCatalogDictionaries, getCatalogSku, listCatalogSkus } from '../services/catalogApi'
 import '../sku-library.css'
 
@@ -64,6 +66,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
   const [detailTab, setDetailTab] = useState('identity')
   const [sourceOpen, setSourceOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [qualityOpen, setQualityOpen] = useState(false)
   const [versionDialogChange, setVersionDialogChange] = useState(null)
   const [bulkAction, setBulkAction] = useState('')
@@ -202,7 +205,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
+        <SkuQualityQueue capabilities={catalogSession?.capabilities || ['catalog.edit', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.lifecycle']} onBack={() => { setQualityOpen(false); loadCatalog() }} onEdit={(record) => { setQualityOpen(false); setEditorContext({ source: 'epc', record }) }} onSaved={handleSaved} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )
@@ -227,6 +230,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
         <div className="sku-content">
           <section className="sku-toolbar" aria-label="SKU 搜索和操作">
             <div className="sku-searchbox"><MagnifyingGlass size={25} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、OE 号、配件名称、品牌或适配车型" /><kbd>Ctrl K</kbd></div>
+            <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.export') || dataMode === 'demo-offline'} onClick={() => setExportOpen(true)}><DownloadSimple size={20} weight="bold" />导出资料</button>
             <button className="sku-secondary-action" type="button" onClick={() => setQualityOpen(true)}><ShieldCheck size={20} weight="bold" />质量审核</button>
             <button className="sku-secondary-action" type="button" disabled={!hasCapability('catalog.import')} onClick={() => setImportOpen(true)}><FileArrowUp size={20} weight="bold" />批量导入</button>
             <button className="sku-primary-action" type="button" disabled={!hasCapability('catalog.edit')} onClick={() => setSourceOpen(true)}><Plus size={21} weight="bold" />新建 SKU</button>
@@ -297,6 +301,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
 
       {sourceOpen ? <div className="sku-modal-backdrop" onMouseDown={() => setSourceOpen(false)}><div className="sku-source-modal" role="dialog" aria-modal="true" aria-label="选择 SKU 创建来源" onMouseDown={(event) => event.stopPropagation()}><header><div><span><Sparkle size={22} weight="fill" /></span><div><h2>选择 SKU 创建来源</h2><p>优先从可追溯的数据生成，后续核验更快、更可靠。</p></div></div><button type="button" aria-label="关闭" onClick={() => setSourceOpen(false)}><X size={21} weight="bold" /></button></header><div className="sku-source-list">{sources.map((source) => { const Icon = source.icon; return <button type="button" key={source.id} onClick={() => { setSourceOpen(false); setEditorContext({ source: source.id }) }}><span className="source-icon"><Icon size={25} weight="duotone" /></span><span><strong>{source.title}{source.recommended ? <em>推荐</em> : null}</strong><small>{source.note}</small></span><ArrowRight size={18} weight="bold" /></button> })}</div><footer>草稿将写入新资料库；核验前不会进入正式可用状态。</footer></div></div> : null}
       {importOpen ? <SkuImportDialog onClose={() => setImportOpen(false)} onCompleted={() => loadCatalog()} onNotify={notify} /> : null}
+      {exportOpen ? <SkuExportDialog currentStatus={status} total={totalRecords} onClose={() => setExportOpen(false)} onNotify={notify} /> : null}
       {versionDialogChange && selected.dataOrigin === 'live' ? <SkuVersionDialog record={selected} initialChange={versionDialogChange} canRestore={hasCapability('catalog.restore')} onClose={() => setVersionDialogChange(null)} onRestored={handleSaved} onNotify={notify} /> : null}
       {bulkAction ? <SkuBulkActionDialog records={selectedRecords} action={bulkAction} onClose={() => setBulkAction('')} onCompleted={() => { setSelectedIds([]); loadCatalog() }} onNotify={notify} /> : null}
       {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}

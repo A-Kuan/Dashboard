@@ -13,7 +13,7 @@ const roleDefinitions = {
   },
   catalog_admin: {
     label: '资料管理员',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk'],
   },
 }
 

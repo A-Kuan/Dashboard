@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
 function compactDate() {
@@ -590,6 +590,58 @@ export function createCatalogRepository(pool) {
         reviews: review.rows[0],
         imports: { ...importRow, successRate: attemptedRows ? Math.round((importRow.imported_rows / attemptedRows) * 100) : 0 },
         activity: activity.rows.map((row) => ({ ...row, day: row.day instanceof Date ? row.day.toISOString().slice(0, 10) : String(row.day) })),
+      }
+    },
+
+    async exportSnapshot({ status = '' } = {}) {
+      const allowedStatuses = new Set(['', 'draft', 'review', 'verified', 'discontinued'])
+      if (!allowedStatuses.has(status)) throw transitionError('不支持的导出状态筛选')
+      const values = status ? [status] : []
+      const where = status ? 'WHERE lifecycle_status=$1' : ''
+      const { rows } = await pool.query(`SELECT id FROM catalog_sku ${where} ORDER BY created_at,id LIMIT 5001`, values)
+      if (rows.length > 5000) {
+        const error = new Error('单次业务导出最多 5000 条，请按状态拆分导出或使用数据库备份')
+        error.statusCode = 413
+        error.errorCode = 'CATALOG_EXPORT_TOO_LARGE'
+        throw error
+      }
+      const items = []
+      for (const row of rows) items.push(await getWith(pool, row.id, true))
+      const [resolutions, merges] = await Promise.all([
+        pool.query(`SELECT * FROM catalog_identifier_resolution
+          WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
+          ORDER BY resolved_at,id`, [status]),
+        pool.query(`SELECT id,survivor_sku_id,retired_sku_id,normalized_value,reason,survivor_version_before,retired_version_before,merged_by,merged_at
+          FROM catalog_sku_merge
+          WHERE ($1='' OR survivor_sku_id IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR retired_sku_id IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
+          ORDER BY merged_at,id`, [status]),
+      ])
+      const relations = {
+        identifierResolutions: resolutions.rows.map((row) => ({
+          id: row.id, normalizedValue: row.normalized_value, skuIdA: row.sku_id_a, skuIdB: row.sku_id_b,
+          resolutionType: row.resolution_type, note: row.note, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, active: row.active,
+        })),
+        merges: merges.rows.map((row) => ({
+          id: row.id, survivorSkuId: row.survivor_sku_id, retiredSkuId: row.retired_sku_id, normalizedValue: row.normalized_value,
+          reason: row.reason, survivorVersionBefore: row.survivor_version_before, retiredVersionBefore: row.retired_version_before,
+          mergedBy: row.merged_by, mergedAt: row.merged_at,
+        })),
+      }
+      const payload = { items, relations }
+      const checksum = createHash('sha256').update(JSON.stringify(payload)).digest('hex')
+      return {
+        schemaVersion: 'catalog-export-v1', exportId: randomUUID(), generatedAt: new Date().toISOString(), filter: { status: status || 'all' },
+        counts: {
+          skus: items.length,
+          identifiers: items.reduce((sum, item) => sum + item.identifiers.length, 0),
+          fitments: items.reduce((sum, item) => sum + item.fitments.length, 0),
+          evidence: items.reduce((sum, item) => sum + item.evidence.length, 0),
+          changes: items.reduce((sum, item) => sum + item.changes.length, 0),
+          identifierResolutions: relations.identifierResolutions.length,
+          merges: relations.merges.length,
+        },
+        checksum: { algorithm: 'sha256', value: checksum },
+        ...payload,
       }
     },
 

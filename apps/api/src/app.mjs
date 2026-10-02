@@ -13,6 +13,27 @@ const transitionCapabilities = {
   reopen: 'catalog.lifecycle',
 }
 
+function csvCell(value) {
+  const text = String(value ?? '')
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
+}
+
+function catalogSnapshotCsv(snapshot) {
+  const headers = ['SKU 编码', '中文名称', '英文名称', '品牌', '分类', '单位', '状态', '完整度', '主编号', '全部编号', '适配车型', '来源系统', '来源记录', '版本', '更新时间']
+  const rows = snapshot.items.map((item) => {
+    const primary = item.identifiers.find((identifier) => identifier.isPrimary)
+    return [
+      item.identity.skuCode, item.identity.nameZh, item.identity.nameEn, item.identity.brandLabel || item.identity.brandCode,
+      item.identity.categoryLabel || item.identity.categoryCode, item.identity.unitLabel, item.lifecycleStatus, item.completenessScore,
+      primary?.rawValue || '', item.identifiers.map((identifier) => `${identifier.type}:${identifier.rawValue}`).join(' | '),
+      item.fitments.map((fitment) => `${fitment.vehicleLabel}${fitment.years ? ` ${fitment.years}` : ''}`).join(' | '),
+      [...new Set(item.evidence.map((evidence) => evidence.sourceSystem).filter(Boolean))].join(' | '),
+      item.evidence.map((evidence) => evidence.sourceRecordId).filter(Boolean).join(' | '), item.version, item.updatedAt,
+    ].map(csvCell).join(',')
+  })
+  return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
+}
+
 export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
@@ -138,6 +159,20 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.get('/api/v2/catalog/metrics', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     return catalogRepository.metrics({ days: request.query?.days })
+  })
+  app.get('/api/v2/catalog/export', async (request, reply) => {
+    if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.export')
+    if (!actor) return
+    const format = String(request.query?.format || 'json').toLowerCase()
+    if (!['json', 'csv'].includes(format)) return reply.code(400).send({ error: 'INVALID_CATALOG_EXPORT_FORMAT', message: '仅支持 JSON 或 CSV 导出' })
+    const snapshot = await catalogRepository.exportSnapshot({ status: String(request.query?.status || '') })
+    const date = snapshot.generatedAt.slice(0, 10).replaceAll('-', '')
+    const suffix = snapshot.filter.status === 'all' ? '' : `-${snapshot.filter.status}`
+    const filename = `hushanxing-sku-${date}${suffix}.${format}`
+    reply.header('content-disposition', `attachment; filename="${filename}"`)
+    if (format === 'csv') return reply.type('text/csv; charset=utf-8').send(catalogSnapshotCsv(snapshot))
+    return reply.type('application/json; charset=utf-8').send(snapshot)
   })
   app.get('/api/v2/catalog/conflicts', async (_request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
