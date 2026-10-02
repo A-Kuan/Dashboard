@@ -71,6 +71,8 @@ CATALOG_EPC_CONNECTOR_TIMEOUT_MS=15000
 
 目录资源托管是可选的独立持久化目录，必须放在 release 目录之外并由 `dashboard-sku` 用户独占写入。来源域名白名单使用逗号分隔的主域名；子域名会被允许。
 
+仓库中的 `deploy/dashboard-sku-api.service` 已声明资源目录、12 MiB 单文件上限和 15 秒下载超时，并使用 `UMask=0027` 限制新文件权限。生产环境只需在确认真实 EPC 服务域名后，通过受保护的 EnvironmentFile 增加 `CATALOG_EPC_ASSET_ALLOWED_HOSTS`，不要为了临时联调写入虚构白名单。
+
 ```text
 CATALOG_EPC_ASSET_DIR=/opt/dashboard-sku-api/data/epc-assets
 CATALOG_EPC_ASSET_ALLOWED_HOSTS=assets.provider.example,cdn.provider.example
