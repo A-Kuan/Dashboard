@@ -140,20 +140,15 @@ npm run backup:verify -- /opt/dashboard-sku-api/backups/<backup>.manifest.json
 
 每次数据库迁移、批量导入和正式数据清理前都必须生成新备份。备份脚本不会删除旧文件；保留策略由服务器任务负责，建议至少保留最近 14 份日备份和 8 份周备份。
 
-恢复不能直接覆盖生产库。先恢复到一次性验证库，核对清单中的关键表数量并执行 API 冒烟测试：
+恢复不能直接覆盖生产库。仓库内的恢复演练工具只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
 
 ```bash
-sudo -u postgres createdb dashboard_sku_restore_check_YYYYMMDD
-sudo -u postgres pg_restore --no-owner --no-privileges \
-  -d dashboard_sku_restore_check_YYYYMMDD \
-  /opt/dashboard-sku-api/backups/<backup>.dump
-
-PGDATABASE=dashboard_sku_restore_check_YYYYMMDD PGUSER=dashboard-sku npm run migrate
-sudo -u postgres psql -d dashboard_sku_restore_check_YYYYMMDD \
-  -c 'select count(*) from catalog_sku;'
+cd /opt/dashboard-sku-api/current
+sudo ./scripts/run-api-restore-drill.sh \
+  /opt/dashboard-sku-api/backups/<backup>.manifest.json
 ```
 
-只有恢复验证、关键表数量、接口测试和人工抽查均通过后，才能安排生产切换。切换完成后再删除一次性验证库。
+自动发布会把受保护主分支中的恢复演练脚本一并安装到 release。演练成功输出单行 JSON 证据；任何步骤失败都返回非零状态。只有恢复验证、关键表数量、接口测试和人工抽查均通过后，才能安排生产切换。
 
 页面“导出资料”生成的 JSON/CSV 用于业务交接和人工核对，不替代数据库备份。JSON 审计包包含架构版本、计数与内容校验值；CSV 是便于 Excel 阅读的扁平视图。
 
@@ -189,6 +184,23 @@ curl https://121.41.24.42/sku-preview/api/v1/skus
 ```
 
 `/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。两者都返回 `releaseRevision`：本地无 release 元数据时为 `development`，正式 release 必须是受保护主分支的 40 位 Git SHA。发布切流前必须以 `/api/ready` 返回 `200`、`status=ready` 且版本等于目标提交为准。
+
+每个响应都带 `X-Request-Id`。调用方提供的编号仅在字符集和长度校验通过时沿用，否则服务端生成 UUID；错误响应同时返回 `requestId`，便于与 systemd JSON 日志关联。日志会隐藏授权、Cookie 和可信身份头。
+
+`GET /api/metrics` 提供 Prometheus 文本格式的请求量、状态码、耗时、进程内存、版本和数据库连接池指标。该入口默认只允许 API 主机本机访问；远程运维采集必须配置 `API_OPERATIONS_TOKEN` 并使用 Bearer 令牌，不能通过 Nginx 公开匿名访问。
+
+仓库中的 `dashboard-sku-operations-check.service` 与 `.timer` 每五分钟核对 readiness 与 release、指标、数据库连接池排队、最近备份完整性、备份年龄和磁盘余量。默认要求备份不超过 26 小时、可用空间不少于 1 GiB；失败会让 oneshot 单元进入失败状态并写入 journal。安装后验证：
+
+```bash
+sudo install -m 0644 deploy/dashboard-sku-operations-check.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-operations-check.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dashboard-sku-operations-check.timer
+sudo systemctl start dashboard-sku-operations-check.service
+systemctl status dashboard-sku-operations-check.service dashboard-sku-operations-check.timer
+```
+
+该定时检查提供本机故障信号，不等同于站外通知。短信、企业微信或邮件通知应在确认接收渠道后接入，不能在仓库中保存 webhook 或令牌。
 
 完整浏览器回归会建立和修改验收数据，只能用于本地或一次性数据库，不得直接指向生产。生产环境使用只读冒烟脚本：
 

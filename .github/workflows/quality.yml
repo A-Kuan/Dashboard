@@ -56,6 +56,7 @@ jobs:
           API_DEPLOY_ALLOW_NON_MAIN: 1
         run: |
           bash -n deploy/release-api.sh
+          bash -n deploy/run-api-restore-drill.sh
           bash deploy/release-api.sh HEAD
 
   browser-regression:

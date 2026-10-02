@@ -9,6 +9,8 @@
     "migrate": "node src/migrate.mjs",
     "backup": "node scripts/backup-database.mjs",
     "backup:verify": "node scripts/verify-backup.mjs",
+    "restore:verify": "node scripts/verify-restored-database.mjs",
+    "operations:check": "node scripts/check-operations.mjs",
     "assets:verify": "node scripts/verify-epc-assets.mjs",
     "test": "node --test"
   },

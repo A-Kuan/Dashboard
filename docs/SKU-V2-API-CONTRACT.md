@@ -17,7 +17,7 @@
 
 v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件编号、互换关系、车型适配和变更快照分别存储，避免继续扩展旧 SKU 大表。
 
-服务探针分为 `GET /api/health`（进程存活）和 `GET /api/ready`（数据库与迁移账本就绪）。两个响应都包含 `releaseRevision`；本地开发为 `development`，正式发布为完整 Git SHA。部署切流必须使用后者并校验目标 SHA；账本缺迁移或已执行脚本校验值变化时返回 503。
+服务探针分为 `GET /api/health`（进程存活）和 `GET /api/ready`（数据库与迁移账本就绪）。两个响应都包含 `releaseRevision`；本地开发为 `development`，正式发布为完整 Git SHA。部署切流必须使用后者并校验目标 SHA；账本缺迁移或已执行脚本校验值变化时返回 503。所有响应带经过校验的 `X-Request-Id`，错误体同时返回 `requestId`。`GET /api/metrics` 输出低基数 Prometheus 指标，仅允许本机或持有独立运维令牌的调用方读取，不属于前端业务合同。
 
 ## 资料状态
 
