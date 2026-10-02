@@ -58,11 +58,9 @@ function auditDetails(input) {
 
 export function createSkuRepository(pool) {
   async function childRows(client, skuId) {
-    const [oe, fitments, history] = await Promise.all([
-      client.query('SELECT * FROM sku_oe_relation WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId]),
-      client.query('SELECT * FROM sku_fitment WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId]),
-      client.query('SELECT * FROM sku_change_log WHERE sku_id = $1 ORDER BY version DESC, changed_at DESC', [skuId]),
-    ])
+    const oe = await client.query('SELECT * FROM sku_oe_relation WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId])
+    const fitments = await client.query('SELECT * FROM sku_fitment WHERE sku_id = $1 ORDER BY sort_order, created_at', [skuId])
+    const history = await client.query('SELECT * FROM sku_change_log WHERE sku_id = $1 ORDER BY version DESC, changed_at DESC', [skuId])
     return { oeRelations: oe.rows, fitments: fitments.rows, changeHistory: history.rows }
   }
 

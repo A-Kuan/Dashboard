@@ -109,11 +109,9 @@ export function createCatalogImportRepository(pool, catalogRepository) {
   async function getJobWith(client, id) {
     const job = (await client.query('SELECT * FROM catalog_import_job WHERE id=$1', [id])).rows[0]
     if (!job) return null
-    const [rows, attempts, resolutions] = await Promise.all([
-      client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id]),
-      client.query('SELECT * FROM catalog_import_attempt WHERE job_id=$1 ORDER BY attempt_number DESC', [id]),
-      client.query('SELECT * FROM catalog_import_value_resolution WHERE job_id=$1 ORDER BY created_at DESC', [id]),
-    ])
+    const rows = await client.query('SELECT * FROM catalog_import_row WHERE job_id=$1 ORDER BY row_number', [id])
+    const attempts = await client.query('SELECT * FROM catalog_import_attempt WHERE job_id=$1 ORDER BY attempt_number DESC', [id])
+    const resolutions = await client.query('SELECT * FROM catalog_import_value_resolution WHERE job_id=$1 ORDER BY created_at DESC', [id])
     return mapJob(job, rows.rows, attempts.rows, resolutions.rows)
   }
 
