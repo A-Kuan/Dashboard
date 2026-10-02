@@ -1,10 +1,28 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { normalizeCatalogInput, normalizeIdentifierValue } from './catalog-validation.mjs'
-import { buildImportPreflightReport, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
+import { buildImportPreflightReport, catalogImportFields, catalogImportTemplateSpec } from './catalog-import-spec.mjs'
 
 function text(value) {
   return String(value ?? '').trim()
+}
+
+export function analyzeCatalogImportRows(rows = []) {
+  const canonicalRows = rows.map((row) => Object.fromEntries(catalogImportFields.map((field) => {
+    const value = text(row?.[field.key])
+    return [field.key, field.key === 'primaryOe' ? normalizeIdentifierValue(value) : value]
+  })))
+  const fingerprintRows = canonicalRows.map((row) => JSON.stringify(row)).sort()
+  const contentHash = createHash('sha256').update(JSON.stringify(fingerprintRows)).digest('hex')
+  const identifierRows = new Map()
+  canonicalRows.forEach((row, index) => {
+    const identifier = normalizeIdentifierValue(row.primaryOe)
+    if (!identifier) return
+    const rowNumber = index + 2
+    identifierRows.set(identifier, [...(identifierRows.get(identifier) || []), rowNumber])
+  })
+  const inFileDuplicates = Object.fromEntries([...identifierRows.entries()].filter(([, rowNumbers]) => rowNumbers.length > 1))
+  return { contentHash, canonicalRows, inFileDuplicates }
 }
 
 function normalizeRow(row, rowNumber, sourceName, intakeId) {
@@ -58,6 +76,7 @@ function mapJob(row, rows = [], attempts = []) {
     readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows,
     importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
     createdAt: row.created_at, committedAt: row.committed_at, version: row.version,
+    contentFingerprint: row.content_hash ? row.content_hash.slice(0, 12) : '',
     attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
     preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows }),
     rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
@@ -106,12 +125,25 @@ export function createCatalogImportRepository(pool, catalogRepository) {
       if (!rows.length) throw invalid('导入文件没有可处理的数据行')
       if (rows.length > catalogImportTemplateSpec.maxRows) throw invalid(`单次最多导入 ${catalogImportTemplateSpec.maxRows} 行`)
 
+      const fileAnalysis = analyzeCatalogImportRows(rows)
+      const existing = (await pool.query('SELECT id FROM catalog_import_job WHERE content_hash=$1 LIMIT 1', [fileAnalysis.contentHash])).rows[0]
+      if (existing) return { ...(await getJobWith(pool, existing.id)), duplicateUpload: true }
+
       const intakeId = randomUUID()
       const normalizedRows = rows.map((row, index) => normalizeRow(row, index + 2, sourceName, intakeId))
+      normalizedRows.forEach((row, index) => {
+        const duplicateRows = fileAnalysis.inFileDuplicates[row.normalizedPrimaryOe] || []
+        if (duplicateRows.length > 1) row.issues.push({
+          code: 'DUPLICATE_IN_FILE', severity: 'warning', message: `主 OE 与文件第 ${duplicateRows.filter((rowNumber) => rowNumber !== index + 2).join('、')} 行重复`,
+        })
+      })
       const identifiers = normalizedRows.map((row) => row.normalizedPrimaryOe).filter(Boolean)
       const duplicateMap = await catalogRepository.findDuplicatesMany(identifiers)
 
       return withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`catalog-import:${fileAnalysis.contentHash}`])
+        const concurrent = (await client.query('SELECT id FROM catalog_import_job WHERE content_hash=$1 LIMIT 1', [fileAnalysis.contentHash])).rows[0]
+        if (concurrent) return { ...(await getJobWith(client, concurrent.id)), duplicateUpload: true }
         const jobId = randomUUID()
         await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
           VALUES ($1,'import','preview',$2::jsonb,$3::jsonb,$4)`,
@@ -121,7 +153,8 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         let duplicateRows = 0
         let invalidRows = 0
         const prepared = normalizedRows.map((item, index) => {
-          const duplicates = item.normalizedPrimaryOe ? duplicateMap[item.normalizedPrimaryOe] || [] : []
+          const fileMatches = (fileAnalysis.inFileDuplicates[item.normalizedPrimaryOe] || []).filter((rowNumber) => rowNumber !== index + 2).map((rowNumber) => ({ scope: 'file', rowNumber }))
+          const duplicates = item.normalizedPrimaryOe ? [...(duplicateMap[item.normalizedPrimaryOe] || []), ...fileMatches] : []
           const hasError = item.issues.some((issue) => issue.severity === 'error')
           const state = hasError ? 'invalid' : duplicates.length ? 'duplicate' : 'ready'
           if (state === 'ready') readyRows += 1
@@ -131,16 +164,16 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         })
 
         const { rows: jobs } = await client.query(`INSERT INTO catalog_import_job
-          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor])
+          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by,content_hash)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor, fileAnalysis.contentHash])
         for (const item of prepared) {
           await client.query(`INSERT INTO catalog_import_row
             (id,job_id,row_number,normalized_payload,state,issues,duplicate_matches)
             VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb)`,
           [item.id, jobId, item.rowNumber, JSON.stringify(item.payload), item.state, JSON.stringify(item.issues), JSON.stringify(item.duplicates)])
         }
-        return getJobWith(client, jobs[0].id)
+        return { ...(await getJobWith(client, jobs[0].id)), duplicateUpload: false }
       })
     },
 

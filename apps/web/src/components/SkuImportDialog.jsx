@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ArrowsClockwise, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, ArrowsClockwise, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, FingerprintSimple, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
 import { commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, listCatalogImports, parseCatalogCsv, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
 import '../sku-import.css'
 
@@ -28,6 +28,12 @@ const jobState = {
 function displayTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+}
+
+function duplicateMessage(row) {
+  const fileRows = (row.duplicateMatches || []).filter((match) => match.scope === 'file').map((match) => match.rowNumber)
+  if (fileRows.length) return `与文件第 ${fileRows.join('、')} 行使用相同主 OE`
+  return `匹配 ${(row.duplicateMatches || []).length} 条已有资料`
 }
 
 export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
@@ -98,6 +104,12 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     try {
       const rows = parseCatalogCsv(await file.text())
       const preview = await previewCatalogImport(file.name, rows)
+      if (preview.duplicateUpload && preview.state !== 'preview') {
+        setMode('history')
+        setSelectedJob(preview)
+        onNotify?.('文件内容已处理过，已打开原导入批次')
+        return
+      }
       setJob(preview)
       setSelected(new Set(preview.rows.filter((row) => row.state === 'ready').map((row) => row.id)))
       setStep('preview')
@@ -182,10 +194,11 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
           </> : null}
 
           {mode === 'new' && step === 'preview' ? <>
+            {job.duplicateUpload ? <section className="sku-import-duplicate-upload"><FingerprintSimple size={22} weight="duotone" /><div><strong>已找到相同内容的待确认批次</strong><span>系统没有新建重复批次；你可继续处理下方原批次。</span></div><code>{job.contentFingerprint}</code></section> : null}
             {job.preflight ? (() => { const decision = preflightDecision[job.preflight.decision] || preflightDecision.review_required; return <section className={`sku-preflight-decision ${decision.className}`}><span>{job.preflight.decision === 'blocked' ? <WarningCircle size={23} weight="fill" /> : <ShieldCheck size={23} weight="duotone" />}</span><div><h3>{decision.title}</h3><p>{decision.note}</p></div><dl><div><dt>默认选中</dt><dd>{job.preflight.defaultSelectedRows} 条</dd></div><div><dt>警告</dt><dd>{job.preflight.warningCount} 项</dd></div><div><dt>重复匹配</dt><dd>{job.preflight.duplicateMatches} 条</dd></div></dl></section> })() : null}
             <div className="sku-import-summary"><div><span>总行数</span><strong>{job.totalRows}</strong></div><div className="ready"><span>可导入</span><strong>{job.readyRows}</strong></div><div className="duplicate"><span>疑似重复</span><strong>{job.duplicateRows}</strong></div><div className="invalid"><span>不可导入</span><strong>{job.invalidRows}</strong></div></div>
             {job.preflight ? <div className="sku-preflight-grid"><section><header><strong>资料覆盖率</strong><span>不阻断导入，但会影响后续核验</span></header><div className="sku-preflight-coverage">{job.preflight.coverage.map((item) => <div key={item.field}><span><b>{item.label}</b><em>{item.present}/{item.total} · {item.percent}%</em></span><i><b style={{ width: `${item.percent}%` }} /></i></div>)}</div></section><section><header><strong>问题汇总</strong><span>按严重程度与影响行数排序</span></header><div className="sku-preflight-issues">{job.preflight.issueSummary.slice(0, 5).map((issue) => <div className={issue.severity} key={issue.code}><span>{issue.severity === 'error' ? <WarningCircle size={16} weight="fill" /> : <WarningCircle size={16} />}</span><p><strong>{issue.message}</strong><small>{issue.count} 行受影响</small></p></div>)}{!job.preflight.issueSummary.length ? <div className="clear"><span><CheckCircle size={17} weight="fill" /></span><p><strong>未发现字段问题</strong><small>可继续检查逐行结果</small></p></div> : null}</div></section></div> : null}
-            <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? `匹配 ${row.duplicateMatches.length} 条已有资料` : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
+            <div className="sku-import-table-wrap"><table className="sku-import-table"><thead><tr><th>选择</th><th>行</th><th>名称 / 主 OE</th><th>品牌 / 分类</th><th>车型</th><th>检查结果</th></tr></thead><tbody>{job.rows.map((row) => { const state = rowState[row.state]; const identity = row.payload.identity; const primary = row.payload.identifiers?.find((item) => item.isPrimary); return <tr key={row.id}><td><input aria-label={`选择第 ${row.rowNumber} 行`} type="checkbox" disabled={row.state === 'invalid'} checked={selected.has(row.id)} onChange={() => toggleRow(row)} /></td><td>{row.rowNumber}</td><td><strong>{identity.nameZh || identity.nameEn || '—'}</strong><small>{primary?.rawValue || '缺少主 OE'}</small></td><td><span>{identity.brandLabel || '待补充'}</span><small>{identity.categoryLabel || '待补充'}</small></td><td>{row.payload.fitments?.[0]?.vehicleLabel || '待补充'}</td><td><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.state === 'duplicate' ? duplicateMessage(row) : row.issues.map((issue) => issue.message).join('、') || '字段检查通过'}</small></td></tr> })}</tbody></table></div>
             <div className="sku-import-warning"><WarningCircle size={18} weight="fill" /><span>疑似重复项默认不选中。勾选表示你已确认它应作为独立 SKU 写入，系统不会自动覆盖已有资料。</span></div>
           </> : null}
 
@@ -198,7 +211,8 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
 
           {mode === 'history' && selectedJob ? <div className="sku-import-history-detail">
             <button className="history-back" type="button" onClick={() => { setSelectedJob(null); loadHistory() }}><ArrowLeft size={16} />返回批次列表</button>
-            <div className="history-detail-title"><div><h3>{selectedJob.sourceName}</h3><p>批次 {selectedJob.id.slice(0, 8)} · 创建于 {displayTime(selectedJob.createdAt)}</p></div><span className={`import-state ${(jobState[selectedJob.state] || {}).className || 'skipped'}`}>{(jobState[selectedJob.state] || {}).label || selectedJob.state}</span></div>
+            {selectedJob.duplicateUpload ? <section className="sku-import-duplicate-upload history"><FingerprintSimple size={22} weight="duotone" /><div><strong>该文件内容已导入过</strong><span>为防止重复写入，系统直接打开了原批次与执行记录。</span></div><code>{selectedJob.contentFingerprint}</code></section> : null}
+            <div className="history-detail-title"><div><h3>{selectedJob.sourceName}</h3><p>批次 {selectedJob.id.slice(0, 8)} · 指纹 {selectedJob.contentFingerprint || '—'} · 创建于 {displayTime(selectedJob.createdAt)}</p></div><span className={`import-state ${(jobState[selectedJob.state] || {}).className || 'skipped'}`}>{(jobState[selectedJob.state] || {}).label || selectedJob.state}</span></div>
             <div className="sku-import-summary"><div><span>总行数</span><strong>{selectedJob.totalRows}</strong></div><div className="ready"><span>成功写入</span><strong>{selectedJob.importedRows}</strong></div><div className="duplicate"><span>跳过 / 无效</span><strong>{selectedJob.rows.filter((row) => ['skipped', 'invalid'].includes(row.state)).length}</strong></div><div className="invalid"><span>写入失败</span><strong>{selectedJob.failedRows}</strong></div></div>
             <div className="history-detail-grid"><section><h4>逐行结果</h4><div className="history-row-list">{selectedJob.rows.map((row) => { const state = rowState[row.state] || { label: row.state, className: 'skipped' }; const identity = row.payload?.identity || {}; const primary = row.payload?.identifiers?.find((item) => item.isPrimary); return <div key={row.id}><span>{row.rowNumber}</span><span><strong>{identity.nameZh || identity.nameEn || '未命名'}</strong><small>{primary?.rawValue || '无主 OE'}</small></span><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.errorMessage || row.issues?.map((item) => item.message).join('、') || '—'}</small></div> })}</div></section><section><h4>执行记录</h4><div className="history-attempts">{selectedJob.attempts.map((attempt) => <div key={attempt.id}><span><ArrowsClockwise size={18} weight="bold" /></span><div><strong>{attempt.attemptType === 'retry' ? `第 ${attempt.attemptNumber} 次 · 失败重试` : '首次写入'}</strong><small>{attempt.startedBy} · {displayTime(attempt.startedAt)}</small><p>选中 {attempt.selectedRows} · 成功 {attempt.importedRows} · 失败 {attempt.failedRows}</p></div></div>)}{!selectedJob.attempts.length ? <p className="history-no-attempt">尚未执行写入</p> : null}</div></section></div>
           </div> : null}

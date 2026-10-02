@@ -537,6 +537,19 @@ test('catalog v2 previews and commits explicitly selected import rows', async ()
   await app.close()
 })
 
+test('catalog v2 returns an existing import batch for duplicate content', async () => {
+  const app = buildApp({ catalogImportRepository: {
+    async createPreview() { return { id: 'existing-import', state: 'completed', duplicateUpload: true, rows: [] } },
+  }, logger: false })
+  const response = await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {
+    sourceName: 'renamed-copy.csv', rows: [{ nameZh: '前刹车片', primaryOe: '95B 698 151 H' }],
+  } })
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().id, 'existing-import')
+  assert.equal(response.json().duplicateUpload, true)
+  await app.close()
+})
+
 test('catalog v2 preserves import attempts and retries only failed rows', async () => {
   const app = buildApp({ catalogImportRepository: createCatalogImportRepository(), logger: false })
   const preview = (await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {

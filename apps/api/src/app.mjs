@@ -334,7 +334,8 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.import')
     if (!actor) return
-    return reply.code(201).send(await catalogImportRepository.createPreview(request.body, actor.name))
+    const job = await catalogImportRepository.createPreview(request.body, actor.name)
+    return reply.code(job.duplicateUpload ? 200 : 201).send(job)
   })
   app.get('/api/v2/catalog/imports', async (request, reply) => {
     if (!catalogImportRepository) return reply.code(503).send({ error: 'CATALOG_IMPORT_UNAVAILABLE', message: '批量导入服务未配置' })

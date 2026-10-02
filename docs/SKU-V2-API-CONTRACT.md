@@ -81,7 +81,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `POST /api/v2/catalog/imports/:id/commit`：提交 `expectedVersion` 与明确选中的 `rowIds`，只写入 `ready` 或用户主动选择的 `duplicate` 行。
 - `POST /api/v2/catalog/imports/:id/retry`：对 `partial` 批次中失败的行重新执行写入；可提交 `rowIds` 进一步缩小范围，并继续使用 `expectedVersion` 防止并发重复操作。
 
-导入行状态为 `ready`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。疑似重复项默认不选择；不可导入项不能选择。预检查响应包含 `catalog-import-preflight-v1` 质量报告，汇总阻断项、警告、重复匹配以及品牌、分类、适配和来源字段覆盖率。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
+导入行状态为 `ready`、`duplicate`、`invalid`、`imported`、`skipped` 或 `failed`。疑似重复项默认不选择；不可导入项不能选择。预检查响应包含 `catalog-import-preflight-v1` 质量报告，汇总阻断项、警告、重复匹配以及品牌、分类、适配和来源字段覆盖率。文件内相同主 OE 会进入人工确认状态；结构化行内容经规范化后生成 SHA-256 指纹，重复上传时返回原批次而不新建任务。提交采用批次版本锁防止双击重复写入，部分失败会标记为 `partial` 并保留每行错误。原始文件行保存在 `catalog_intake`，生成的来源证据通过 `intake_id` 回溯到导入批次。
 
 首次提交和每次重试都会生成独立的 `catalog_import_attempt` 记录，保留执行类型、操作者、开始与完成时间、选择行数、成功数和失败数。批次汇总数据是所有尝试后的当前结果，执行记录不可被后续重试覆盖。
 

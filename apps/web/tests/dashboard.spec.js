@@ -148,7 +148,7 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await expect(dialog.getByText('来源记录ID', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-template-1680.png', fullPage: false })
   await dialog.getByRole('button', { name: '查看字段说明' }).click()
-  const csv = '\uFEFF中文名称,品牌,分类,单位,主 OE,车型,年款范围,来源系统\n后刹车片,Porsche OE,制动系统 / 制动片,件,TEST-IMPORT-001,Macan (95B),2014-2018,Porsche PET\n重复前制动盘,Porsche OE,制动系统 / 制动盘,件,9Y0 615 301 M,Cayenne (9YA),2018-2023,Porsche PET\n无编号件,Porsche OE,制动系统 / 制动片,件,,,,供应商资料'
+  const csv = '\uFEFF中文名称,品牌,分类,单位,主 OE,车型,年款范围,来源系统\n后刹车片,Porsche OE,制动系统 / 制动片,件,TEST-IMPORT-001,Macan (95B),2014-2018,Porsche PET\n重复前制动盘,Porsche OE,制动系统 / 制动盘,件,9Y0 615 301 M,Cayenne (9YA),2018-2023,Porsche PET\n无编号件,Porsche OE,制动系统 / 制动片,件,,,,供应商资料\n文件重复件 A,Porsche OE,制动系统 / 制动片,件,FILE-DUP-001,Macan (95B),2014-2018,Porsche PET\n文件重复件 B,Porsche OE,制动系统 / 制动片,件,FILE DUP 001,Macan (95B),2014-2018,Porsche PET'
   await dialog.locator('input[type=file]').setInputFiles({ name: 'sku-import.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   await expect(dialog.getByRole('heading', { name: '存在阻断项' })).toBeVisible()
   await expect(dialog.getByText('资料覆盖率')).toBeVisible()
@@ -158,6 +158,8 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await expect(page.getByText('不可导入', { exact: true }).first()).toBeVisible()
   await expect(page.getByLabel('选择第 3 行')).not.toBeChecked()
   await expect(page.getByLabel('选择第 4 行')).toBeDisabled()
+  await expect(page.getByLabel('选择第 5 行')).not.toBeChecked()
+  await expect(dialog.getByText('与文件第 6 行使用相同主 OE')).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-preview-1680.png', fullPage: false })
   await page.getByRole('button', { name: '写入 1 条草稿' }).click()
   await expect(page.getByRole('heading', { name: '导入批次已完成' })).toBeVisible()
@@ -168,6 +170,13 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-history-1680.png', fullPage: false })
   await dialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
   await expect(page.getByText('后刹车片', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const repeatedDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  await repeatedDialog.locator('input[type=file]').setInputFiles({ name: 'renamed-copy.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(repeatedDialog.getByText('该文件内容已导入过')).toBeVisible()
+  await expect(repeatedDialog.getByText('首次写入')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-idempotency-1680.png', fullPage: false })
+  await repeatedDialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
 })
 
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {
