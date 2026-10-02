@@ -63,6 +63,22 @@ const input = {
   lifecycleStatus: '草稿', oeRelations: [], fitments: [],
 }
 
+test('separates process health from database readiness', async () => {
+  const ready = buildApp({ readinessCheck: async () => ({ database: 'ready', migrations: 13, latestMigration: '013_catalog_sku_merge.sql' }), logger: false })
+  assert.deepEqual((await ready.inject('/api/health')).json(), { status: 'ok', service: 'dashboard-sku-api' })
+  const response = await ready.inject('/api/ready')
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().status, 'ready')
+  assert.equal(response.json().latestMigration, '013_catalog_sku_merge.sql')
+  await ready.close()
+
+  const unavailable = buildApp({ readinessCheck: async () => { const error = new Error('schema missing'); error.code = 'DATABASE_SCHEMA_NOT_READY'; throw error }, logger: false })
+  const rejected = await unavailable.inject('/api/ready')
+  assert.equal(rejected.statusCode, 503)
+  assert.equal(rejected.json().error, 'DATABASE_SCHEMA_NOT_READY')
+  await unavailable.close()
+})
+
 test('creates, lists, reads and updates a SKU', async () => {
   const app = buildApp({ repository: createRepository(), logger: false })
   const created = await app.inject({ method: 'POST', url: '/api/v1/skus', payload: input })

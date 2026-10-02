@@ -17,11 +17,13 @@ const manifestPath = resolve(outputDirectory, `${backupName}.manifest.json`)
 await mkdir(outputDirectory, { recursive: true, mode: 0o750 })
 const pool = createPool({ max: 1 })
 const counts = {}
+let schemaMigrations = []
 try {
-  for (const table of ['catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_source_evidence', 'catalog_change_log', 'catalog_import_job', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
+  for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_source_evidence', 'catalog_change_log', 'catalog_import_job', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
+  if (counts.schema_migration) schemaMigrations = (await pool.query('SELECT filename,checksum,applied_at FROM schema_migration ORDER BY filename')).rows
 } finally {
   await pool.end()
 }
@@ -41,6 +43,7 @@ const manifest = {
   releaseRevision: process.env.RELEASE_REVISION || '',
   archive: { filename: `${backupName}.dump`, format: 'postgres-custom', bytes: file.size, sha256: createHash('sha256').update(dumpBuffer).digest('hex') },
   counts,
+  schemaMigrations,
   verification: { pgRestoreList: 'passed', objectCount: listedObjects },
 }
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o640 })

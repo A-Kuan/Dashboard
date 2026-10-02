@@ -6,6 +6,7 @@ import { createDictionaryRepository } from './dictionary-repository.mjs'
 import { defaultDictionaries } from './default-dictionaries.mjs'
 import { createCatalogRepository } from './catalog-repository.mjs'
 import { createCatalogImportRepository } from './catalog-import-repository.mjs'
+import { migrationReadiness } from './migration-runner.mjs'
 
 const pool = createPool()
 const catalogRepository = createCatalogRepository(pool)
@@ -15,6 +16,11 @@ const app = buildApp({
   dictionaryRepository: createDictionaryRepository(pool, defaultDictionaries),
   catalogRepository,
   catalogImportRepository: createCatalogImportRepository(pool, catalogRepository),
+  readinessCheck: async () => {
+    const schema = await migrationReadiness(pool)
+    const database = (await pool.query('SELECT current_database() AS name')).rows[0].name
+    return { ...schema, database: 'ready', databaseName: database }
+  },
 })
 const host = process.env.HOST || '127.0.0.1'
 const port = Number(process.env.PORT || 4183)

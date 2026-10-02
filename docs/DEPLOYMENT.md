@@ -56,6 +56,8 @@ cd /opt/dashboard-sku-api/releases/<version>
 sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku npm run migrate
 ```
 
+迁移器使用 `schema_migration` 账本和 SHA-256 校验：已执行且内容一致的脚本会跳过；缺失脚本会按文件名顺序执行；任何已执行脚本被修改都会以 `MIGRATION_CHECKSUM_MISMATCH` 终止。已发布迁移只能新增后续脚本，禁止原地改写。
+
 清空演示数据前必须先备份：
 
 ```bash
@@ -125,8 +127,11 @@ nginx -t
 curl -I https://121.41.24.42/sku-preview/
 curl -I https://121.41.24.42/sku-preview/assets/<构建文件>
 curl https://121.41.24.42/sku-preview/api/health
+curl https://121.41.24.42/sku-preview/api/ready
 curl https://121.41.24.42/sku-preview/api/v1/skus
 ```
+
+`/api/health` 只证明进程存活；`/api/ready` 还会核对数据库连接、迁移数量、最新迁移和脚本校验值。发布切流前必须以 `/api/ready` 返回 `200` 和 `status=ready` 为准。
 
 浏览器验收使用：
 

@@ -34,11 +34,19 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
+  app.get('/api/ready', async (request, reply) => {
+    try {
+      return { status: 'ready', service: 'dashboard-sku-api', ...(await readinessCheck()) }
+    } catch (error) {
+      request.log.warn({ err: error, code: error.code }, 'readiness check failed')
+      return reply.code(503).send({ status: 'not_ready', service: 'dashboard-sku-api', error: error.code || 'DATABASE_UNAVAILABLE' })
+    }
+  })
   app.get('/api/v2/catalog/session', async (request) => {
     const actor = resolveCatalogActor(request)
     return { ...actor, availableRoles: actor.development ? Object.values(catalogRoles) : [] }
