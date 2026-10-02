@@ -83,7 +83,31 @@ sudo -u dashboard-sku psql -d dashboard_sku -Atc "SELECT json_build_object(
 REMOTE
 }
 
+production_business_counts() {
+  ssh "${ssh_options[@]}" "$deploy_host" bash -s <<'REMOTE'
+set -euo pipefail
+sudo -u dashboard-sku psql -d dashboard_sku -qAt <<'SQL'
+CREATE OR REPLACE FUNCTION pg_temp.exact_count(table_name text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE result bigint;
+BEGIN
+  IF to_regclass(format('public.%I', table_name)) IS NULL THEN RETURN NULL; END IF;
+  EXECUTE format('SELECT count(*) FROM %I', table_name) INTO result;
+  RETURN result;
+END $$;
+SELECT json_build_object(
+  'businessInquiry',pg_temp.exact_count('business_inquiry'),
+  'businessInquiryItem',pg_temp.exact_count('business_inquiry_item'),
+  'businessSupplierOffer',pg_temp.exact_count('business_supplier_offer'),
+  'businessQuote',pg_temp.exact_count('business_quote'),
+  'businessQuoteItem',pg_temp.exact_count('business_quote_item'),
+  'businessInquiryEvent',pg_temp.exact_count('business_inquiry_event')
+)::text;
+SQL
+REMOTE
+}
+
 baseline_counts="$(production_counts)"
+baseline_business_counts="$(production_business_counts)"
 
 ssh "${ssh_options[@]}" "$deploy_host" bash -s -- "$release_path" <<'REMOTE'
 set -euo pipefail
@@ -183,6 +207,17 @@ if [[ "$after_counts" != "$baseline_counts" && "$allow_data_change" != "1" ]]; t
   echo "after=$after_counts" >&2
   exit 1
 fi
+after_business_counts="$(production_business_counts)"
+initial_business_schema=0
+if BASELINE_COUNTS="$baseline_business_counts" AFTER_COUNTS="$after_business_counts" node -e "const before=JSON.parse(process.env.BASELINE_COUNTS);const after=JSON.parse(process.env.AFTER_COUNTS);if(Object.values(before).every((value)=>value===null)&&Object.values(after).every((value)=>value===0))process.exit(0);process.exit(1)"; then
+  initial_business_schema=1
+fi
+if [[ "$after_business_counts" != "$baseline_business_counts" && "$initial_business_schema" != "1" && "$allow_data_change" != "1" ]]; then
+  echo "Production business data fingerprint changed unexpectedly" >&2
+  echo "before=$baseline_business_counts" >&2
+  echo "after=$after_business_counts" >&2
+  exit 1
+fi
 
 curl_flags=(--fail --silent --show-error)
 if [[ "$allow_insecure_tls" == "1" ]]; then curl_flags+=(--insecure); fi
@@ -197,4 +232,4 @@ fi
 
 completed=1
 trap - EXIT
-printf 'released=%s\nrevision=%s\nprevious=%s\ncounts=%s\n' "$release_path" "$revision_sha" "$previous_path" "$after_counts"
+printf 'released=%s\nrevision=%s\nprevious=%s\ncounts=%s\nbusiness_counts=%s\n' "$release_path" "$revision_sha" "$previous_path" "$after_counts" "$after_business_counts"

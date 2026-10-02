@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -114,6 +114,49 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.get('/api/v2/catalog/session', async (request) => {
     const actor = resolveCatalogActor(request)
     return { ...actor, availableRoles: actor.development ? Object.values(catalogRoles) : [] }
+  })
+  app.get('/api/v2/business/inquiries', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInquiryRepository.list({ query: request.query?.q, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/business/inquiries', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return reply.code(201).send(await businessInquiryRepository.create(request.body, actor))
+  })
+  app.get('/api/v2/business/inquiries/:id', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const inquiry = await businessInquiryRepository.get(request.params.id)
+    return inquiry || reply.code(404).send({ error: 'INQUIRY_NOT_FOUND', message: '询价不存在' })
+  })
+  app.post('/api/v2/business/inquiries/:id/items/:itemId/offers', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return reply.code(201).send(await businessInquiryRepository.addOffer(request.params.id, request.params.itemId, request.body, actor))
+  })
+  app.post('/api/v2/business/inquiries/:id/quotes', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    return reply.code(201).send(await businessInquiryRepository.createQuote(request.params.id, request.body, actor))
+  })
+  app.post('/api/v2/business/quotes/:id/send', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    return businessInquiryRepository.sendQuote(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/inquiries/:id/transition', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return businessInquiryRepository.transition(request.params.id, request.body, actor)
   })
   app.get('/api/v2/catalog/legacy-migration-preview', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })

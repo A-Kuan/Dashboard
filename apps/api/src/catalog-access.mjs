@@ -3,19 +3,19 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 const roleDefinitions = {
   catalog_viewer: {
     label: '只读查看',
-    capabilities: ['catalog.read'],
+    capabilities: ['catalog.read', 'business.read'],
   },
   catalog_editor: {
     label: '资料录入',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan', 'business.read', 'business.manage', 'business.quote'],
   },
   catalog_reviewer: {
     label: '资料审核',
-    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept'],
+    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept', 'business.read'],
   },
   catalog_admin: {
     label: '资料管理员',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote'],
   },
 }
 
