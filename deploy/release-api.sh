@@ -106,7 +106,7 @@ cd "$release_path"
 sudo -u dashboard-sku npm ci --omit=dev
 sudo -u dashboard-sku npm test
 
-backup_json="$(cd "$deploy_root/current" && sudo -u dashboard-sku env \
+backup_json="$(sudo -u dashboard-sku env \
   PGDATABASE=dashboard_sku PGUSER=dashboard-sku \
   CATALOG_BACKUP_DIR="$deploy_root/backups" \
   CATALOG_EPC_ASSET_DIR="$deploy_root/data/epc-assets" \
@@ -114,6 +114,7 @@ backup_json="$(cd "$deploy_root/current" && sudo -u dashboard-sku env \
   npm run --silent backup)"
 manifest_path="$(printf '%s' "$backup_json" | node -e "let value='';process.stdin.on('data',(chunk)=>value+=chunk);process.stdin.on('end',()=>process.stdout.write(JSON.parse(value).manifestPath))")"
 sudo -u dashboard-sku npm run --silent backup:verify -- "$manifest_path"
+MANIFEST_PATH="$manifest_path" node -e "const fs=require('fs');const manifest=JSON.parse(fs.readFileSync(process.env.MANIFEST_PATH,'utf8'));if(!manifest.assetArchive)throw new Error('Release backup is missing the EPC asset snapshot')"
 sudo -u dashboard-sku env PGDATABASE=dashboard_sku PGUSER=dashboard-sku npm run migrate
 printf 'backup_manifest=%s\n' "$manifest_path"
 REMOTE
