@@ -216,6 +216,91 @@ function previewItem(snapshot, mapped, sourceHash, migrated, issues) {
   }
 }
 
+const pilotIssueWeights = {
+  weakEvidence: 24,
+  unmappedBrand: 20,
+  unmappedCategory: 20,
+  unmappedUnit: 12,
+  fitmentNeedsReview: 10,
+  imagesPreservedInEvidence: 6,
+}
+
+function pilotCandidate(item) {
+  const issueCodes = new Set(item.issues.map((issue) => issue.code))
+  const tasks = {
+    evidenceReview: issueCodes.has('weakEvidence') ? 1 : 0,
+    dictionaryReview: ['unmappedBrand', 'unmappedCategory', 'unmappedUnit'].filter((code) => issueCodes.has(code)).length,
+    imageReview: issueCodes.has('imagesPreservedInEvidence') ? Math.max(1, item.mapping?.images?.length || 0) : 0,
+    fitmentResearch: item.legacy.fitmentCount ? 0 : 1,
+    fitmentReview: item.legacy.fitmentCount,
+  }
+  let score = 100
+  for (const issue of item.issues) score -= pilotIssueWeights[issue.code] || (issue.blocking ? 100 : 4)
+  if (!item.legacy.fitmentCount) score -= 14
+  if (item.legacy.identifierCount <= 1) score -= 8
+  else if (item.legacy.identifierCount >= 3) score += 4
+  const reasons = []
+  if (item.legacy.identifierCount >= 3) reasons.push(`${item.legacy.identifierCount} 个可回查编号`)
+  if (!item.issues.length) reasons.push('来源与字段映射较完整')
+  if (item.legacy.fitmentCount) reasons.push('可覆盖适配专项审核流程')
+  if (!item.legacy.fitmentCount) reasons.push('需要补建标准适配')
+  if (issueCodes.has('weakEvidence')) reasons.push('需要补强来源证据')
+  if (issueCodes.has('imagesPreservedInEvidence')) reasons.push('需要核对旧图片')
+  const estimatedMinutes = 5 + tasks.evidenceReview * 10 + tasks.dictionaryReview * 8 + tasks.imageReview * 4
+    + tasks.fitmentResearch * 15 + tasks.fitmentReview * 8
+  return {
+    legacySkuId: item.legacySkuId, sourceHash: item.sourceHash,
+    skuCode: item.legacy.skuCode, name: item.legacy.name,
+    brand: item.legacy.brand || '未归类品牌', category: item.legacy.category || '未归类分类',
+    score: Math.max(0, Math.min(100, score)), reasons, tasks, estimatedMinutes,
+    identifierCount: item.legacy.identifierCount, fitmentCount: item.legacy.fitmentCount,
+    issueCodes: [...issueCodes],
+  }
+}
+
+export function buildLegacyMigrationPilot(items, requestedSize = 5) {
+  const size = Number(requestedSize)
+  if (!Number.isInteger(size) || size < 5 || size > 10) throw problem('INVALID_LEGACY_MIGRATION_PILOT_SIZE', '试运行候选数量必须为 5 至 10 条', 400)
+  const candidates = items.filter((item) => !item.migrated && !item.blocking).map(pilotCandidate)
+    .sort((left, right) => right.score - left.score || right.identifierCount - left.identifierCount || left.skuCode.localeCompare(right.skuCode))
+  const selected = []
+  const selectedIds = new Set()
+  const categories = new Set()
+  const add = (candidate) => {
+    if (!candidate || selectedIds.has(candidate.legacySkuId) || selected.length >= size) return
+    selected.push(candidate); selectedIds.add(candidate.legacySkuId); categories.add(candidate.category)
+  }
+  for (const candidate of candidates) {
+    if (!categories.has(candidate.category)) add(candidate)
+  }
+  for (const candidate of candidates) add(candidate)
+  if (selected.length >= 5 && !selected.some((item) => item.fitmentCount > 0)) {
+    const fitmentCandidate = candidates.find((item) => item.fitmentCount > 0 && !selectedIds.has(item.legacySkuId))
+    if (fitmentCandidate) {
+      const replaced = selected.pop()
+      selectedIds.delete(replaced.legacySkuId)
+      categories.clear(); selected.forEach((item) => categories.add(item.category))
+      add(fitmentCandidate)
+    }
+  }
+  const taskTotals = selected.reduce((total, item) => Object.fromEntries(Object.keys(total).map((key) => [key, total[key] + item.tasks[key]])), {
+    evidenceReview: 0, dictionaryReview: 0, imageReview: 0, fitmentResearch: 0, fitmentReview: 0,
+  })
+  return {
+    requestedSize: size,
+    generatedAt: new Date().toISOString(),
+    selectionPolicy: '优先选择无硬阻断、来源较完整的资料，并覆盖不同分类及至少一条既有适配复核场景。',
+    summary: {
+      available: candidates.length, selected: selected.length,
+      categoryCount: new Set(selected.map((item) => item.category)).size,
+      brandCount: new Set(selected.map((item) => item.brand)).size,
+      estimatedMinutes: selected.reduce((total, item) => total + item.estimatedMinutes, 0),
+      tasks: taskTotals,
+    },
+    items: selected,
+  }
+}
+
 function actorDetails(actor) {
   if (typeof actor === 'string') return { id: `legacy:${text(actor)}`, name: text(actor), role: '', identityProvider: 'legacy' }
   return { id: text(actor?.id), name: text(actor?.name), role: text(actor?.role), identityProvider: text(actor?.identityProvider) }
@@ -504,6 +589,11 @@ export function createCatalogLegacyMigrationRepository(pool) {
       } finally {
         client.release()
       }
+    },
+
+    async pilot({ size = 5 } = {}) {
+      const preview = await this.preview({ page: 1, pageSize: 100 })
+      return buildLegacyMigrationPilot(preview.items, size)
     },
 
     async commit(rawInput, actor) {

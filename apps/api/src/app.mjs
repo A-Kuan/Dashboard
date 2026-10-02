@@ -121,6 +121,12 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return catalogLegacyMigrationRepository.preview({ query: request.query?.q, page: request.query?.page, pageSize: request.query?.pageSize })
   })
+  app.get('/api/v2/catalog/legacy-migration-pilot', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.pilot) return reply.code(503).send({ error: 'LEGACY_MIGRATION_PILOT_UNAVAILABLE', message: '试运行候选服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.pilot({ size: request.query?.size })
+  })
   app.post('/api/v2/catalog/legacy-migrations', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.migration.execute')

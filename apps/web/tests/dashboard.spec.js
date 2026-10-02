@@ -730,8 +730,22 @@ test('preflights and atomically executes an approved legacy SKU migration plan',
 
   const first = await createLegacy('ATOMIC-A')
   const second = await createLegacy('ATOMIC-B')
+  await createLegacy('PILOT-C')
+  await createLegacy('PILOT-D')
+  await createLegacy('PILOT-E')
+  await createLegacy('PILOT-F')
   const firstPreview = await previewItem(first.skuCode)
   const secondPreview = await previewItem(second.skuCode)
+  const plansBeforePilot = await (await page.request.get('/api/v2/catalog/legacy-migration-plans', { headers: editorHeaders })).json()
+  const pilotResponse = await page.request.get('/api/v2/catalog/legacy-migration-pilot?size=5', { headers: editorHeaders })
+  expect(pilotResponse.ok()).toBeTruthy()
+  const pilot = await pilotResponse.json()
+  expect(pilot.summary.selected).toBe(5)
+  expect(pilot.summary.available).toBeGreaterThanOrEqual(5)
+  expect(pilot.summary.estimatedMinutes).toBeGreaterThan(0)
+  expect(pilot.items).toHaveLength(5)
+  const plansAfterPilot = await (await page.request.get('/api/v2/catalog/legacy-migration-plans', { headers: editorHeaders })).json()
+  expect(plansAfterPilot.total).toBe(plansBeforePilot.total)
   const planResponse = await page.request.post('/api/v2/catalog/legacy-migration-plans', { headers: editorHeaders, data: {
     reason: '首批真实流程隔离试运行',
     items: [firstPreview, secondPreview].map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, decision: 'migrate', overrides: {} })),
@@ -815,6 +829,13 @@ test('preflights and atomically executes an approved legacy SKU migration plan',
 
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '旧资料迁移' }).click()
+  await page.getByRole('button', { name: /首批试运行/ }).click()
+  await expect(page.getByText('首批候选组合')).toBeVisible()
+  await expect(page.locator('.legacy-pilot-row')).toHaveCount(5)
+  await expect(page.getByText('预计复核任务')).toBeVisible()
+  await page.getByRole('button', { name: '采用这组候选' }).click()
+  await expect(page.getByText(/方案内 5 条迁移/)).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '方案说明' })).toHaveValue(/首批真实 SKU 试运行：5 条/)
   await page.getByRole('button', { name: /审批记录/ }).click()
   await page.getByRole('button', { name: /首批真实流程隔离试运行/ }).click()
   await expect(page.getByRole('heading', { name: '执行结果' })).toBeVisible()
