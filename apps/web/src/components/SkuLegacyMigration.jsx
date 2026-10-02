@@ -3,15 +3,17 @@ import {
   ArrowLeft, ArrowsLeftRight, Check, CheckCircle, ClockCounterClockwise, Cube, Database,
   MagnifyingGlass, ShieldCheck, WarningCircle, XCircle,
 } from '@phosphor-icons/react'
-import { commitLegacySkuMigration, getLegacySkuMigrationPreview } from '../services/catalogApi'
+import {
+  commitLegacyMigrationPlan, createLegacyMigrationPlan, getCatalogDictionaries, getLegacyMigrationPlan,
+  getLegacySkuMigrationPreview, listLegacyMigrationPlans, reviewLegacyMigrationPlan,
+} from '../services/catalogApi'
 import '../sku-legacy-migration.css'
 
 const filters = [
-  { id: 'all', label: '全部' },
-  { id: 'recommended', label: '建议迁移' },
-  { id: 'blocked', label: '存在阻断' },
-  { id: 'migrated', label: '已迁移' },
+  { id: 'all', label: '全部' }, { id: 'recommended', label: '建议迁移' },
+  { id: 'blocked', label: '存在阻断' }, { id: 'migrated', label: '已迁移' },
 ]
+const planStateLabels = { submitted: '待审核', approved: '已批准', committing: '执行中', rejected: '已退回', committed: '已执行', cancelled: '已取消' }
 
 function formatTime(value) {
   if (!value) return '—'
@@ -24,38 +26,41 @@ function stateLabel(item) {
   return item.issues.length ? '可迁移·需复核' : '可直接迁移'
 }
 
+function dictionaryOptions(dictionaries, code) {
+  return (dictionaries?.[code]?.items || []).filter((item) => item.enabled !== false && item.value !== '__all__')
+}
+
 export function SkuLegacyMigration({ capabilities = [], onBack, onCompleted, onNotify }) {
+  const [surface, setSurface] = useState('preview')
   const [preview, setPreview] = useState({ items: [], summary: {} })
+  const [plans, setPlans] = useState([])
+  const [planDetail, setPlanDetail] = useState(null)
+  const [dictionaries, setDictionaries] = useState({})
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [selectedId, setSelectedId] = useState('')
-  const [selectedIds, setSelectedIds] = useState([])
-  const [reason, setReason] = useState('经人工预览确认，将合格旧 SKU 转为新资料库草稿')
+  const [decisions, setDecisions] = useState({})
+  const [reason, setReason] = useState('经人工核对，将合格旧 SKU 提交为新资料库迁移方案')
+  const [reviewNote, setReviewNote] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [result, setResult] = useState(null)
   const canImport = capabilities.includes('catalog.import')
+  const canReview = capabilities.includes('catalog.review')
 
   const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const data = await getLegacySkuMigrationPreview({ query, pageSize: 100 })
-      setPreview(data)
+      const [data, nextPlans, nextDictionaries] = await Promise.all([
+        getLegacySkuMigrationPreview({ query, pageSize: 100 }), listLegacyMigrationPlans(), getCatalogDictionaries(),
+      ])
+      setPreview(data); setPlans(nextPlans.items || []); setDictionaries(nextDictionaries)
       setSelectedId((current) => data.items.some((item) => item.legacySkuId === current) ? current : data.items[0]?.legacySkuId || '')
-      setSelectedIds((current) => current.filter((id) => data.items.some((item) => item.legacySkuId === id && item.recommended)))
-    } catch (requestError) {
-      setError(requestError.message || '旧资料预览加载失败')
-    } finally {
-      setLoading(false)
-    }
+      setDecisions((current) => Object.fromEntries(Object.entries(current).filter(([id]) => data.items.some((item) => item.legacySkuId === id && !item.migrated))))
+    } catch (requestError) { setError(requestError.message || '旧资料预览加载失败') } finally { setLoading(false) }
   }, [query])
 
-  useEffect(() => {
-    const timeout = window.setTimeout(load, 220)
-    return () => window.clearTimeout(timeout)
-  }, [load])
+  useEffect(() => { const timeout = window.setTimeout(load, 220); return () => window.clearTimeout(timeout) }, [load])
 
   const visibleItems = useMemo(() => preview.items.filter((item) => {
     if (filter === 'recommended') return item.recommended
@@ -64,101 +69,81 @@ export function SkuLegacyMigration({ capabilities = [], onBack, onCompleted, onN
     return true
   }), [filter, preview.items])
   const selected = preview.items.find((item) => item.legacySkuId === selectedId) || visibleItems[0] || null
-  const selectedItems = preview.items.filter((item) => selectedIds.includes(item.legacySkuId) && item.recommended)
+  const selectedDecision = selected ? decisions[selected.legacySkuId] : null
+  const planItems = preview.items.filter((item) => decisions[item.legacySkuId]).map((item) => ({
+    legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, ...decisions[item.legacySkuId],
+  }))
+  const migrationCount = planItems.filter((item) => item.decision === 'migrate').length
+  const invalidExclusion = planItems.some((item) => item.decision === 'exclude' && !item.exclusionReason?.trim())
   const selectableVisible = visibleItems.filter((item) => item.recommended)
 
-  const toggleAll = (checked) => {
-    const visibleSet = new Set(selectableVisible.map((item) => item.legacySkuId))
-    setSelectedIds((current) => checked ? [...new Set([...current, ...visibleSet])] : current.filter((id) => !visibleSet.has(id)))
-  }
+  const updateDecision = (id, patch) => setDecisions((current) => ({ ...current, [id]: { decision: 'migrate', exclusionReason: '', overrides: {}, ...current[id], ...patch } }))
+  const removeDecision = (id) => setDecisions((current) => { const next = { ...current }; delete next[id]; return next })
+  const toggleAll = (checked) => setDecisions((current) => {
+    const next = { ...current }
+    selectableVisible.forEach((item) => { if (checked) next[item.legacySkuId] ||= { decision: 'migrate', exclusionReason: '', overrides: {} }; else delete next[item.legacySkuId] })
+    return next
+  })
 
-  const submit = async () => {
-    if (!selectedItems.length || !reason.trim() || !canImport) return
-    setSubmitting(true)
-    setError('')
+  const submitPlan = async () => {
+    if (!migrationCount || !reason.trim() || invalidExclusion || !canImport) return
+    setSubmitting(true); setError('')
     try {
-      const nextResult = await commitLegacySkuMigration(selectedItems, reason.trim())
-      setResult(nextResult)
-      setSelectedIds([])
-      await load()
-      onNotify?.(`迁移完成：${nextResult.summary.migrated} 条已生成草稿`)
-      onCompleted?.(nextResult)
-    } catch (requestError) {
-      setError(requestError.message || '迁移提交失败')
-    } finally {
-      setSubmitting(false)
-    }
+      const created = await createLegacyMigrationPlan(planItems, reason.trim())
+      setDecisions({}); setPlans((current) => [created, ...current]); setPlanDetail(created); setSurface('plans')
+      onNotify?.(`迁移方案已提交：${created.migrateCount} 条待审核`)
+    } catch (requestError) { setError(requestError.message || '迁移方案提交失败') } finally { setSubmitting(false) }
   }
 
-  return (
-    <main className="legacy-migration-main">
-      <header className="legacy-migration-topbar">
-        <div>
-          <button type="button" aria-label="返回 SKU 资料库" onClick={onBack}><ArrowLeft size={20} weight="bold" /></button>
-          <span><h1>旧 SKU 迁移预览</h1><p>旧资料保持不变；仅将人工选中的记录生成新资料库草稿</p></span>
-        </div>
-        <span className="legacy-migration-safety"><ShieldCheck size={19} weight="fill" />可回查 · 不覆盖 · 不自动发布</span>
-      </header>
+  const openPlan = async (plan) => {
+    setError('')
+    try { setPlanDetail(await getLegacyMigrationPlan(plan.id)) } catch (requestError) { setError(requestError.message || '方案详情加载失败') }
+  }
 
-      <div className="legacy-migration-content">
-        <section className="legacy-migration-metrics" aria-label="迁移概览">
-          <div><span>旧资料总数</span><strong>{preview.summary.total ?? '—'}</strong><small>当前迁移范围</small></div>
-          <div className="accent"><span>建议迁移</span><strong>{preview.summary.recommended ?? '—'}</strong><small>无阻断风险</small></div>
-          <div><span>需先处理</span><strong>{preview.summary.blocked ?? '—'}</strong><small>编号或字段冲突</small></div>
-          <div><span>已迁移</span><strong>{preview.summary.migrated ?? '—'}</strong><small>已生成草稿</small></div>
-          <div><span>来源有更新</span><strong>{preview.summary.sourceChanged ?? '—'}</strong><small>需重新核对</small></div>
-        </section>
+  const reviewPlan = async (decision) => {
+    if (!planDetail || !canReview || (decision === 'reject' && !reviewNote.trim())) return
+    setSubmitting(true); setError('')
+    try {
+      const next = await reviewLegacyMigrationPlan(planDetail, decision, reviewNote.trim())
+      setPlanDetail(next); setPlans((current) => current.map((item) => item.id === next.id ? next : item)); setReviewNote('')
+      onNotify?.(decision === 'approve' ? '迁移方案已批准，等待管理员执行' : '迁移方案已退回')
+    } catch (requestError) { setError(requestError.message || '审核失败') } finally { setSubmitting(false) }
+  }
 
-        <section className="legacy-migration-toolbar">
-          <label><MagnifyingGlass size={20} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索旧 SKU、OE、名称、品牌" /></label>
-          <nav>{filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? 'active' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</nav>
-          <button type="button" className="legacy-select-recommended" disabled={!canImport || !preview.summary.recommended} onClick={() => setSelectedIds(preview.items.filter((item) => item.recommended).map((item) => item.legacySkuId))}><Check size={17} weight="bold" />选择全部建议项</button>
-        </section>
+  const commitPlan = async () => {
+    if (!planDetail || !canImport) return
+    setSubmitting(true); setError('')
+    try {
+      const next = await commitLegacyMigrationPlan(planDetail)
+      setPlanDetail(next); setPlans((current) => current.map((item) => item.id === next.id ? next : item)); await load()
+      onNotify?.(`方案已执行：${next.batch.summary.migrated} 条生成草稿`); onCompleted?.(next.batch)
+    } catch (requestError) { setError(requestError.message || '方案执行失败') } finally { setSubmitting(false) }
+  }
 
-        <section className="legacy-migration-workspace">
-          <article className="legacy-migration-list">
-            <div className="legacy-migration-list-head"><span><input type="checkbox" aria-label="选择当前可迁移记录" disabled={!canImport || !selectableVisible.length} checked={Boolean(selectableVisible.length) && selectableVisible.every((item) => selectedIds.includes(item.legacySkuId))} onChange={(event) => toggleAll(event.target.checked)} /></span><span>旧 SKU / 配件名称</span><span>目标映射</span><span>关联数据</span><span>迁移判断</span></div>
-            <div className="legacy-migration-rows">
-              {visibleItems.map((item) => (
-                <button type="button" className={`legacy-migration-row ${selected?.legacySkuId === item.legacySkuId ? 'active' : ''}`} key={item.legacySkuId} onClick={() => setSelectedId(item.legacySkuId)}>
-                  <span onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`选择 ${item.legacy.name}`} disabled={!canImport || !item.recommended} checked={selectedIds.includes(item.legacySkuId)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, item.legacySkuId] : current.filter((id) => id !== item.legacySkuId))} /></span>
-                  <span className="legacy-part"><i><Cube size={22} weight="duotone" /></i><b>{item.legacy.name || '未命名零件'}<small>{item.legacy.skuCode}</small></b></span>
-                  <span><b>{item.target.identity.brandLabel || '待补充'}</b><small>{item.target.identity.categoryLabel || '待补充分类'}</small></span>
-                  <span><b>{item.legacy.identifierCount} 个编号</b><small>{item.legacy.fitmentCount} 条适配 · {item.legacy.oeRelationCount} 个关系</small></span>
-                  <span><em className={item.migrated ? 'done' : item.blocking ? 'blocked' : item.issues.length ? 'review' : 'ready'}>{stateLabel(item)}</em><small>{item.issues.length ? `${item.issues.length} 项提示` : '字段映射完整'}</small></span>
-                </button>
-              ))}
-              {!loading && !visibleItems.length ? <div className="legacy-migration-empty"><Database size={34} /><strong>当前筛选下没有记录</strong><span>可以切换筛选条件或调整搜索词。</span></div> : null}
-              {loading ? <div className="legacy-migration-empty"><ClockCounterClockwise size={34} /><strong>正在检查旧资料</strong><span>正在比对字段、编号与来源快照。</span></div> : null}
-            </div>
-          </article>
+  const renderMappingSelect = (label, code, currentLabel, originalLabel) => {
+    const decision = selectedDecision || { overrides: {} }
+    const overrideKey = `${code}Code`
+    const dictionaryCode = code === 'brand' ? 'sku_brand' : code === 'category' ? 'part_category' : 'unit'
+    return <div><dt>{label}</dt><dd><span>{originalLabel || '—'}</span><b>→</b><select aria-label={`修正${label}`} disabled={!canImport || selected?.migrated || selectedDecision?.decision === 'exclude'} value={decision.overrides?.[overrideKey] || ''} onChange={(event) => updateDecision(selected.legacySkuId, { overrides: { ...(decision.overrides || {}), [overrideKey]: event.target.value } })}><option value="">{currentLabel || '待补充'}</option>{dictionaryOptions(dictionaries, dictionaryCode).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></dd></div>
+  }
 
-          <aside className="legacy-migration-inspector">
-            {selected ? <>
-              <header><span className="legacy-migration-inspector-state">{stateLabel(selected)}</span><h2>{selected.legacy.name}</h2><p>{selected.legacy.skuCode} · 更新于 {formatTime(selected.legacy.updatedAt)}</p></header>
-              <div className="legacy-migration-inspector-body">
-                <section><h3><ArrowsLeftRight size={18} />字段映射</h3><dl>
-                  <div><dt>品牌</dt><dd><span>{selected.legacy.brand || '—'}</span><b>→</b><strong>{selected.target.identity.brandLabel || '待补充'}</strong></dd></div>
-                  <div><dt>分类</dt><dd><span>{selected.legacy.category || '—'}</span><b>→</b><strong>{selected.target.identity.categoryLabel || '待补充'}</strong></dd></div>
-                  <div><dt>单位</dt><dd><span>{selected.legacy.unit || '—'}</span><b>→</b><strong>{selected.target.identity.unitLabel}</strong></dd></div>
-                  <div><dt>状态</dt><dd><span>{selected.legacy.lifecycleStatus}</span><b>→</b><strong>草稿 · 未核验</strong></dd></div>
-                </dl></section>
-                <section><h3><Database size={18} />将写入的编号</h3><div className="legacy-identifier-list">{selected.target.identifiers.map((item) => <span key={`${item.type}-${item.normalizedValue}`}><b>{item.isPrimary ? '主编号' : item.type.toUpperCase()}</b><strong>{item.rawValue}</strong><small>{item.verificationStatus === 'pending' ? '待核验' : item.verificationStatus}</small></span>)}</div></section>
-                <section><h3><WarningCircle size={18} />检查结果</h3>{selected.issues.length ? <div className="legacy-issue-list">{selected.issues.map((issue) => <div className={issue.blocking ? 'blocking' : ''} key={issue.code}>{issue.blocking ? <XCircle size={17} weight="fill" /> : <WarningCircle size={17} weight="fill" />}<span><strong>{issue.blocking ? '阻止迁移' : '迁移后复核'}</strong><small>{issue.label}</small></span></div>)}</div> : <div className="legacy-all-clear"><CheckCircle size={20} weight="fill" /><span><strong>未发现风险项</strong><small>仍将以草稿状态进入资料库。</small></span></div>}</section>
-                <section className="legacy-preservation-note"><ShieldCheck size={20} weight="fill" /><span><strong>旧资料不会被修改</strong><small>完整旧记录、OE 关系、适配条件和图片地址会写入不可变来源快照。</small></span></section>
-              </div>
-            </> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一条旧资料</strong><span>在这里核对映射和风险。</span></div>}
-          </aside>
-        </section>
+  return <main className="legacy-migration-main">
+    <header className="legacy-migration-topbar"><div><button type="button" aria-label="返回 SKU 资料库" onClick={onBack}><ArrowLeft size={20} weight="bold" /></button><span><h1>旧 SKU 迁移治理</h1><p>先形成可审核方案，批准后才允许生成新资料库草稿</p></span></div><span className="legacy-migration-safety"><ShieldCheck size={19} weight="fill" />可回查 · 不覆盖 · 审批后写入</span></header>
+    <div className="legacy-migration-content">
+      <section className="legacy-migration-metrics" aria-label="迁移概览"><div><span>旧资料总数</span><strong>{preview.summary.total ?? '—'}</strong><small>当前迁移范围</small></div><div className="accent"><span>建议迁移</span><strong>{preview.summary.recommended ?? '—'}</strong><small>无阻断风险</small></div><div><span>需先处理</span><strong>{preview.summary.blocked ?? '—'}</strong><small>编号或字段冲突</small></div><div><span>待审核方案</span><strong>{plans.filter((item) => item.state === 'submitted').length}</strong><small>等待审核角色处理</small></div><div><span>已迁移</span><strong>{preview.summary.migrated ?? '—'}</strong><small>已生成草稿</small></div></section>
+      <section className="legacy-migration-toolbar"><div className="legacy-surface-tabs"><button type="button" className={surface === 'preview' ? 'active' : ''} onClick={() => setSurface('preview')}>资料治理</button><button type="button" className={surface === 'plans' ? 'active' : ''} onClick={() => setSurface('plans')}>审批记录 <b>{plans.filter((item) => item.state === 'submitted').length}</b></button></div>{surface === 'preview' ? <><label><MagnifyingGlass size={20} weight="bold" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索旧 SKU、OE、名称、品牌" /></label><nav>{filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? 'active' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</nav><button type="button" className="legacy-select-recommended" disabled={!canImport || !preview.summary.recommended} onClick={() => setDecisions(Object.fromEntries(preview.items.filter((item) => item.recommended).map((item) => [item.legacySkuId, { decision: 'migrate', exclusionReason: '', overrides: {} }])))}><Check size={17} weight="bold" />选择全部建议项</button></> : null}</section>
+      {surface === 'preview' ? <PreviewWorkspace {...{ visibleItems, selected, decisions, selectedDecision, canImport, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }} /> : <PlanWorkspace {...{ plans, planDetail, canReview, canImport, submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }} />}
+      {surface === 'preview' ? <footer className="legacy-migration-footer"><div><strong>方案内 {migrationCount} 条迁移 · {planItems.length - migrationCount} 条排除</strong><span>提交后由审核角色批准，不会立即写入新资料库。</span></div><label><span>方案说明</span><input value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canImport || submitting} /></label><button type="button" disabled={!canImport || !migrationCount || !reason.trim() || invalidExclusion || submitting} onClick={submitPlan}>{submitting ? '正在提交…' : `提交审核 ${migrationCount} 条`}</button></footer> : <footer className="legacy-migration-footer legacy-plan-footer"><div><strong>迁移审批与执行已分离</strong><span>审核人确认方案，管理员执行后只生成待核验草稿。</span></div></footer>}
+      {error ? <div className="legacy-migration-error"><XCircle size={18} weight="fill" />{error}</div> : null}
+    </div>
+  </main>
+}
 
-        <footer className="legacy-migration-footer">
-          <div><strong>已选择 {selectedItems.length} 条</strong><span>只会生成草稿，之后仍需在质量审核中逐条核验。</span></div>
-          <label><span>迁移原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} disabled={!canImport || submitting} /></label>
-          <button type="button" disabled={!canImport || !selectedItems.length || !reason.trim() || submitting} onClick={submit}>{submitting ? '正在生成草稿…' : `确认迁移 ${selectedItems.length} 条`}</button>
-        </footer>
-        {error ? <div className="legacy-migration-error"><XCircle size={18} weight="fill" />{error}</div> : null}
-        {result ? <div className="legacy-migration-result"><CheckCircle size={18} weight="fill" />批次已完成：成功 {result.summary.migrated}，跳过 {result.summary.skipped}，失败 {result.summary.failed}</div> : null}
-      </div>
-    </main>
-  )
+function PreviewWorkspace({ visibleItems, selected, decisions, selectedDecision, canImport, selectableVisible, loading, setSelectedId, updateDecision, removeDecision, toggleAll, renderMappingSelect }) {
+  return <section className="legacy-migration-workspace"><article className="legacy-migration-list"><div className="legacy-migration-list-head"><span><input type="checkbox" aria-label="选择当前可迁移记录" disabled={!canImport || !selectableVisible.length} checked={Boolean(selectableVisible.length) && selectableVisible.every((item) => decisions[item.legacySkuId]?.decision === 'migrate')} onChange={(event) => toggleAll(event.target.checked)} /></span><span>旧 SKU / 配件名称</span><span>目标映射</span><span>关联数据</span><span>迁移判断</span></div><div className="legacy-migration-rows">{visibleItems.map((item) => <button type="button" className={`legacy-migration-row ${selected?.legacySkuId === item.legacySkuId ? 'active' : ''}`} key={item.legacySkuId} onClick={() => setSelectedId(item.legacySkuId)}><span onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`选择 ${item.legacy.name}`} disabled={!canImport || !item.recommended} checked={decisions[item.legacySkuId]?.decision === 'migrate'} onChange={(event) => event.target.checked ? updateDecision(item.legacySkuId, { decision: 'migrate' }) : removeDecision(item.legacySkuId)} /></span><span className="legacy-part"><i><Cube size={22} weight="duotone" /></i><b>{item.legacy.name || '未命名零件'}<small>{item.legacy.skuCode}</small></b></span><span><b>{item.target.identity.brandLabel || '待补充'}</b><small>{item.target.identity.categoryLabel || '待补充分类'}</small></span><span><b>{item.legacy.identifierCount} 个编号</b><small>{item.legacy.fitmentCount} 条适配 · {item.legacy.oeRelationCount} 个关系</small></span><span><em className={item.migrated ? 'done' : item.blocking ? 'blocked' : item.issues.length ? 'review' : 'ready'}>{decisions[item.legacySkuId]?.decision === 'exclude' ? '方案中排除' : stateLabel(item)}</em><small>{item.issues.length ? `${item.issues.length} 项提示` : '字段映射完整'}</small></span></button>)}{!loading && !visibleItems.length ? <div className="legacy-migration-empty"><Database size={34} /><strong>当前筛选下没有记录</strong><span>可以切换筛选条件或调整搜索词。</span></div> : null}{loading ? <div className="legacy-migration-empty"><ClockCounterClockwise size={34} /><strong>正在检查旧资料</strong><span>正在比对字段、编号与来源快照。</span></div> : null}</div></article>
+    <aside className="legacy-migration-inspector">{selected ? <><header><span className="legacy-migration-inspector-state">{stateLabel(selected)}</span><h2>{selected.legacy.name}</h2><p>{selected.legacy.skuCode} · 更新于 {formatTime(selected.legacy.updatedAt)}</p></header><div className="legacy-migration-inspector-body"><section><h3><ArrowsLeftRight size={18} />字段映射</h3><dl>{renderMappingSelect('品牌', 'brand', selected.target.identity.brandLabel, selected.legacy.brand)}{renderMappingSelect('分类', 'category', selected.target.identity.categoryLabel, selected.legacy.category)}{renderMappingSelect('单位', 'unit', selected.target.identity.unitLabel, selected.legacy.unit)}<div><dt>状态</dt><dd><span>{selected.legacy.lifecycleStatus}</span><b>→</b><strong>草稿 · 未核验</strong></dd></div></dl></section><section className="legacy-decision"><h3><ShieldCheck size={18} />方案决定</h3><div><button type="button" disabled={!canImport || selected.migrated || selected.blocking} className={selectedDecision?.decision === 'migrate' ? 'active' : ''} onClick={() => updateDecision(selected.legacySkuId, { decision: 'migrate', exclusionReason: '' })}>纳入迁移</button><button type="button" disabled={!canImport || selected.migrated} className={selectedDecision?.decision === 'exclude' ? 'active danger' : ''} onClick={() => updateDecision(selected.legacySkuId, { decision: 'exclude' })}>从本方案排除</button></div>{selectedDecision?.decision === 'exclude' ? <textarea aria-label="排除原因" value={selectedDecision.exclusionReason || ''} onChange={(event) => updateDecision(selected.legacySkuId, { exclusionReason: event.target.value })} placeholder="必填：说明为什么暂不迁移这条资料" /> : null}</section><section><h3><WarningCircle size={18} />检查结果</h3>{selected.issues.length ? <div className="legacy-issue-list">{selected.issues.map((issue) => <div className={issue.blocking ? 'blocking' : ''} key={issue.code}>{issue.blocking ? <XCircle size={17} weight="fill" /> : <WarningCircle size={17} weight="fill" />}<span><strong>{issue.blocking ? '阻止迁移' : '迁移后复核'}</strong><small>{issue.label}</small></span></div>)}</div> : <div className="legacy-all-clear"><CheckCircle size={20} weight="fill" /><span><strong>未发现风险项</strong><small>仍将以草稿状态进入资料库。</small></span></div>}</section><section className="legacy-preservation-note"><ShieldCheck size={20} weight="fill" /><span><strong>旧资料不会被修改</strong><small>字段修正和排除决定只保存在迁移方案中。</small></span></section></div></> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一条旧资料</strong><span>在这里核对映射和风险。</span></div>}</aside></section>
+}
+
+function PlanWorkspace({ plans, planDetail, canReview, canImport, submitting, reviewNote, setReviewNote, openPlan, reviewPlan, commitPlan }) {
+  return <section className="legacy-migration-workspace legacy-plan-workspace"><article className="legacy-migration-list"><div className="legacy-plan-head"><span>状态</span><span>方案说明</span><span>范围</span><span>提交信息</span></div><div className="legacy-migration-rows">{plans.map((plan) => <button type="button" className={`legacy-plan-row ${planDetail?.id === plan.id ? 'active' : ''}`} key={plan.id} onClick={() => openPlan(plan)}><em className={plan.state}>{planStateLabels[plan.state] || plan.state}</em><span><strong>{plan.reason}</strong><small>{plan.id.slice(0, 8)}</small></span><span><strong>{plan.migrateCount} 条迁移</strong><small>{plan.excludeCount} 条排除</small></span><span><strong>{plan.createdBy}</strong><small>{formatTime(plan.createdAt)}</small></span></button>)}{!plans.length ? <div className="legacy-migration-empty"><Database size={34} /><strong>还没有迁移方案</strong><span>在资料治理中选择记录后提交。</span></div> : null}</div></article><aside className="legacy-migration-inspector legacy-plan-inspector">{planDetail ? <><header><span className="legacy-migration-inspector-state">{planStateLabels[planDetail.state]}</span><h2>{planDetail.reason}</h2><p>版本 {planDetail.version} · {formatTime(planDetail.createdAt)}</p></header><div className="legacy-migration-inspector-body"><section><h3>方案范围</h3><div className="legacy-plan-counts"><span><strong>{planDetail.migrateCount}</strong>迁移</span><span><strong>{planDetail.excludeCount}</strong>排除</span></div></section><section><h3>处理记录</h3><div className="legacy-plan-items">{planDetail.items?.map((item) => <div key={item.id}><span><strong>{item.preview?.legacy?.name || item.legacySkuId}</strong><small>{item.preview?.legacy?.skuCode}</small></span><em className={item.decision}>{item.decision === 'migrate' ? '迁移' : '排除'}</em>{item.exclusionReason ? <small>{item.exclusionReason}</small> : null}</div>)}</div></section>{planDetail.reviewedAt ? <section><h3>审核结果</h3><p className="legacy-review-copy">{planDetail.reviewedBy} · {formatTime(planDetail.reviewedAt)}<br />{planDetail.reviewNote || '审核通过'}</p></section> : null}{planDetail.state === 'submitted' ? <section className="legacy-review-actions"><h3>审核决定</h3><textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="通过可选填；退回时必须说明原因" /><div><button type="button" disabled={!canReview || submitting || !reviewNote.trim()} onClick={() => reviewPlan('reject')}>退回</button><button type="button" className="primary" disabled={!canReview || submitting} onClick={() => reviewPlan('approve')}>批准方案</button></div></section> : null}{planDetail.state === 'approved' ? <section className="legacy-commit-panel"><ShieldCheck size={20} weight="fill" /><span><strong>方案已获批准</strong><small>执行前会再次检查来源版本和编号冲突。</small></span><button type="button" disabled={!canImport || submitting} onClick={commitPlan}>正式执行迁移</button></section> : null}</div></> : <div className="legacy-migration-empty"><Database size={34} /><strong>选择一个方案</strong><span>查看处理记录、审核和执行状态。</span></div>}</aside></section>
 }

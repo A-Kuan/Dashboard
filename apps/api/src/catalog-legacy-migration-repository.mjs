@@ -61,11 +61,19 @@ function identifierCandidates(snapshot) {
   })
 }
 
-export function mapLegacySku(snapshot, dictionaries = {}) {
+function resolveOverride(dictionaries, dictionaryCode, overrideCode, fallback) {
+  const requested = text(overrideCode)
+  if (!requested) return fallback
+  const match = (dictionaries?.[dictionaryCode]?.items || []).find((item) => item.enabled !== false && text(item.value) === requested)
+  if (!match) throw problem('LEGACY_MIGRATION_INVALID_OVERRIDE', `修正后的${dictionaryCode === 'sku_brand' ? '品牌' : dictionaryCode === 'part_category' ? '分类' : '单位'}不在当前字典中`, 422, { dictionaryCode, value: requested })
+  return { code: text(match.value), label: text(match.label || match.value), resolved: true, overridden: true }
+}
+
+export function mapLegacySku(snapshot, dictionaries = {}, overrides = {}) {
   const sku = snapshot.sku
-  const brand = resolveDictionary(dictionaries, 'sku_brand', sku.brand)
-  const category = resolveDictionary(dictionaries, 'part_category', sku.category)
-  const unit = resolveDictionary(dictionaries, 'unit', sku.unit)
+  const brand = resolveOverride(dictionaries, 'sku_brand', overrides.brandCode, resolveDictionary(dictionaries, 'sku_brand', sku.brand))
+  const category = resolveOverride(dictionaries, 'part_category', overrides.categoryCode, resolveDictionary(dictionaries, 'part_category', sku.category))
+  const unit = resolveOverride(dictionaries, 'unit', overrides.unitCode, resolveDictionary(dictionaries, 'unit', sku.unit))
   const identifiers = identifierCandidates(snapshot)
   const evidenceKey = 'legacy-evidence'
   const fitments = snapshot.fitments.map((fitment) => {
@@ -206,6 +214,19 @@ function previewItem(snapshot, mapped, sourceHash, migrated, issues) {
   }
 }
 
+function planView(plan, items = []) {
+  return {
+    id: plan.id, state: plan.state, reason: plan.reason, migrateCount: plan.migrate_count, excludeCount: plan.exclude_count,
+    version: plan.version, createdBy: plan.created_by, createdAt: plan.created_at, submittedAt: plan.submitted_at,
+    reviewedBy: plan.reviewed_by, reviewedAt: plan.reviewed_at, reviewNote: plan.review_note,
+    committedBatchId: plan.committed_batch_id, committedBy: plan.committed_by, committedAt: plan.committed_at,
+    items: items.map((item) => ({
+      id: item.id, legacySkuId: item.legacy_sku_id, sourceHash: item.source_hash, decision: item.decision,
+      exclusionReason: item.exclusion_reason, overrides: item.overrides, preview: item.preview_snapshot, sortOrder: item.sort_order,
+    })),
+  }
+}
+
 async function insertCatalogDraft(client, input, snapshot, sourceHash, batchId, actor) {
   const skuId = randomUUID()
   const evidenceId = randomUUID()
@@ -306,7 +327,7 @@ export function createCatalogLegacyMigrationRepository(pool) {
             const existing = await migrationState(client, legacySkuId)
             if (existing) return { state: 'skipped', legacySkuId, catalogSkuId: existing.catalog_sku_id, sourceHash, reason: 'already_migrated' }
             const dictionaries = await loadDictionaryConfiguration(client)
-            const mapped = mapLegacySku(snapshot, dictionaries)
+            const mapped = mapLegacySku(snapshot, dictionaries, candidate.overrides || {})
             const issues = [...mapped.issues, ...await conflictIssues(client, snapshot, legacySkuId)]
             const blocking = issues.filter((issue) => issue.blocking)
             if (blocking.length) throw problem('LEGACY_SKU_MIGRATION_BLOCKED', '存在阻止迁移的数据问题', 422, { issues: blocking })
@@ -349,6 +370,108 @@ export function createCatalogLegacyMigrationRepository(pool) {
           id: item.id, legacySkuId: item.legacy_sku_id, catalogSkuId: item.catalog_sku_id, sourceHash: item.source_hash,
           state: item.state, error: item.error_code, message: item.error_message, mappingSnapshot: item.mapping_snapshot, createdAt: item.created_at,
         })),
+      }
+    },
+
+    async createPlan(rawInput, actor) {
+      const candidates = Array.isArray(rawInput?.items) ? rawInput.items : []
+      if (!candidates.length || candidates.length > 100) throw problem('INVALID_LEGACY_MIGRATION_PLAN', '迁移方案需包含 1 至 100 条处理决定', 400)
+      const ids = candidates.map((item) => text(item?.legacySkuId))
+      if (ids.some((id) => !id) || new Set(ids).size !== ids.length) throw problem('INVALID_LEGACY_MIGRATION_PLAN', '迁移方案中的旧资料无效或重复', 400)
+      const reason = text(rawInput?.reason)
+      if (!reason) throw problem('LEGACY_MIGRATION_REASON_REQUIRED', '请填写方案说明', 400)
+      return withTransaction(pool, async (client) => {
+        const dictionaries = await loadDictionaryConfiguration(client)
+        const rows = await loadLegacyRows(client)
+        const rowById = new Map(rows.map((row) => [row.sku.id, row]))
+        const prepared = []
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]
+          const legacySkuId = ids[index]
+          const decision = candidate?.decision === 'exclude' ? 'exclude' : 'migrate'
+          const exclusionReason = text(candidate?.exclusionReason)
+          if (decision === 'exclude' && !exclusionReason) throw problem('LEGACY_MIGRATION_EXCLUSION_REASON_REQUIRED', '排除旧资料时必须说明原因', 400, { legacySkuId })
+          const row = rowById.get(legacySkuId)
+          if (!row) throw problem('LEGACY_SKU_NOT_FOUND', '旧 SKU 已不存在', 404, { legacySkuId })
+          const snapshot = snapshotFromRow(row)
+          const sourceHash = hashSnapshot(snapshot)
+          if (sourceHash !== text(candidate?.sourceHash)) throw problem('LEGACY_SKU_SOURCE_CHANGED', '旧资料已发生变化，请刷新预览后再提交', 409, { legacySkuId, sourceHash })
+          const existing = await migrationState(client, legacySkuId)
+          if (existing && decision === 'migrate') throw problem('LEGACY_SKU_ALREADY_MIGRATED', '旧资料已经迁移，不能重复加入方案', 409, { legacySkuId })
+          const overrides = {
+            brandCode: text(candidate?.overrides?.brandCode), categoryCode: text(candidate?.overrides?.categoryCode), unitCode: text(candidate?.overrides?.unitCode),
+          }
+          const mapped = mapLegacySku(snapshot, dictionaries, overrides)
+          const issues = [...mapped.issues, ...(decision === 'migrate' ? await conflictIssues(client, snapshot, legacySkuId) : [])]
+          if (decision === 'migrate' && issues.some((issue) => issue.blocking)) throw problem('LEGACY_SKU_MIGRATION_BLOCKED', '方案中存在阻止迁移的数据问题', 422, { legacySkuId, issues: issues.filter((issue) => issue.blocking) })
+          prepared.push({ legacySkuId, sourceHash, decision, exclusionReason, overrides, preview: previewItem(snapshot, mapped, sourceHash, existing, issues), sortOrder: index })
+        }
+        if (!prepared.some((item) => item.decision === 'migrate')) throw problem('LEGACY_MIGRATION_EMPTY_SELECTION', '方案至少需要包含一条待迁移资料', 400)
+        const planId = randomUUID()
+        const migrateCount = prepared.filter((item) => item.decision === 'migrate').length
+        const excludeCount = prepared.length - migrateCount
+        const plan = (await client.query(`INSERT INTO catalog_legacy_migration_plan
+          (id,state,reason,migrate_count,exclude_count,created_by) VALUES ($1,'submitted',$2,$3,$4,$5) RETURNING *`,
+        [planId, reason, migrateCount, excludeCount, actor])).rows[0]
+        for (const item of prepared) await client.query(`INSERT INTO catalog_legacy_migration_plan_item
+          (id,plan_id,legacy_sku_id,source_hash,decision,exclusion_reason,overrides,preview_snapshot,sort_order)
+          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)`, [randomUUID(), planId, item.legacySkuId, item.sourceHash,
+          item.decision, item.exclusionReason, JSON.stringify(item.overrides), JSON.stringify(item.preview), item.sortOrder])
+        const itemRows = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [planId])).rows
+        return planView(plan, itemRows)
+      })
+    },
+
+    async listPlans({ state = '', limit = 30 } = {}) {
+      const values = []
+      const where = text(state) ? `WHERE state=$${values.push(text(state))}` : ''
+      const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30))
+      const rows = (await pool.query(`SELECT * FROM catalog_legacy_migration_plan ${where} ORDER BY created_at DESC LIMIT $${values.push(safeLimit)}`, values)).rows
+      return { items: rows.map((row) => planView(row)), total: rows.length }
+    },
+
+    async getPlan(id) {
+      const plan = (await pool.query('SELECT * FROM catalog_legacy_migration_plan WHERE id=$1', [id])).rows[0]
+      if (!plan) return null
+      const items = (await pool.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
+      return planView(plan, items)
+    },
+
+    async reviewPlan(id, rawInput, actor) {
+      const decision = rawInput?.decision === 'reject' ? 'reject' : rawInput?.decision === 'approve' ? 'approve' : ''
+      const note = text(rawInput?.note)
+      if (!decision) throw problem('INVALID_LEGACY_MIGRATION_REVIEW', '请选择通过或退回', 400)
+      if (decision === 'reject' && !note) throw problem('LEGACY_MIGRATION_REVIEW_NOTE_REQUIRED', '退回方案时必须填写原因', 400)
+      return withTransaction(pool, async (client) => {
+        const plan = (await client.query('SELECT * FROM catalog_legacy_migration_plan WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!plan) throw problem('LEGACY_MIGRATION_PLAN_NOT_FOUND', '迁移方案不存在', 404)
+        if (plan.state !== 'submitted') throw problem('LEGACY_MIGRATION_PLAN_STATE_CONFLICT', '只有待审核方案可以审核', 409, { state: plan.state })
+        if (Number(rawInput?.expectedVersion) !== plan.version) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案已被其他人更新，请刷新后重试', 409, { currentVersion: plan.version })
+        const next = (await client.query(`UPDATE catalog_legacy_migration_plan SET state=$2,reviewed_by=$3,reviewed_at=now(),review_note=$4,version=version+1
+          WHERE id=$1 RETURNING *`, [id, decision === 'approve' ? 'approved' : 'rejected', actor, note])).rows[0]
+        const items = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
+        return planView(next, items)
+      })
+    },
+
+    async commitPlan(id, rawInput, actor) {
+      const plan = await this.getPlan(id)
+      if (!plan) throw problem('LEGACY_MIGRATION_PLAN_NOT_FOUND', '迁移方案不存在', 404)
+      if (plan.state !== 'approved') throw problem('LEGACY_MIGRATION_PLAN_STATE_CONFLICT', '只有已批准方案可以正式迁移', 409, { state: plan.state })
+      if (Number(rawInput?.expectedVersion) !== plan.version) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案已被其他人更新，请刷新后重试', 409, { currentVersion: plan.version })
+      const claimed = (await pool.query(`UPDATE catalog_legacy_migration_plan SET state='committing',version=version+1
+        WHERE id=$1 AND state='approved' AND version=$2 RETURNING *`, [id, plan.version])).rows[0]
+      if (!claimed) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案状态已变化，请刷新查看结果', 409)
+      try {
+        const migratable = plan.items.filter((item) => item.decision === 'migrate')
+        const batch = await this.commit({ reason: `已批准方案 ${plan.id}：${plan.reason}`, items: migratable.map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, overrides: item.overrides })) }, actor)
+        const updated = (await pool.query(`UPDATE catalog_legacy_migration_plan SET state='committed',committed_batch_id=$2,committed_by=$3,
+          committed_at=now(),version=version+1 WHERE id=$1 AND state='committing' AND version=$4 RETURNING *`, [id, batch.id, actor, claimed.version])).rows[0]
+        const items = (await pool.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
+        return { ...planView(updated, items), batch }
+      } catch (error) {
+        await pool.query("UPDATE catalog_legacy_migration_plan SET state='approved',version=version+1 WHERE id=$1 AND state='committing'", [id]).catch(() => {})
+        throw error
       }
     },
   }

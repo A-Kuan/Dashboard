@@ -101,7 +101,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.import')
     if (!actor) return
-    return reply.code(201).send(await catalogLegacyMigrationRepository.commit(request.body, actor.name))
+    return reply.code(409).send({ error: 'LEGACY_MIGRATION_PLAN_REQUIRED', message: '旧资料必须先提交迁移方案并通过审核' })
   })
   app.get('/api/v2/catalog/legacy-migrations/:id', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
@@ -110,6 +110,38 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const batch = await catalogLegacyMigrationRepository.getBatch(request.params.id)
     if (!batch) return reply.code(404).send({ error: 'LEGACY_MIGRATION_NOT_FOUND', message: '迁移批次不存在' })
     return batch
+  })
+  app.post('/api/v2/catalog/legacy-migration-plans', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.createPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    return reply.code(201).send(await catalogLegacyMigrationRepository.createPlan(request.body, actor.name))
+  })
+  app.get('/api/v2/catalog/legacy-migration-plans', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.listPlans) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.listPlans({ state: request.query?.state, limit: request.query?.limit })
+  })
+  app.get('/api/v2/catalog/legacy-migration-plans/:id', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.getPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const plan = await catalogLegacyMigrationRepository.getPlan(request.params.id)
+    if (!plan) return reply.code(404).send({ error: 'LEGACY_MIGRATION_PLAN_NOT_FOUND', message: '迁移方案不存在' })
+    return plan
+  })
+  app.post('/api/v2/catalog/legacy-migration-plans/:id/review', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.reviewPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.review')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.reviewPlan(request.params.id, request.body, actor.name)
+  })
+  app.post('/api/v2/catalog/legacy-migration-plans/:id/commit', async (request, reply) => {
+    if (!catalogLegacyMigrationRepository?.commitPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    if (!actor) return
+    return catalogLegacyMigrationRepository.commitPlan(request.params.id, request.body, actor.name)
   })
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {
