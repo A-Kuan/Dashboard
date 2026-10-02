@@ -251,7 +251,8 @@ function pilotCandidate(item) {
   return {
     legacySkuId: item.legacySkuId, sourceHash: item.sourceHash,
     skuCode: item.legacy.skuCode, name: item.legacy.name,
-    brand: item.legacy.brand || '未归类品牌', category: item.legacy.category || '未归类分类',
+    brand: item.target?.identity?.brandLabel || item.legacy.brand || '未归类品牌',
+    category: item.target?.identity?.categoryLabel || item.legacy.category || '未归类分类',
     score: Math.max(0, Math.min(100, score)), reasons, tasks, estimatedMinutes,
     identifierCount: item.legacy.identifierCount, fitmentCount: item.legacy.fitmentCount,
     issueCodes: [...issueCodes],
