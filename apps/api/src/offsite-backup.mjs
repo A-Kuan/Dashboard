@@ -5,7 +5,7 @@ import { basename, dirname, resolve } from 'node:path'
 
 const manifestSuffix = '.manifest.json'
 
-function enabled(value) {
+export function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())
 }
 
@@ -15,7 +15,7 @@ function required(value, name) {
   return normalized
 }
 
-function safePrefix(value) {
+export function safePrefix(value) {
   const prefix = String(value || 'dashboard-sku').trim().replace(/^\/+|\/+$/g, '')
   if (!prefix || prefix.includes('..') || !/^[A-Za-z0-9][A-Za-z0-9/_-]{0,255}$/.test(prefix)) {
     throw new Error('OSS_PREFIX must be a safe object-key prefix')
@@ -23,7 +23,7 @@ function safePrefix(value) {
   return prefix
 }
 
-async function sha256File(path) {
+export async function sha256File(path) {
   const hash = createHash('sha256')
   for await (const chunk of createReadStream(path)) hash.update(chunk)
   return hash.digest('hex')
@@ -48,6 +48,32 @@ async function defaultCredentialProvider(roleName) {
   const provider = new Credential({ type: 'ecs_ram_role', roleName, disableIMDSv1: true })
   const credential = await provider.getCredential()
   return { accessKeyId: credential.accessKeyId, accessKeySecret: credential.accessKeySecret, stsToken: credential.securityToken }
+}
+
+export async function createOffsiteClient({ environment = process.env, clientFactory = defaultClientFactory, credentialProvider = defaultCredentialProvider } = {}) {
+  const prefix = safePrefix(environment.OSS_PREFIX)
+  const roleName = String(environment.OSS_ECS_RAM_ROLE || '').trim()
+  const staticAccessKeyId = String(environment.OSS_ACCESS_KEY_ID || '').trim()
+  const staticAccessKeySecret = String(environment.OSS_ACCESS_KEY_SECRET || '').trim()
+  if (roleName && (staticAccessKeyId || staticAccessKeySecret || environment.OSS_STS_TOKEN)) throw new Error('Configure either OSS_ECS_RAM_ROLE or static OSS credentials, not both')
+  const credentials = roleName
+    ? await credentialProvider(roleName)
+    : { accessKeyId: required(staticAccessKeyId, 'OSS_ACCESS_KEY_ID'), accessKeySecret: required(staticAccessKeySecret, 'OSS_ACCESS_KEY_SECRET'), stsToken: String(environment.OSS_STS_TOKEN || '').trim() }
+  if (!credentials.accessKeyId || !credentials.accessKeySecret || (roleName && !credentials.stsToken)) throw new Error('OSS credential provider returned incomplete credentials')
+  const timeout = Number(environment.OSS_TIMEOUT_MS || 120000)
+  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 600000) throw new Error('OSS_TIMEOUT_MS must be an integer between 1000 and 600000')
+  const configuration = {
+    region: required(environment.OSS_REGION, 'OSS_REGION'),
+    bucket: required(environment.OSS_BUCKET, 'OSS_BUCKET'),
+    accessKeyId: credentials.accessKeyId,
+    accessKeySecret: credentials.accessKeySecret,
+    authorizationV4: true,
+    secure: true,
+    timeout,
+  }
+  if (credentials.stsToken) configuration.stsToken = credentials.stsToken
+  if (environment.OSS_ENDPOINT) configuration.endpoint = String(environment.OSS_ENDPOINT)
+  return { client: await clientFactory(configuration), configuration, prefix, credentialMode: roleName ? 'ecs-ram-role' : 'static' }
 }
 
 async function uploadObject(client, object, { encryption }) {
@@ -90,29 +116,7 @@ export async function uploadBackupSet({ manifestPath, environment = process.env,
   const assetPath = resolve(directory, manifest.assetArchive.filename)
   if (![archivePath, assetPath].every((path) => inside(directory, path))) throw new Error('Backup set escaped its backup directory')
 
-  const prefix = safePrefix(environment.OSS_PREFIX)
-  const roleName = String(environment.OSS_ECS_RAM_ROLE || '').trim()
-  const staticAccessKeyId = String(environment.OSS_ACCESS_KEY_ID || '').trim()
-  const staticAccessKeySecret = String(environment.OSS_ACCESS_KEY_SECRET || '').trim()
-  if (roleName && (staticAccessKeyId || staticAccessKeySecret || environment.OSS_STS_TOKEN)) throw new Error('Configure either OSS_ECS_RAM_ROLE or static OSS credentials, not both')
-  const credentials = roleName
-    ? await credentialProvider(roleName)
-    : { accessKeyId: required(staticAccessKeyId, 'OSS_ACCESS_KEY_ID'), accessKeySecret: required(staticAccessKeySecret, 'OSS_ACCESS_KEY_SECRET'), stsToken: String(environment.OSS_STS_TOKEN || '').trim() }
-  if (!credentials.accessKeyId || !credentials.accessKeySecret || (roleName && !credentials.stsToken)) throw new Error('OSS credential provider returned incomplete credentials')
-  const timeout = Number(environment.OSS_TIMEOUT_MS || 120000)
-  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 600000) throw new Error('OSS_TIMEOUT_MS must be an integer between 1000 and 600000')
-  const configuration = {
-    region: required(environment.OSS_REGION, 'OSS_REGION'),
-    bucket: required(environment.OSS_BUCKET, 'OSS_BUCKET'),
-    accessKeyId: credentials.accessKeyId,
-    accessKeySecret: credentials.accessKeySecret,
-    authorizationV4: true,
-    secure: true,
-    timeout,
-  }
-  if (credentials.stsToken) configuration.stsToken = credentials.stsToken
-  if (environment.OSS_ENDPOINT) configuration.endpoint = String(environment.OSS_ENDPOINT)
-  const client = await clientFactory(configuration)
+  const { client, configuration, prefix, credentialMode } = await createOffsiteClient({ environment, clientFactory, credentialProvider })
 
   const files = [
     { path: archivePath, filename: manifest.archive.filename, expectedSha256: manifest.archive.sha256, expectedBytes: manifest.archive.bytes },
@@ -137,7 +141,7 @@ export async function uploadBackupSet({ manifestPath, environment = process.env,
     receiptVersion: 'dashboard-offsite-backup-v1',
     status: 'complete',
     provider: 'aliyun-oss',
-    credentialMode: roleName ? 'ecs-ram-role' : 'static',
+    credentialMode,
     uploadedAt: now().toISOString(),
     releaseRevision: manifest.releaseRevision,
     manifest: basename(absoluteManifestPath),

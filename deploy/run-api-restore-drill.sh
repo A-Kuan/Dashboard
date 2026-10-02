@@ -23,8 +23,14 @@ if (( EUID != 0 )); then
 fi
 
 manifest_path="$(realpath -- "$manifest_input")"
-backup_root="$(realpath -- "$deploy_root/backups")"
+managed_backup_root="$(realpath -- "$deploy_root/backups")"
+offsite_restore_root="$(realpath -m -- "$deploy_root/offsite-restore-drills")"
+backup_root="$(realpath -- "${API_RESTORE_BACKUP_ROOT:-$managed_backup_root}")"
 release_path="$(readlink -f "$deploy_root/current")"
+if [[ "$backup_root" != "$managed_backup_root" && "$backup_root" != "$offsite_restore_root"/download.* ]]; then
+  echo "Backup root must be the managed backup directory or an isolated offsite download directory" >&2
+  exit 2
+fi
 if [[ "$manifest_path" != "$backup_root"/*.manifest.json ]] || [[ ! -f "$manifest_path" ]]; then
   echo "Manifest must be an existing file directly inside $backup_root" >&2
   exit 2

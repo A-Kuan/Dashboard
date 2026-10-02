@@ -104,6 +104,7 @@ printf '%s\n' "$revision_sha" >"$release_path/REVISION"
 chown -R dashboard-sku:dashboard-sku "$release_path"
 chmod 0640 "$release_path/REVISION"
 chmod 0750 "$release_path/scripts/run-api-restore-drill.sh"
+chmod 0750 "$release_path/scripts/run-offsite-restore-drill.sh"
 cd "$release_path"
 sudo -u dashboard-sku npm ci --omit=dev
 sudo -u dashboard-sku npm test

@@ -12,6 +12,7 @@
     "backup:scheduled": "node scripts/run-scheduled-backup.mjs",
     "alert:send": "node scripts/send-operational-alert.mjs",
     "backup:prune": "node scripts/prune-backups.mjs",
+    "backup:download-offsite": "node scripts/download-offsite-backup.mjs",
     "restore:verify": "node scripts/verify-restored-database.mjs",
     "operations:check": "node scripts/check-operations.mjs",
     "assets:verify": "node scripts/verify-epc-assets.mjs",
