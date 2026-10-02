@@ -35,9 +35,19 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, readinessCheck = async () => ({ database: 'not-checked' }), logger = true }) {
   const app = Fastify({ logger, trustProxy: true, bodyLimit: 24 * 1024 * 1024 })
   const unresolvedDuplicates = (identifier, exceptId) => (catalogRepository.findUnresolvedDuplicates || catalogRepository.findDuplicates).call(catalogRepository, identifier, exceptId)
+  const ensureNoFitmentConflicts = async (skuId) => {
+    if (!catalogPlatformRepository) return
+    const conflicts = await catalogPlatformRepository.conflicts({ state: 'open', skuId })
+    if (!conflicts.items.length) return
+    const conflict = new Error('存在未处理的车型平台或适配范围冲突')
+    conflict.statusCode = 422
+    conflict.errorCode = 'FITMENT_CONFLICT_BLOCKED'
+    conflict.details = { issues: ['fitmentConflict'], conflicts: conflicts.items.slice(0, 20) }
+    throw conflict
+  }
 
   app.get('/api/health', async () => ({ status: 'ok', service: 'dashboard-sku-api' }))
   app.get('/api/ready', async (request, reply) => {
@@ -194,6 +204,44 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!result) return reply.code(404).send({ error: 'CATALOG_FITMENT_NOT_FOUND', message: '适配关系不存在' })
     return result
   })
+  app.get('/api/v2/catalog/vehicle-platforms', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型平台主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogPlatformRepository.list({ query: request.query?.q, status: request.query?.status })
+  })
+  app.get('/api/v2/catalog/vehicle-platforms/:id', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型平台主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const item = await catalogPlatformRepository.get(request.params.id)
+    return item || reply.code(404).send({ error: 'PLATFORM_NOT_FOUND', message: '车型平台不存在' })
+  })
+  app.post('/api/v2/catalog/vehicle-platforms', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型平台主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.manage_platform')
+    if (!actor) return
+    return reply.code(201).send(await catalogPlatformRepository.create(request.body, actor.name))
+  })
+  app.patch('/api/v2/catalog/vehicle-platforms/:id', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型平台主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.manage_platform')
+    if (!actor) return
+    const item = await catalogPlatformRepository.update(request.params.id, request.body, actor.name)
+    return item || reply.code(404).send({ error: 'PLATFORM_NOT_FOUND', message: '车型平台不存在' })
+  })
+  app.get('/api/v2/catalog/fitment-conflicts', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '适配冲突服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogPlatformRepository.conflicts({ state: request.query?.state, query: request.query?.q, skuId: request.query?.skuId })
+  })
+  app.post('/api/v2/catalog/fitment-conflicts/resolve', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '适配冲突服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.resolve_fitment_conflict')
+    if (!actor) return
+    return catalogPlatformRepository.resolveConflict(request.body, actor.name)
+  })
   app.get('/api/v2/catalog/metrics', async (request, reply) => {
     if (!catalogRepository) return reply.code(503).send({ error: 'CATALOG_SERVICE_UNAVAILABLE', message: '资料库服务未配置' })
     return catalogRepository.metrics({ days: request.query?.days })
@@ -273,6 +321,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (existing.lifecycleStatus !== 'review') return reply.code(409).send({ error: 'INVALID_STATUS_TRANSITION', message: '请先提交审核，再执行核验通过' })
     validateCatalogVerifiable(normalizeCatalogInput({}, existing))
     validateCatalogFitmentsReviewed(normalizeCatalogInput({}, existing))
+    await ensureNoFitmentConflicts(existing.id)
     const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => unresolvedDuplicates(item.rawValue, existing.id)))).flat()
     if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
     return catalogRepository.transition(existing.id, { action: 'approve_review', expectedVersion, note: request.body?.note }, actor.name)
@@ -290,6 +339,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       const normalized = normalizeCatalogInput({}, existing)
       validateCatalogVerifiable(normalized)
       if (request.body?.action === 'approve_review') validateCatalogFitmentsReviewed(normalized)
+      if (request.body?.action === 'approve_review') await ensureNoFitmentConflicts(existing.id)
       const duplicateMatches = (await Promise.all(existing.identifiers.map((item) => unresolvedDuplicates(item.rawValue, existing.id)))).flat()
       if (duplicateMatches.length) return reply.code(422).send({ error: 'SKU_QUALITY_BLOCKED', message: '存在与其他 SKU 重复的零件编号', details: { issues: ['duplicateIdentifier'], matches: duplicateMatches } })
     }

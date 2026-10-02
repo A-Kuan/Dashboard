@@ -135,6 +135,38 @@ export function reviewCatalogFitment(item, decision, note) {
   })
 }
 
+export function listCatalogVehiclePlatforms({ query = '', status = '' } = {}) {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set('q', query.trim())
+  if (status) params.set('status', status)
+  return request(`/api/v2/catalog/vehicle-platforms?${params}`)
+}
+
+export function getCatalogVehiclePlatform(id) {
+  return request(`/api/v2/catalog/vehicle-platforms/${encodeURIComponent(id)}`)
+}
+
+export function saveCatalogVehiclePlatform(platform) {
+  const path = platform.id ? `/api/v2/catalog/vehicle-platforms/${encodeURIComponent(platform.id)}` : '/api/v2/catalog/vehicle-platforms'
+  return request(path, { method: platform.id ? 'PATCH' : 'POST', body: JSON.stringify(platform) })
+}
+
+export function listCatalogFitmentConflicts({ state = 'open', query = '' } = {}) {
+  const params = new URLSearchParams({ state })
+  if (query.trim()) params.set('q', query.trim())
+  return request(`/api/v2/catalog/fitment-conflicts?${params}`)
+}
+
+export function resolveCatalogFitmentConflict(conflict, resolutionType, note) {
+  return request('/api/v2/catalog/fitment-conflicts/resolve', {
+    method: 'POST', body: JSON.stringify({
+      conflictKey: conflict.key, resolutionType, note,
+      expectedVersionA: conflict.left.skuVersion,
+      expectedVersionB: conflict.right?.skuVersion,
+    }),
+  })
+}
+
 export async function transitionCatalogSku(record, action, { note = '', assignee = '', dueAt = '' } = {}) {
   const result = await request(`/api/v2/catalog/skus/${record.id}/transition`, {
     method: 'POST', body: JSON.stringify({ action, expectedVersion: record.version, note, assignee, dueAt: dueAt || null }),

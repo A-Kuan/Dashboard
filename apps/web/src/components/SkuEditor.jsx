@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,7 +15,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import '../sku-editor.css'
-import { findDuplicateIdentifiers, saveCatalogDraft, submitCatalogReview } from '../services/catalogApi'
+import { findDuplicateIdentifiers, listCatalogVehiclePlatforms, saveCatalogDraft, submitCatalogReview } from '../services/catalogApi'
 
 const sourceLabels = {
   epc: 'EPC / VIN',
@@ -93,6 +93,13 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
   const [saving, setSaving] = useState(false)
   const [persistedRecord, setPersistedRecord] = useState(() => record?.dataOrigin === 'live' ? record : null)
   const [duplicateMatches, setDuplicateMatches] = useState([])
+  const [vehiclePlatforms, setVehiclePlatforms] = useState([])
+
+  useEffect(() => {
+    let active = true
+    listCatalogVehiclePlatforms({ status: 'active' }).then((result) => { if (active) setVehiclePlatforms(result.items || []) }).catch(() => { if (active) setVehiclePlatforms([]) })
+    return () => { active = false }
+  }, [])
 
   const setField = (field, value) => {
     setSubmitted(false)
@@ -230,7 +237,7 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
 
             {step === 'fitment' ? <>
               <div className="sku-form-heading"><div><h2>适配车型</h2><p>适配结论必须包含车型和必要条件。</p></div><button className="outline-add" type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加车型</button></div>
-              <div className="fitment-editor-list">{draft.fitments.map((item, index) => <article className="fitment-editor-card" key={item.id}><header><span>适配 {index + 1}</span><em>{item.verificationStatus === 'verified' ? '已审核，修改后需重审' : '待专项审核'}</em><button aria-label="删除适配" type="button" onClick={() => removeFitment(item.id)}><Trash size={17} /></button></header><div className="sku-form-grid"><Field label="车型名称" required><input value={item.vehicle} onChange={(event) => updateFitment(item.id, 'vehicle', event.target.value)} placeholder="例如：Cayenne (9YA)" /></Field><Field label="平台编码" required><input value={item.platformId || ''} onChange={(event) => updateFitment(item.id, 'platformId', event.target.value.toUpperCase())} placeholder="例如：9YA" /></Field><Field label="年款范围" required><input value={item.years} onChange={(event) => updateFitment(item.id, 'years', event.target.value)} placeholder="例如：2018–2023" /></Field><Field label="安装位置"><input value={item.position || ''} onChange={(event) => updateFitment(item.id, 'position', event.target.value)} placeholder="例如：前轴 / 左侧" /></Field><Field label="发动机代码"><input value={item.engineCodes || ''} onChange={(event) => updateFitment(item.id, 'engineCodes', event.target.value)} placeholder="多个代码用逗号分隔" /></Field><Field label="PR 代码"><input value={item.prCodes || ''} onChange={(event) => updateFitment(item.id, 'prCodes', event.target.value)} placeholder="例如：1ZT, 1ZK" /></Field><Field label="包含条件"><input value={item.condition || ''} onChange={(event) => updateFitment(item.id, 'condition', event.target.value)} placeholder="例如：350mm 制动盘" /></Field><Field label="排除条件"><input value={item.exclusion || ''} onChange={(event) => updateFitment(item.id, 'exclusion', event.target.value)} placeholder="例如：排除 PSCB" /></Field><Field label="数据来源"><input disabled value={draft.evidence.sourceSystem} /></Field></div></article>)}{!draft.fitments.length ? <div className="fitment-empty"><Cube size={31} weight="duotone" /><strong>尚未添加适配车型</strong><span>只有完成适配核验的 SKU 才能进入发布状态。</span><button type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加第一条适配</button></div> : null}</div>
+              <div className="fitment-editor-list">{draft.fitments.map((item, index) => <article className="fitment-editor-card" key={item.id}><header><span>适配 {index + 1}</span><em>{item.verificationStatus === 'verified' ? '已审核，修改后需重审' : '待专项审核'}</em><button aria-label="删除适配" type="button" onClick={() => removeFitment(item.id)}><Trash size={17} /></button></header><div className="sku-form-grid"><Field label="车型名称" required><input value={item.vehicle} onChange={(event) => updateFitment(item.id, 'vehicle', event.target.value)} placeholder="例如：Cayenne (9YA)" /></Field><Field label="标准平台" required hint={vehiclePlatforms.length ? '只显示已启用平台' : '暂无已启用平台，请先到车型平台治理中建立'}><select value={item.platformId || ''} onChange={(event) => updateFitment(item.id, 'platformId', event.target.value)}><option value="">请选择平台</option>{item.platformId && !vehiclePlatforms.some((platform) => platform.platformCode === item.platformId) ? <option value={item.platformId}>{item.platformId} · 未纳入主数据</option> : null}{vehiclePlatforms.map((platform) => <option value={platform.platformCode} key={platform.id}>{platform.platformCode} · {platform.brandLabel} {platform.seriesLabel} · {platform.yearFrom}–{platform.yearTo}</option>)}</select></Field><Field label="年款范围" required><input value={item.years} onChange={(event) => updateFitment(item.id, 'years', event.target.value)} placeholder="例如：2018–2023" /></Field><Field label="安装位置"><input value={item.position || ''} onChange={(event) => updateFitment(item.id, 'position', event.target.value)} placeholder="例如：前轴 / 左侧" /></Field><Field label="发动机代码"><input value={item.engineCodes || ''} onChange={(event) => updateFitment(item.id, 'engineCodes', event.target.value)} placeholder="多个代码用逗号分隔" /></Field><Field label="PR 代码"><input value={item.prCodes || ''} onChange={(event) => updateFitment(item.id, 'prCodes', event.target.value)} placeholder="例如：1ZT, 1ZK" /></Field><Field label="包含条件"><input value={item.condition || ''} onChange={(event) => updateFitment(item.id, 'condition', event.target.value)} placeholder="例如：350mm 制动盘" /></Field><Field label="排除条件"><input value={item.exclusion || ''} onChange={(event) => updateFitment(item.id, 'exclusion', event.target.value)} placeholder="例如：排除 PSCB" /></Field><Field label="数据来源"><input disabled value={draft.evidence.sourceSystem} /></Field></div></article>)}{!draft.fitments.length ? <div className="fitment-empty"><Cube size={31} weight="duotone" /><strong>尚未添加适配车型</strong><span>只有完成适配核验的 SKU 才能进入发布状态。</span><button type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加第一条适配</button></div> : null}</div>
             </> : null}
 
             {step === 'review' ? <>

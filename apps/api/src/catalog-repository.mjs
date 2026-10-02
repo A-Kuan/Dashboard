@@ -47,7 +47,7 @@ function mapIdentifier(row) {
 
 function mapFitment(row) {
   return {
-    id: row.id, vehiclePlatformId: row.vehicle_platform_id || '', vehicleLabel: row.vehicle_label, years: row.years,
+    id: row.id, vehiclePlatformId: row.vehicle_platform_id || '', platformMasterId: row.platform_master_id || row.platform_lookup_id || '', vehicleLabel: row.vehicle_label, years: row.years,
     yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes || [], marketCodes: row.market_codes || [],
     prCodes: row.pr_codes || [], bodyStyles: row.body_styles || [], position: row.position,
     includeConditions: row.include_conditions || {}, excludeConditions: row.exclude_conditions || {},
@@ -62,6 +62,11 @@ function fitmentRisks(row) {
   if (!row.vehicle_platform_id) risks.push({ code: 'missingPlatform', label: '缺少标准平台编码', blocking: true })
   if (!(row.year_from && row.year_to) && !row.years) risks.push({ code: 'missingYears', label: '缺少年款边界', blocking: true })
   if (!row.source_evidence_id) risks.push({ code: 'missingEvidence', label: '缺少关联证据', blocking: true })
+  if (row.platform_lookup_checked && !row.platform_lookup_id) risks.push({ code: 'unrecognizedPlatform', label: '平台编码未纳入主数据', blocking: true })
+  if (row.platform_lookup_checked && row.platform_lookup_id && row.platform_status !== 'active') risks.push({ code: 'inactivePlatform', label: '车型平台尚未启用', blocking: true })
+  if (row.platform_lookup_id && ((row.year_from && row.platform_year_from && row.year_from < row.platform_year_from) || (row.year_to && row.platform_year_to && row.year_to > row.platform_year_to))) {
+    risks.push({ code: 'outsidePlatformYears', label: '适配年款超出平台主数据边界', blocking: true })
+  }
   if (!row.position && !(row.pr_codes || []).length && !Object.keys(row.include_conditions || {}).length && !Object.keys(row.exclude_conditions || {}).length) {
     risks.push({ code: 'missingConditions', label: '适配条件过于宽泛', blocking: false })
   }
@@ -164,6 +169,13 @@ const qualityIssueExpression = `ARRAY_REMOVE(ARRAY[
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_part_identifier qi WHERE qi.sku_id=s.id AND qi.is_primary AND qi.normalized_value<>'') THEN 'primaryIdentifier' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id) THEN 'fitment' END,
   CASE WHEN EXISTS (SELECT 1 FROM catalog_fitment qf WHERE qf.sku_id=s.id AND qf.verification_status<>'verified') THEN 'fitmentReview' END,
+  CASE WHEN EXISTS (
+    SELECT 1 FROM catalog_fitment qf
+    LEFT JOIN catalog_vehicle_platform qp ON qp.id=qf.platform_master_id OR upper(trim(qf.vehicle_platform_id))=qp.platform_code OR upper(trim(qf.vehicle_platform_id))=ANY(qp.aliases)
+    WHERE qf.sku_id=s.id AND (qp.id IS NULL OR qp.lifecycle_status<>'active'
+      OR (qf.year_from IS NOT NULL AND qp.year_from IS NOT NULL AND qf.year_from<qp.year_from)
+      OR (qf.year_to IS NOT NULL AND qp.year_to IS NOT NULL AND qf.year_to>qp.year_to))
+  ) THEN 'fitmentConflict' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_source_evidence qe WHERE qe.sku_id=s.id AND (qe.source_system<>'' OR qe.source_record_id<>'' OR qe.catalog_path<>'' OR qe.raw_payload<>'{}'::jsonb)) THEN 'evidence' END,
   CASE WHEN EXISTS (
     SELECT 1 FROM catalog_part_identifier own_i
@@ -228,9 +240,9 @@ export function createCatalogRepository(pool) {
 
     for (const item of input.fitments) {
       await client.query(`INSERT INTO catalog_fitment
-        (id,sku_id,vehicle_platform_id,vehicle_label,years,year_from,year_to,engine_codes,market_codes,pr_codes,body_styles,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,review_note,reviewed_by,reviewed_at,review_version,sort_order)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19::timestamptz,$20,$21)`,
-      [item.id || randomUUID(), skuId, item.vehiclePlatformId || null, item.vehicleLabel, item.years, item.yearFrom, item.yearTo,
+        (id,sku_id,vehicle_platform_id,platform_master_id,vehicle_label,years,year_from,year_to,engine_codes,market_codes,pr_codes,body_styles,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,review_note,reviewed_by,reviewed_at,review_version,sort_order)
+        VALUES ($1,$2,$3,(SELECT id FROM catalog_vehicle_platform WHERE platform_code=upper(trim($4)) OR upper(trim($4))=ANY(aliases) LIMIT 1),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19,$20::timestamptz,$21,$22)`,
+      [item.id || randomUUID(), skuId, item.vehiclePlatformId || null, item.vehiclePlatformId || '', item.vehicleLabel, item.years, item.yearFrom, item.yearTo,
         item.engineCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.position, JSON.stringify(item.includeConditions),
         JSON.stringify(item.excludeConditions), evidenceIds.get(item.evidenceKey || item.evidenceId) || null, item.verificationStatus,
         item.reviewNote || '', item.reviewedBy || '', item.reviewedAt || null, item.reviewVersion || 1, item.sortOrder])
@@ -593,14 +605,16 @@ export function createCatalogRepository(pool) {
       const where = `WHERE ${clauses.join(' AND ')}`
       const base = `FROM catalog_fitment f
         JOIN catalog_sku s ON s.id=f.sku_id
-        LEFT JOIN catalog_source_evidence e ON e.id=f.source_evidence_id`
+        LEFT JOIN catalog_source_evidence e ON e.id=f.source_evidence_id
+        LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)`
       const countValues = [...values]
       const [count, statusCounts] = await Promise.all([
         pool.query(`SELECT count(*)::int AS total ${base} ${where}`, countValues),
         pool.query(`SELECT f.verification_status,count(*)::int AS count ${base} WHERE s.lifecycle_status<>'discontinued' GROUP BY f.verification_status`),
       ])
       values.push(safeSize, (safePage - 1) * safeSize)
-      const { rows } = await pool.query(`SELECT f.*,s.sku_code,s.canonical_name_zh,s.brand_label,s.lifecycle_status,s.version AS sku_version,
+      const { rows } = await pool.query(`SELECT f.*,true AS platform_lookup_checked,p.id AS platform_lookup_id,p.lifecycle_status AS platform_status,
+        p.year_from AS platform_year_from,p.year_to AS platform_year_to,s.sku_code,s.canonical_name_zh,s.brand_label,s.lifecycle_status,s.version AS sku_version,
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
         e.source_system,e.source_record_id,e.catalog_path,e.figure_position,e.original_name,e.confidence AS evidence_confidence
         ${base} ${where}
@@ -633,8 +647,11 @@ export function createCatalogRepository(pool) {
       if (!Number.isInteger(expectedReviewVersion) || expectedReviewVersion < 1) throw fitmentReviewError('expectedReviewVersion 必须是正整数')
       if (!note) throw fitmentReviewError('请填写适配审核结论')
       return withTransaction(pool, async (client) => {
-        const current = (await client.query(`SELECT f.*,s.version AS sku_version,s.lifecycle_status
-          FROM catalog_fitment f JOIN catalog_sku s ON s.id=f.sku_id WHERE f.id=$1 FOR UPDATE OF f,s`, [id])).rows[0]
+        const current = (await client.query(`SELECT f.*,true AS platform_lookup_checked,p.id AS platform_lookup_id,p.lifecycle_status AS platform_status,
+          p.year_from AS platform_year_from,p.year_to AS platform_year_to,s.version AS sku_version,s.lifecycle_status
+          FROM catalog_fitment f JOIN catalog_sku s ON s.id=f.sku_id
+          LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)
+          WHERE f.id=$1 FOR UPDATE OF f,s`, [id])).rows[0]
         if (!current) return null
         if (current.sku_version !== expectedSkuVersion) throw versionConflict(current.sku_version)
         if (current.review_version !== expectedReviewVersion) {
@@ -729,7 +746,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, fitmentScopeResolutions] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -737,6 +754,11 @@ export function createCatalogRepository(pool) {
           FROM catalog_sku_merge
           WHERE ($1='' OR survivor_sku_id IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR retired_sku_id IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY merged_at,id`, [status]),
+        pool.query('SELECT * FROM catalog_vehicle_platform ORDER BY platform_code'),
+        pool.query('SELECT * FROM catalog_vehicle_platform_change_event ORDER BY changed_at,id'),
+        pool.query(`SELECT * FROM catalog_fitment_scope_resolution
+          WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
+          ORDER BY resolved_at,id`, [status]),
       ])
       const relations = {
         identifierResolutions: resolutions.rows.map((row) => ({
@@ -747,6 +769,23 @@ export function createCatalogRepository(pool) {
           id: row.id, survivorSkuId: row.survivor_sku_id, retiredSkuId: row.retired_sku_id, normalizedValue: row.normalized_value,
           reason: row.reason, survivorVersionBefore: row.survivor_version_before, retiredVersionBefore: row.retired_version_before,
           mergedBy: row.merged_by, mergedAt: row.merged_at,
+        })),
+        vehiclePlatforms: platforms.rows.map((row) => ({
+          id: row.id, platformCode: row.platform_code, brandCode: row.brand_code, brandLabel: row.brand_label,
+          seriesCode: row.series_code, seriesLabel: row.series_label, generationLabel: row.generation_label,
+          yearFrom: row.year_from, yearTo: row.year_to, marketCodes: row.market_codes || [], bodyStyles: row.body_styles || [],
+          aliases: row.aliases || [], lifecycleStatus: row.lifecycle_status, sourceSystem: row.source_system,
+          sourceReference: row.source_reference, notes: row.notes, version: row.version,
+        })),
+        vehiclePlatformChanges: platformChanges.rows.map((row) => ({
+          id: row.id, platformId: row.platform_id, version: row.version, action: row.action,
+          snapshot: row.snapshot, changedBy: row.changed_by, changedAt: row.changed_at,
+        })),
+        fitmentScopeResolutions: fitmentScopeResolutions.rows.map((row) => ({
+          id: row.id, conflictKey: row.conflict_key, conflictType: row.conflict_type, fitmentIdA: row.fitment_id_a,
+          fitmentIdB: row.fitment_id_b, skuIdA: row.sku_id_a, skuIdB: row.sku_id_b, platformId: row.platform_id,
+          resolutionType: row.resolution_type, note: row.note, conflictSnapshot: row.conflict_snapshot,
+          active: row.active, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at,
         })),
       }
       const payload = { items, relations }
@@ -760,6 +799,9 @@ export function createCatalogRepository(pool) {
           evidence: items.reduce((sum, item) => sum + item.evidence.length, 0),
           changes: items.reduce((sum, item) => sum + item.changes.length, 0),
           fitmentReviewEvents: items.reduce((sum, item) => sum + item.fitmentReviewEvents.length, 0),
+          vehiclePlatforms: relations.vehiclePlatforms.length,
+          vehiclePlatformChanges: relations.vehiclePlatformChanges.length,
+          fitmentScopeResolutions: relations.fitmentScopeResolutions.length,
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,
         },

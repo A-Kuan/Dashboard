@@ -67,7 +67,8 @@ CatalogSku
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
 | `sku_id` | UUID | 所属 SKU |
-| `vehicle_platform_id` | UUID | 关联车型平台 |
+| `vehicle_platform_id` | text | 来源平台编码，保留原始业务键 |
+| `platform_master_id` | UUID | 解析后的 `catalog_vehicle_platform` 外键；平台建立后自动回填 |
 | `year_from/year_to` | smallint | 年款范围 |
 | `engine_codes` | text[] | 发动机代码 |
 | `market_codes` | text[] | 市场范围 |
@@ -85,6 +86,14 @@ CatalogSku
 ### `catalog_fitment_review_event`
 
 适配审核事件采用追加写模型，保存 `sku_id`、`fitment_id`、前后状态、`approve/reject/conflict` 动作、必填结论、完整适配快照、当时 SKU 版本、操作人与时间。即使后续编辑重新生成适配子记录，历史判断仍保留在 SKU 审计链中。适配审核会同时写入 `catalog_change_log`，因此版本恢复、导出审计包和变更记录能够解释一条关系为何通过或被退回。
+
+### `catalog_vehicle_platform`
+
+车型平台主数据与旧 `vehicle_variant` 业务聚合完全分离。它保存稳定的平台编码、品牌/车系/代际、生产年款边界、市场、车身形式、别名、来源系统与来源引用；状态为 `draft/active/retired`。只有同时具备起止年款和来源依据的平台可以启用。所有修改使用乐观锁，并向 `catalog_vehicle_platform_change_event` 追加完整快照，不覆盖历史。
+
+### `catalog_fitment_scope_resolution`
+
+适配冲突由当前平台和适配关系实时计算，不把容易失真的扫描结果缓存成事实表。成对冲突的人工结论单独追加保存稳定 `conflict_key`、冲突类型、两条适配、两条 SKU、平台、冲突时快照、处理结论、必填依据和操作人。`accepted_overlap` 与 `same_application` 解除当前冲突阻断；`correction_required` 保持阻断，直到适配数据被真正修正。未识别平台、未启用平台、年款越界和单条记录内部自相矛盾不允许人工忽略。
 
 ### `source_evidence`
 

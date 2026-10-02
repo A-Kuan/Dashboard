@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
+test.beforeAll(async ({ request }) => {
+  const response = await request.post('/api/v1/dictionaries/reset', {
+    headers: { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright' },
+  })
+  expect(response.ok()).toBeTruthy()
+})
+
 test.beforeEach(async ({ page }) => {
   const errors = []
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
@@ -61,6 +68,39 @@ test('opens the SKU v2 library and supports its core inspection flow', async ({ 
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-source-modal-1680.png', fullPage: false })
 })
 
+test('establishes an auditable vehicle platform master record', async ({ page }) => {
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '车型平台' }).click()
+  await expect(page.getByRole('heading', { name: '车型平台' })).toBeVisible()
+  await page.getByRole('button', { name: '新建平台' }).click()
+  await page.getByLabel('平台编码').fill('9YA')
+  await page.getByLabel('状态').selectOption('active')
+  await page.getByLabel('品牌名称').fill('Porsche')
+  await page.getByLabel('品牌编码').fill('POR')
+  await page.getByLabel('车系名称').fill('Cayenne')
+  await page.getByLabel('代际名称').fill('第三代')
+  await page.getByLabel('别名').fill('9Y0')
+  await page.getByLabel('起始年款').fill('2018')
+  await page.getByLabel('结束年款').fill('2025')
+  await page.getByLabel('市场代码').fill('CN, EU')
+  await page.getByLabel('车身形式').fill('SUV')
+  await page.getByLabel('来源系统').fill('Porsche PET')
+  await page.getByLabel('来源引用').fill('Cayenne 9YA model index')
+  await page.getByRole('button', { name: '保存平台' }).click()
+  await expect(page.getByText('车型平台已建立')).toBeVisible()
+  await expect(page.getByText('9YA', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-platform-governance-1680.png', fullPage: false })
+  const aliasLookup = await page.request.get('/api/v2/catalog/vehicle-platforms/9Y0')
+  expect(aliasLookup.ok()).toBeTruthy()
+  expect((await aliasLookup.json()).platformCode).toBe('9YA')
+  const duplicateAlias = await page.request.post('/api/v2/catalog/vehicle-platforms', {
+    data: { platformCode: '95B', brandLabel: 'Porsche', seriesLabel: 'Macan', aliases: ['9YA'], lifecycleStatus: 'draft' },
+  })
+  expect(duplicateAlias.status()).toBe(409)
+  expect((await duplicateAlias.json()).error).toBe('PLATFORM_ALIAS_CONFLICT')
+})
+
 test('creates a source-first SKU and submits it into the review queue', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '新建 SKU' }).click()
@@ -75,7 +115,7 @@ test('creates a source-first SKU and submits it into the review queue', async ({
   await expect(page.getByLabel('主 OE 编号')).toHaveValue('9Y0 615 301 M')
   await page.getByRole('button', { name: '3 适配车型' }).click()
   await expect(page.getByLabel('车型名称')).toHaveValue('Cayenne (9YA)')
-  await expect(page.getByLabel('平台编码')).toHaveValue('9YA')
+  await expect(page.getByLabel('标准平台')).toHaveValue('9YA')
 
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText(/草稿已保存到 SKU 资料库/)).toBeVisible()
@@ -124,6 +164,31 @@ test('reviews a submitted SKU in the data quality workspace', async ({ page }) =
   await expect(page.getByText('审核通过率')).toBeVisible()
   await expect(page.getByText('平均审核耗时')).toBeVisible()
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-quality-insights-1680.png', fullPage: false })
+})
+
+test('detects and resolves overlapping fitment scopes before publication', async ({ page }) => {
+  const headers = { 'x-operator-role': 'catalog_admin', 'x-operator-name': 'playwright', 'content-type': 'application/json' }
+  const created = await (await page.request.post('/api/v2/catalog/skus', { headers, data: {
+    identity: { nameZh: '适配重叠验收件', brandCode: 'POR', brandLabel: 'Porsche', categoryCode: 'BRAKE', categoryLabel: '制动系统' },
+    evidence: [{ clientKey: 'source', sourceType: 'brand_catalog', sourceSystem: 'Porsche PET', sourceRecordId: 'OVERLAP-E2E-01', catalogPath: '9YA/615' }],
+    identifiers: [{ clientKey: 'oe', type: 'oe', rawValue: 'OVERLAP-E2E-001', isPrimary: true, evidenceKey: 'source' }],
+    fitments: [
+      { vehiclePlatformId: '9YA', vehicleLabel: 'Cayenne (9YA)', years: '2018–2022', yearFrom: 2018, yearTo: 2022, position: '前轴', prCodes: ['1ZT'], includeConditions: { note: '标准制动' }, evidenceKey: 'source' },
+      { vehiclePlatformId: '9YA', vehicleLabel: 'Cayenne (9YA)', years: '2021–2025', yearFrom: 2021, yearTo: 2025, position: '前轴', prCodes: ['1ZK'], includeConditions: { note: '增强制动' }, evidenceKey: 'source' },
+    ],
+  } })).json()
+  expect(created.fitments).toHaveLength(2)
+  await page.getByRole('button', { name: 'SKU 资料库' }).click()
+  await page.getByRole('button', { name: '质量审核' }).click()
+  await page.getByRole('button', { name: '车型平台' }).click()
+  await page.getByRole('button', { name: /\u51b2\u7a81\u626b\u63cf/ }).click()
+  await page.getByRole('button', { name: /\u8303\u56f4\u91cd\u53e0/ }).click()
+  await expect(page.getByText('适配重叠验收件', { exact: true }).first()).toBeVisible()
+  await page.getByText('允许重叠', { exact: true }).click()
+  await page.getByLabel('适配冲突处理依据').fill('PR 1ZT 与 1ZK 对应不同制动配置，允许年款重叠')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-fitment-conflict-1680.png', fullPage: false })
+  await page.getByRole('button', { name: '提交处理结论' }).click()
+  await expect(page.getByText('适配冲突已留痕处理')).toBeVisible()
 })
 
 test('compares historical SKU versions and restores one as a new draft', async ({ page }) => {

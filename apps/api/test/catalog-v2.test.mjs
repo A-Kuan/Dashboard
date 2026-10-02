@@ -385,6 +385,41 @@ test('catalog v2 exposes development roles and enforces write capabilities', asy
   await app.close()
 })
 
+test('catalog v2 manages vehicle platform master data and audited fitment conflicts', async () => {
+  const platforms = []
+  const conflicts = [{
+    key: 'overlapping_scope:fitment-a:fitment-b', type: 'overlapping_scope', severity: 'blocking', title: '同 SKU 适配范围重叠',
+    left: { fitmentId: 'fitment-a', skuId: 'sku-1', skuCode: 'SKU-1', skuName: '制动盘', skuVersion: 3, platformCode: '9YA', years: '2018–2023' },
+    right: { fitmentId: 'fitment-b', skuId: 'sku-1', skuCode: 'SKU-1', skuName: '制动盘', skuVersion: 3, platformCode: '9YA', years: '2021–2024' },
+  }]
+  const catalogPlatformRepository = {
+    async list() { return { items: platforms, total: platforms.length, statusCounts: { active: platforms.filter((item) => item.lifecycleStatus === 'active').length } } },
+    async get(id) { return platforms.find((item) => item.id === id || item.platformCode === id) || null },
+    async create(input, actor) { const item = { id: `platform-${platforms.length + 1}`, ...input, version: 1, createdBy: actor, history: [] }; platforms.push(item); return item },
+    async update(id, input, actor) { const item = platforms.find((candidate) => candidate.id === id); if (!item) return null; Object.assign(item, input, { version: item.version + 1, updatedBy: actor }); return item },
+    async conflicts({ state = 'open', skuId = '' } = {}) { const items = conflicts.filter((item) => state !== 'resolved' && (!skuId || item.left.skuId === skuId || item.right?.skuId === skuId)); return { items, total: items.length, counts: { open: items.length, resolved: 0, blocking: items.length } } },
+    async resolveConflict(input, actor) { const index = conflicts.findIndex((item) => item.key === input.conflictKey); if (index < 0) return null; const [item] = conflicts.splice(index, 1); return { conflictKey: item.key, resolutionType: input.resolutionType, note: input.note, resolvedBy: actor } },
+  }
+  const app = buildApp({ catalogPlatformRepository, logger: false })
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/vehicle-platforms', headers: { 'x-operator-role': 'catalog_editor' }, payload: { platformCode: '9YA' } })
+  assert.equal(denied.statusCode, 403)
+  assert.equal(denied.json().details.capability, 'catalog.manage_platform')
+  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/vehicle-platforms', payload: { platformCode: '9YA', brandLabel: 'Porsche', seriesLabel: 'Cayenne', lifecycleStatus: 'active' } })
+  assert.equal(created.statusCode, 201)
+  assert.equal(created.json().platformCode, '9YA')
+  assert.equal((await app.inject('/api/v2/catalog/vehicle-platforms')).json().total, 1)
+  const queue = await app.inject('/api/v2/catalog/fitment-conflicts?state=open')
+  assert.equal(queue.statusCode, 200)
+  assert.equal(queue.json().counts.blocking, 1)
+  const editorDenied = await app.inject({ method: 'POST', url: '/api/v2/catalog/fitment-conflicts/resolve', headers: { 'x-operator-role': 'catalog_editor' }, payload: { conflictKey: conflicts[0].key } })
+  assert.equal(editorDenied.statusCode, 403)
+  assert.equal(editorDenied.json().details.capability, 'catalog.resolve_fitment_conflict')
+  const resolved = await app.inject({ method: 'POST', url: '/api/v2/catalog/fitment-conflicts/resolve', headers: { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': '审核员甲' }, payload: { conflictKey: conflicts[0].key, resolutionType: 'accepted_overlap', note: 'PR 码可明确区分', expectedVersionA: 3, expectedVersionB: 3 } })
+  assert.equal(resolved.statusCode, 200)
+  assert.equal(resolved.json().resolvedBy, '审核员甲')
+  await app.close()
+})
+
 test('catalog v2 exports an auditable JSON snapshot and an operations CSV', async () => {
   const app = buildApp({ catalogRepository: createCatalogRepository(), logger: false })
   await app.inject({ method: 'POST', url: '/api/v2/catalog/skus', payload: {
