@@ -19,7 +19,7 @@ const pool = createPool({ max: 1 })
 const counts = {}
 let schemaMigrations = []
 try {
-  for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_source_evidence', 'catalog_change_log', 'catalog_import_job', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
+  for (const table of ['schema_migration', 'catalog_sku', 'catalog_part_identifier', 'catalog_fitment', 'catalog_source_evidence', 'catalog_change_log', 'catalog_import_job', 'catalog_import_mapping_profile', 'catalog_identifier_resolution', 'catalog_sku_merge']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }

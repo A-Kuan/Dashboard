@@ -99,6 +99,10 @@ CatalogSku
 
 `supplier_offer` 保存 `supplier_id`、`supplier_part_number`、采购单位、币种、含税价、MOQ、交期、有效期和来源；`inventory_balance` 保存仓库/库位、现有量、锁定量、在途量和快照时间。`oem_reference` 单独作为来源价格类型，只读展示，禁止写入商业价格枚举。
 
+### `catalog_import_mapping_profile`
+
+供应商字段映射方案保存方案名称、文件名特征、稳定的表头签名、原始字段快照、标准字段映射、使用次数和版本。完全一致的表头可以自动复用；疑似同一供应商但表头增删时只提供差异提示和可匹配字段，不允许无提示覆盖。`catalog_import_job` 关联方案并冻结 `mapping_snapshot`，保证后续方案变更不会改写历史导入依据。
+
 ## API 返回建议
 
 列表接口返回轻量 `SkuListItem`，包含名称、主 OE、品牌分类、适配计数、状态、完整度、主要来源和更新时间。详情接口按 `identity / identifiers / fitments / evidence / commerce_summary / audit` 分区返回，便于右侧核验详情渐进加载。

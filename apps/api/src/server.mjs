@@ -6,16 +6,19 @@ import { createDictionaryRepository } from './dictionary-repository.mjs'
 import { defaultDictionaries } from './default-dictionaries.mjs'
 import { createCatalogRepository } from './catalog-repository.mjs'
 import { createCatalogImportRepository } from './catalog-import-repository.mjs'
+import { createCatalogImportMappingRepository } from './catalog-import-mapping-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
 
 const pool = createPool()
 const catalogRepository = createCatalogRepository(pool)
+const catalogImportMappingRepository = createCatalogImportMappingRepository(pool)
 const app = buildApp({
   repository: createSkuRepository(pool),
   vehicleRepository: createVehicleRepository(pool),
   dictionaryRepository: createDictionaryRepository(pool, defaultDictionaries),
   catalogRepository,
   catalogImportRepository: createCatalogImportRepository(pool, catalogRepository),
+  catalogImportMappingRepository,
   readinessCheck: async () => {
     const schema = await migrationReadiness(pool)
     const database = (await pool.query('SELECT current_database() AS name')).rows[0].name

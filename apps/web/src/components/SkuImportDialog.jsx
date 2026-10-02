@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, ArrowsClockwise, ArrowsLeftRight, CaretDown, Check, CheckCircle, ClipboardText, ClockCounterClockwise, DownloadSimple, FileCsv, FingerprintSimple, ShieldCheck, UploadSimple, WarningCircle, X } from '@phosphor-icons/react'
-import { catalogImportFieldDefinitions, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImports, mapCatalogCsvInspection, previewCatalogImport, retryCatalogImport } from '../services/catalogApi'
+import { catalogImportFieldDefinitions, commitCatalogImport, downloadCatalogImportTemplate, getCatalogImport, getCatalogImportTemplate, inspectCatalogCsv, listCatalogImports, mapCatalogCsvInspection, matchCatalogImportMapping, previewCatalogImport, retryCatalogImport, saveCatalogImportMapping } from '../services/catalogApi'
 import '../sku-import.css'
 
 const rowState = {
@@ -34,6 +34,29 @@ function duplicateMessage(row) {
   const fileRows = (row.duplicateMatches || []).filter((match) => match.scope === 'file').map((match) => match.rowNumber)
   if (fileRows.length) return `与文件第 ${fileRows.join('、')} 行使用相同主 OE`
   return `匹配 ${(row.duplicateMatches || []).length} 条已有资料`
+}
+
+function defaultProfileName(sourceName) {
+  return `${String(sourceName || '').replace(/\.[^.]+$/, '').trim() || '供应商'} 映射方案`
+}
+
+function mergeMappings(primary = {}, fallback = {}) {
+  const merged = {}
+  const used = new Set()
+  for (const source of [primary, fallback]) for (const field of catalogImportFieldDefinitions) {
+    if (Number(merged[field.key]) >= 0) continue
+    const index = Number(source[field.key])
+    if (Number.isInteger(index) && index >= 0 && !used.has(index)) { merged[field.key] = index; used.add(index) }
+    else if (!(field.key in merged)) merged[field.key] = -1
+  }
+  return merged
+}
+
+function snapshotFieldMapping(mapping, columns) {
+  return Object.fromEntries(Object.entries(mapping).flatMap(([field, rawIndex]) => {
+    const column = columns[Number(rawIndex)]
+    return column ? [[field, column.sourceKey]] : []
+  }))
 }
 
 export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
@@ -96,8 +119,8 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     }
   }
 
-  const openPreview = async (sourceName, rows) => {
-    const preview = await previewCatalogImport(sourceName, rows)
+  const openPreview = async (sourceName, rows, mappingProfile = null) => {
+    const preview = await previewCatalogImport(sourceName, rows, mappingProfile)
     if (preview.duplicateUpload && preview.state !== 'preview') {
       setMode('history')
       setSelectedJob(preview)
@@ -119,7 +142,19 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
       const inspection = inspectCatalogCsv(await file.text())
       if (inspection.isStandardTemplate) await openPreview(file.name, mapCatalogCsvInspection(inspection, inspection.suggestedMapping))
       else {
-        setMappingContext({ sourceName: file.name, inspection, mapping: { ...inspection.suggestedMapping } })
+        const match = await matchCatalogImportMapping(file.name, inspection.columns)
+        const exact = match.status === 'exact'
+        setMappingContext({
+          sourceName: file.name,
+          inspection,
+          match,
+          mapping: exact ? mergeMappings(match.suggestedMapping, inspection.suggestedMapping) : { ...inspection.suggestedMapping },
+          profileApplied: exact,
+          profileDirty: false,
+          userEdited: false,
+          saveProfile: match.status === 'none',
+          profileName: match.profile?.name || defaultProfileName(file.name),
+        })
         setStep('mapping')
       }
     } catch (reason) {
@@ -130,7 +165,17 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   }
 
   const updateMapping = (field, index) => {
-    setMappingContext((current) => ({ ...current, mapping: { ...current.mapping, [field]: Number(index) } }))
+    setMappingContext((current) => ({ ...current, profileDirty: true, userEdited: true, mapping: { ...current.mapping, [field]: Number(index) } }))
+    setError('')
+  }
+
+  const applyMatchedProfile = () => {
+    setMappingContext((current) => ({
+      ...current,
+      profileApplied: true,
+      profileDirty: current.match?.status === 'drift',
+      mapping: mergeMappings(current.match?.suggestedMapping, current.mapping),
+    }))
     setError('')
   }
 
@@ -139,7 +184,26 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
     setBusy(true)
     setError('')
     try {
-      await openPreview(mappingContext.sourceName, mapCatalogCsvInspection(mappingContext.inspection, mappingContext.mapping))
+      let profile = mappingContext.profileApplied ? mappingContext.match?.profile : null
+      let matchStatus = mappingContext.userEdited ? 'manual_override' : mappingContext.match?.status || 'manual_override'
+      if (mappingContext.saveProfile) {
+        profile = await saveCatalogImportMapping({
+          profile: mappingContext.match?.profile || null,
+          name: mappingContext.profileName,
+          sourceName: mappingContext.sourceName,
+          columns: mappingContext.inspection.columns,
+          mapping: mappingContext.mapping,
+        })
+        matchStatus = mappingContext.match?.profile ? 'updated' : 'created'
+      }
+      const mappingProfile = profile ? {
+        id: profile.id,
+        name: profile.name,
+        matchStatus,
+        headerSignature: profile.headerSignature,
+        fieldMapping: snapshotFieldMapping(mappingContext.mapping, mappingContext.inspection.columns),
+      } : null
+      await openPreview(mappingContext.sourceName, mapCatalogCsvInspection(mappingContext.inspection, mappingContext.mapping), mappingProfile)
     } catch (reason) {
       setError(reason.message || '字段映射无法进入预检查')
     } finally {
@@ -194,8 +258,9 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
   const mappingFields = catalogImportFieldDefinitions.map((field) => ({ ...field, ...(templateSpec?.fields?.find((item) => item.key === field.key) || {}) }))
   const mapping = mappingContext?.mapping || {}
   const mappedIndexes = Object.values(mapping).map(Number).filter((index) => index >= 0)
-  const mappingReady = (Number(mapping.nameZh) >= 0 || Number(mapping.nameEn) >= 0) && Number(mapping.primaryOe) >= 0 && new Set(mappedIndexes).size === mappedIndexes.length
+  const mappingReady = (Number(mapping.nameZh) >= 0 || Number(mapping.nameEn) >= 0) && Number(mapping.primaryOe) >= 0 && new Set(mappedIndexes).size === mappedIndexes.length && (!mappingContext?.saveProfile || Boolean(mappingContext.profileName.trim()))
   const unmappedColumns = (mappingContext?.inspection.columns || []).filter((column) => !mappedIndexes.includes(column.index))
+  const mappingMatch = mappingContext?.match
 
   return (
     <div className="sku-modal-backdrop" onMouseDown={onClose}>
@@ -228,8 +293,11 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
 
           {mode === 'new' && step === 'mapping' && mappingContext ? <section className="sku-import-mapping">
             <header><div><span><ArrowsLeftRight size={22} weight="duotone" /></span><div><h3>确认供应商字段映射</h3><p>{mappingContext.sourceName} · {mappingContext.inspection.columns.length} 列 · {mappingContext.inspection.dataRows.length} 行数据</p></div></div><strong>{mappedIndexes.length} / {mappingFields.length} 字段已映射</strong></header>
+            {mappingMatch?.status === 'exact' ? <div className="sku-mapping-profile-status exact"><ShieldCheck size={21} weight="fill" /><div><strong>已自动套用“{mappingMatch.profile.name}”</strong><span>表头完全一致 · 历史使用 {mappingMatch.profile.usageCount} 次；仍可在下方人工调整。</span></div></div> : null}
+            {mappingMatch?.status === 'drift' ? <div className="sku-mapping-profile-status drift"><WarningCircle size={21} weight="fill" /><div><strong>检测到“{mappingMatch.profile.name}”的表头发生变化</strong><span>{mappingMatch.changes.added.length ? `新增：${mappingMatch.changes.added.join('、')}` : '无新增列'}；{mappingMatch.changes.removed.length ? `缺少：${mappingMatch.changes.removed.join('、')}` : '无缺少列'}。</span></div><button type="button" disabled={mappingContext.profileApplied} onClick={applyMatchedProfile}>{mappingContext.profileApplied ? '已应用可匹配字段' : '应用已有方案'}</button></div> : null}
             <div className="sku-mapping-list">{mappingFields.map((field) => { const selectedIndex = Number(mapping[field.key]); const column = mappingContext.inspection.columns.find((item) => item.index === selectedIndex); return <article key={field.key}><div className="sku-mapping-target"><span><strong>{field.label}</strong>{field.required === 'one_of_name' ? <i>二选一</i> : field.required ? <i className="required">必需</i> : field.recommended ? <i>建议</i> : <i className="optional">可选</i>}</span><small>{field.description || '映射到 SKU 标准字段'}</small></div><ArrowRight size={17} /><label><select aria-label={`映射 ${field.label}`} value={selectedIndex >= 0 ? selectedIndex : -1} onChange={(event) => updateMapping(field.key, event.target.value)}><option value={-1}>不导入此字段</option>{mappingContext.inspection.columns.map((item) => <option key={item.index} value={item.index} disabled={mappedIndexes.includes(item.index) && item.index !== selectedIndex}>{item.label}</option>)}</select><span>{column ? `样例：${column.sample}` : '尚未选择原始列'}</span></label></article> })}</div>
             <footer><div><strong>未映射原始列</strong><span>不写入 SKU 字段，但仍会保留在来源证据中</span></div><p>{unmappedColumns.length ? unmappedColumns.map((column) => <span key={column.index}>{column.label}</span>) : <em>全部原始列已映射</em>}</p></footer>
+            {mappingMatch?.status === 'none' || mappingContext.profileDirty ? <div className="sku-mapping-profile-save"><label><input type="checkbox" checked={mappingContext.saveProfile} onChange={(event) => setMappingContext((current) => ({ ...current, saveProfile: event.target.checked }))} /><span><strong>{mappingMatch?.profile ? '同步更新供应商方案' : '保存为供应商方案'}</strong><small>{mappingMatch?.profile ? '本次确认后更新方案版本，后续同类文件自动复用。' : '下次遇到相同表头将自动套用，减少重复配置。'}</small></span></label>{mappingContext.saveProfile ? <input aria-label="映射方案名称" value={mappingContext.profileName} onChange={(event) => setMappingContext((current) => ({ ...current, profileName: event.target.value }))} placeholder="例如：华东供应商标准表" /> : null}</div> : null}
           </section> : null}
 
           {mode === 'new' && step === 'preview' ? <>
@@ -251,7 +319,7 @@ export function SkuImportDialog({ onClose, onCompleted, onNotify }) {
           {mode === 'history' && selectedJob ? <div className="sku-import-history-detail">
             <button className="history-back" type="button" onClick={() => { setSelectedJob(null); loadHistory() }}><ArrowLeft size={16} />返回批次列表</button>
             {selectedJob.duplicateUpload ? <section className="sku-import-duplicate-upload history"><FingerprintSimple size={22} weight="duotone" /><div><strong>该文件内容已导入过</strong><span>为防止重复写入，系统直接打开了原批次与执行记录。</span></div><code>{selectedJob.contentFingerprint}</code></section> : null}
-            <div className="history-detail-title"><div><h3>{selectedJob.sourceName}</h3><p>批次 {selectedJob.id.slice(0, 8)} · 指纹 {selectedJob.contentFingerprint || '—'} · 创建于 {displayTime(selectedJob.createdAt)}</p></div><span className={`import-state ${(jobState[selectedJob.state] || {}).className || 'skipped'}`}>{(jobState[selectedJob.state] || {}).label || selectedJob.state}</span></div>
+            <div className="history-detail-title"><div><h3>{selectedJob.sourceName}</h3><p>批次 {selectedJob.id.slice(0, 8)} · 指纹 {selectedJob.contentFingerprint || '—'} · 创建于 {displayTime(selectedJob.createdAt)}{selectedJob.mappingSnapshot?.name ? ` · 映射方案 ${selectedJob.mappingSnapshot.name}` : ''}</p></div><span className={`import-state ${(jobState[selectedJob.state] || {}).className || 'skipped'}`}>{(jobState[selectedJob.state] || {}).label || selectedJob.state}</span></div>
             <div className="sku-import-summary"><div><span>总行数</span><strong>{selectedJob.totalRows}</strong></div><div className="ready"><span>成功写入</span><strong>{selectedJob.importedRows}</strong></div><div className="duplicate"><span>跳过 / 无效</span><strong>{selectedJob.rows.filter((row) => ['skipped', 'invalid'].includes(row.state)).length}</strong></div><div className="invalid"><span>写入失败</span><strong>{selectedJob.failedRows}</strong></div></div>
             <div className="history-detail-grid"><section><h4>逐行结果</h4><div className="history-row-list">{selectedJob.rows.map((row) => { const state = rowState[row.state] || { label: row.state, className: 'skipped' }; const identity = row.payload?.identity || {}; const primary = row.payload?.identifiers?.find((item) => item.isPrimary); return <div key={row.id}><span>{row.rowNumber}</span><span><strong>{identity.nameZh || identity.nameEn || '未命名'}</strong><small>{primary?.rawValue || '无主 OE'}</small></span><span className={`import-state ${state.className}`}>{state.label}</span><small>{row.errorMessage || row.issues?.map((item) => item.message).join('、') || '—'}</small></div> })}</div></section><section><h4>执行记录</h4><div className="history-attempts">{selectedJob.attempts.map((attempt) => <div key={attempt.id}><span><ArrowsClockwise size={18} weight="bold" /></span><div><strong>{attempt.attemptType === 'retry' ? `第 ${attempt.attemptNumber} 次 · 失败重试` : '首次写入'}</strong><small>{attempt.startedBy} · {displayTime(attempt.startedAt)}</small><p>选中 {attempt.selectedRows} · 成功 {attempt.importedRows} · 失败 {attempt.failedRows}</p></div></div>)}{!selectedJob.attempts.length ? <p className="history-no-attempt">尚未执行写入</p> : null}</div></section></div>
           </div> : null}

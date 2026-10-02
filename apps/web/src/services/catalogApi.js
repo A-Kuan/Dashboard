@@ -235,6 +235,26 @@ export function getCatalogImportTemplate() {
   return request('/api/v2/catalog/import-template')
 }
 
+export function matchCatalogImportMapping(sourceName, columns) {
+  return request('/api/v2/catalog/import-mappings/match', {
+    method: 'POST', body: JSON.stringify({ sourceName, columns: columns.map(({ sourceKey, label }) => ({ sourceKey, label })) }),
+  })
+}
+
+export function saveCatalogImportMapping({ profile, name, sourceName, columns, mapping }) {
+  return request('/api/v2/catalog/import-mappings', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: profile?.id || undefined,
+      expectedVersion: profile?.version || undefined,
+      name,
+      sourceName,
+      columns: columns.map(({ sourceKey, label }) => ({ sourceKey, label })),
+      mapping,
+    }),
+  })
+}
+
 export async function downloadCatalogImportTemplate() {
   const response = await fetch(`${apiBase}/api/v2/catalog/import-template?format=csv`, {
     headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },
@@ -256,8 +276,8 @@ export async function downloadCatalogImportTemplate() {
   return { filename }
 }
 
-export function previewCatalogImport(sourceName, rows) {
-  return request('/api/v2/catalog/imports', { method: 'POST', body: JSON.stringify({ sourceName, rows }) })
+export function previewCatalogImport(sourceName, rows, mappingProfile = null) {
+  return request('/api/v2/catalog/imports', { method: 'POST', body: JSON.stringify({ sourceName, rows, mappingProfile }) })
 }
 
 export function commitCatalogImport(jobId, expectedVersion, rowIds) {

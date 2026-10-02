@@ -550,6 +550,27 @@ test('catalog v2 returns an existing import batch for duplicate content', async 
   await app.close()
 })
 
+test('catalog v2 matches and saves versioned supplier mapping profiles', async () => {
+  const saved = []
+  const catalogImportMappingRepository = {
+    async list() { return { items: saved, total: saved.length } },
+    async match(input) { return { status: 'exact', profile: { id: 'profile-1', name: '华东供应商', version: 2 }, suggestedMapping: { nameZh: 0, primaryOe: 1 }, changes: { added: [], removed: [], similarity: 1 }, sourceName: input.sourceName } },
+    async save(input, actor) { const profile = { id: input.id || 'profile-1', name: input.name, version: (input.expectedVersion || 0) + 1, updatedBy: actor }; saved.push(profile); return profile },
+  }
+  const app = buildApp({ catalogImportMappingRepository, logger: false })
+  const match = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings/match', payload: { sourceName: 'supplier.csv', columns: [{ sourceKey: '品名', label: '品名' }, { sourceKey: 'OE', label: 'OE' }] } })
+  assert.equal(match.statusCode, 200)
+  assert.equal(match.json().status, 'exact')
+  assert.equal(match.json().suggestedMapping.primaryOe, 1)
+  const created = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings', payload: { name: '华东供应商', sourceName: 'supplier.csv', columns: [], mapping: {} } })
+  assert.equal(created.statusCode, 201)
+  assert.equal(created.json().updatedBy, 'hushanxing-workbench')
+  const denied = await app.inject({ method: 'POST', url: '/api/v2/catalog/import-mappings', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { name: '无权限方案' } })
+  assert.equal(denied.statusCode, 403)
+  assert.equal((await app.inject('/api/v2/catalog/import-mappings')).json().total, 1)
+  await app.close()
+})
+
 test('catalog v2 preserves import attempts and retries only failed rows', async () => {
   const app = buildApp({ catalogImportRepository: createCatalogImportRepository(), logger: false })
   const preview = (await app.inject({ method: 'POST', url: '/api/v2/catalog/imports', payload: {

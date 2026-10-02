@@ -77,6 +77,7 @@ function mapJob(row, rows = [], attempts = []) {
     importedRows: row.imported_rows, failedRows: row.failed_rows, createdBy: row.created_by,
     createdAt: row.created_at, committedAt: row.committed_at, version: row.version,
     contentFingerprint: row.content_hash ? row.content_hash.slice(0, 12) : '',
+    mappingProfileId: row.mapping_profile_id || '', mappingSnapshot: row.mapping_snapshot || {},
     attemptCount: Number(row.attempt_count ?? attempts.length), lastAttemptAt: row.last_attempt_at || attempts[0]?.started_at || null,
     preflight: buildImportPreflightReport(rows, { readyRows: row.ready_rows, duplicateRows: row.duplicate_rows, invalidRows: row.invalid_rows }),
     rows: rows.map(mapRow), attempts: attempts.map(mapAttempt),
@@ -121,6 +122,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
     async createPreview(input, actor = '系统操作员') {
       const sourceName = text(input?.sourceName)
       const rows = Array.isArray(input?.rows) ? input.rows : []
+      const mappingProfile = input?.mappingProfile && typeof input.mappingProfile === 'object' ? input.mappingProfile : null
       if (!sourceName) throw invalid('sourceName 不能为空')
       if (!rows.length) throw invalid('导入文件没有可处理的数据行')
       if (rows.length > catalogImportTemplateSpec.maxRows) throw invalid(`单次最多导入 ${catalogImportTemplateSpec.maxRows} 行`)
@@ -147,7 +149,7 @@ export function createCatalogImportRepository(pool, catalogRepository) {
         const jobId = randomUUID()
         await client.query(`INSERT INTO catalog_intake (id,source_type,state,source_context,raw_payload,created_by)
           VALUES ($1,'import','preview',$2::jsonb,$3::jsonb,$4)`,
-        [intakeId, JSON.stringify({ sourceName, rowCount: rows.length }), JSON.stringify({ rows }), actor])
+        [intakeId, JSON.stringify({ sourceName, rowCount: rows.length, mappingProfile }), JSON.stringify({ rows }), actor])
 
         let readyRows = 0
         let duplicateRows = 0
@@ -163,10 +165,27 @@ export function createCatalogImportRepository(pool, catalogRepository) {
           return { id: randomUUID(), rowNumber: index + 2, ...item, duplicates, state }
         })
 
+        const profileId = text(mappingProfile?.id) || null
+        let mappingSnapshot = {}
+        if (profileId) {
+          const updated = await client.query('UPDATE catalog_import_mapping_profile SET usage_count=usage_count+1,last_used_at=now() WHERE id=$1 AND active RETURNING name,header_signature,version', [profileId])
+          if (!updated.rows[0]) throw invalid('选择的映射方案不存在或已停用')
+          const sourceKeys = new Set(rows.flatMap((row) => Object.keys(row?._sourceRow || {})))
+          const allowedFields = new Set(catalogImportFields.map((field) => field.key))
+          const fieldMapping = Object.fromEntries(Object.entries(mappingProfile?.fieldMapping || {}).flatMap(([field, sourceKey]) => {
+            const value = text(sourceKey)
+            return allowedFields.has(field) && sourceKeys.has(value) ? [[field, value]] : []
+          }))
+          const matchStatus = ['created', 'updated', 'exact', 'drift', 'manual_override'].includes(text(mappingProfile?.matchStatus)) ? text(mappingProfile.matchStatus) : 'manual_override'
+          mappingSnapshot = {
+            id: profileId, name: updated.rows[0].name, version: updated.rows[0].version,
+            matchStatus, headerSignature: updated.rows[0].header_signature, fieldMapping,
+          }
+        }
         const { rows: jobs } = await client.query(`INSERT INTO catalog_import_job
-          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by,content_hash)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor, fileAnalysis.contentHash])
+          (id,intake_id,source_name,total_rows,ready_rows,duplicate_rows,invalid_rows,created_by,content_hash,mapping_profile_id,mapping_snapshot)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) RETURNING *`,
+        [jobId, intakeId, sourceName, rows.length, readyRows, duplicateRows, invalidRows, actor, fileAnalysis.contentHash, profileId, JSON.stringify(mappingSnapshot)])
         for (const item of prepared) {
           await client.query(`INSERT INTO catalog_import_row
             (id,job_id,row_number,normalized_payload,state,issues,duplicate_matches)

@@ -179,7 +179,7 @@ test('previews CSV conflicts and imports only explicitly selected rows', async (
   await repeatedDialog.locator('.sku-import-actions').getByRole('button', { name: '关闭' }).click()
 })
 
-test('maps supplier CSV headers before creating an import preview', async ({ page }) => {
+test('maps supplier CSV headers and reuses a saved supplier profile', async ({ page }) => {
   await page.getByRole('button', { name: 'SKU 资料库' }).click()
   await page.getByRole('button', { name: '批量导入' }).click()
   const dialog = page.getByRole('dialog', { name: '批量导入 SKU' })
@@ -191,11 +191,36 @@ test('maps supplier CSV headers before creating an import preview', async ({ pag
   await expect(dialog.getByLabel('映射 品牌')).toHaveValue('2')
   await expect(dialog.getByLabel('映射 车型')).toHaveValue('3')
   await expect(dialog.locator('.sku-import-mapping > footer p').getByText('内部备注', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('保存为供应商方案')).toBeVisible()
+  await expect(dialog.getByLabel('映射方案名称')).toHaveValue('supplier-a 映射方案')
   await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-mapping-1680.png', fullPage: false })
   await dialog.getByRole('button', { name: '确认映射并预检查' }).click()
   await expect(dialog.getByText('空调滤芯', { exact: true })).toBeVisible()
   await expect(dialog.getByText('4M0 819 439 B', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const reuseDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const nextCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注\n机油滤芯,06L 115 562 B,MANN,Audi A4 (B9),常规补货'
+  await reuseDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-202610.csv', mimeType: 'text/csv', buffer: Buffer.from(nextCsv) })
+  await expect(reuseDialog.getByText('已自动套用“supplier-a 映射方案”')).toBeVisible()
+  await expect(reuseDialog.getByLabel('映射 主 OE')).toHaveValue('1')
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-reuse-1680.png', fullPage: false })
+  await reuseDialog.getByRole('button', { name: '确认映射并预检查' }).click()
+  await expect(reuseDialog.getByText('机油滤芯', { exact: true })).toBeVisible()
+  await reuseDialog.getByRole('button', { name: '关闭' }).first().click()
+
+  await page.getByRole('button', { name: '批量导入' }).click()
+  const driftDialog = page.getByRole('dialog', { name: '批量导入 SKU' })
+  const driftCsv = '供应商品名,原厂编号,厂牌,适用车系,内部备注,仓库\n空气滤芯,8W0 133 843 C,MANN,Audi A4 (B9),新版表头,华东仓'
+  await driftDialog.locator('input[type=file]').setInputFiles({ name: 'supplier-a-202611.csv', mimeType: 'text/csv', buffer: Buffer.from(driftCsv) })
+  await expect(driftDialog.getByText('检测到“supplier-a 映射方案”的表头发生变化')).toBeVisible()
+  await expect(driftDialog.getByText(/新增：仓库/)).toBeVisible()
+  await driftDialog.getByRole('button', { name: '应用已有方案' }).click()
+  await expect(driftDialog.getByRole('button', { name: '已应用可匹配字段' })).toBeDisabled()
+  await expect(driftDialog.getByText('同步更新供应商方案')).toBeVisible()
+  await page.screenshot({ path: 'qa-artifacts/implementation-sku-import-profile-drift-1680.png', fullPage: false })
+  await driftDialog.getByRole('button', { name: '关闭' }).first().click()
 })
 
 test('supports controlled bulk review submission with per-record results', async ({ page }) => {
