@@ -16,6 +16,27 @@ function stringList(value) {
   return list(value).map(text).filter(Boolean)
 }
 
+function codeList(value) {
+  return [...new Set(stringList(value).map((item) => item.toUpperCase()))]
+}
+
+const fitmentRuleFields = new Set(['engineCode', 'transmissionCode', 'marketCode', 'bodyStyle', 'driveType', 'prCode', 'position'])
+const fitmentRuleOperators = new Set(['in', 'not_in', 'equals'])
+
+function normalizeFitmentConditions(value, path) {
+  const source = object(value)
+  const rules = list(source.rules).map((rule, index) => {
+    const field = text(rule?.field)
+    const operator = text(rule?.operator) || 'in'
+    const values = stringList(rule?.values)
+    if (!fitmentRuleFields.has(field)) invalid(`${path}.rules[${index}].field 不受支持`)
+    if (!fitmentRuleOperators.has(operator)) invalid(`${path}.rules[${index}].operator 不受支持`)
+    if (!values.length) invalid(`${path}.rules[${index}].values 不能为空`)
+    return { field, operator, values: [...new Set(field === 'position' ? values : values.map((item) => item.toUpperCase()))] }
+  })
+  return { ...(text(source.note) ? { note: text(source.note) } : {}), ...(rules.length ? { rules } : {}) }
+}
+
 function optionalInteger(value, field) {
   if (value === '' || value === null || value === undefined) return null
   const number = Number(value)
@@ -103,10 +124,11 @@ function normalizeFitment(item, index) {
   const yearTo = optionalInteger(item.yearTo, `fitments[${index}].yearTo`)
   if (yearFrom && yearTo && yearFrom > yearTo) invalid(`fitments[${index}] 的年份范围无效`)
   return {
-    id: text(item.id), vehiclePlatformId: text(item.vehiclePlatformId), vehicleLabel, years: text(item.years), yearFrom, yearTo,
-    engineCodes: stringList(item.engineCodes), marketCodes: stringList(item.marketCodes), prCodes: stringList(item.prCodes),
-    bodyStyles: stringList(item.bodyStyles), position: text(item.position), includeConditions: object(item.includeConditions),
-    excludeConditions: object(item.excludeConditions), evidenceId: text(item.evidenceId), evidenceKey: text(item.evidenceKey),
+    id: text(item.id), vehiclePlatformId: text(item.vehiclePlatformId), variantMasterId: text(item.variantMasterId), vehicleLabel, years: text(item.years), yearFrom, yearTo,
+    engineCodes: codeList(item.engineCodes), transmissionCodes: codeList(item.transmissionCodes), marketCodes: codeList(item.marketCodes), prCodes: codeList(item.prCodes),
+    bodyStyles: codeList(item.bodyStyles), driveTypes: codeList(item.driveTypes), position: text(item.position),
+    includeConditions: normalizeFitmentConditions(item.includeConditions, `fitments[${index}].includeConditions`),
+    excludeConditions: normalizeFitmentConditions(item.excludeConditions, `fitments[${index}].excludeConditions`), evidenceId: text(item.evidenceId), evidenceKey: text(item.evidenceKey),
     verificationStatus: text(item.verificationStatus) || 'pending', reviewNote: text(item.reviewNote), reviewedBy: text(item.reviewedBy),
     reviewedAt: text(item.reviewedAt), reviewVersion: Number.isInteger(Number(item.reviewVersion)) && Number(item.reviewVersion) > 0 ? Number(item.reviewVersion) : 1,
     sortOrder: index,
@@ -171,7 +193,8 @@ export function normalizeCatalogInput(input = {}, existing = null) {
 function fitmentReviewFingerprint(item) {
   return JSON.stringify({
     vehiclePlatformId: item.vehiclePlatformId, vehicleLabel: item.vehicleLabel, years: item.years, yearFrom: item.yearFrom, yearTo: item.yearTo,
-    engineCodes: item.engineCodes, marketCodes: item.marketCodes, prCodes: item.prCodes, bodyStyles: item.bodyStyles, position: item.position,
+    variantMasterId: item.variantMasterId, engineCodes: item.engineCodes, transmissionCodes: item.transmissionCodes,
+    marketCodes: item.marketCodes, prCodes: item.prCodes, bodyStyles: item.bodyStyles, driveTypes: item.driveTypes, position: item.position,
     includeConditions: item.includeConditions, excludeConditions: item.excludeConditions,
   })
 }

@@ -230,6 +230,32 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const item = await catalogPlatformRepository.update(request.params.id, request.body, actor.name)
     return item || reply.code(404).send({ error: 'PLATFORM_NOT_FOUND', message: '车型平台不存在' })
   })
+  app.get('/api/v2/catalog/vehicle-variants', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型版本主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    return catalogPlatformRepository.listVariants({ platformId: request.query?.platformId, query: request.query?.q, status: request.query?.status })
+  })
+  app.get('/api/v2/catalog/vehicle-variants/:id', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型版本主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
+    const item = await catalogPlatformRepository.getVariant(request.params.id)
+    return item || reply.code(404).send({ error: 'VARIANT_NOT_FOUND', message: '车型版本不存在' })
+  })
+  app.post('/api/v2/catalog/vehicle-variants', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型版本主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.manage_platform')
+    if (!actor) return
+    return reply.code(201).send(await catalogPlatformRepository.createVariant(request.body, actor.name))
+  })
+  app.patch('/api/v2/catalog/vehicle-variants/:id', async (request, reply) => {
+    if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '车型版本主数据服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.manage_platform')
+    if (!actor) return
+    const item = await catalogPlatformRepository.updateVariant(request.params.id, request.body, actor.name)
+    return item || reply.code(404).send({ error: 'VARIANT_NOT_FOUND', message: '车型版本不存在' })
+  })
   app.get('/api/v2/catalog/fitment-conflicts', async (request, reply) => {
     if (!catalogPlatformRepository) return reply.code(503).send({ error: 'PLATFORM_SERVICE_UNAVAILABLE', message: '适配冲突服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'catalog.read')

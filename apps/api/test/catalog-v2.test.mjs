@@ -387,6 +387,7 @@ test('catalog v2 exposes development roles and enforces write capabilities', asy
 
 test('catalog v2 manages vehicle platform master data and audited fitment conflicts', async () => {
   const platforms = []
+  const variants = []
   const conflicts = [{
     key: 'overlapping_scope:fitment-a:fitment-b', type: 'overlapping_scope', severity: 'blocking', title: '同 SKU 适配范围重叠',
     left: { fitmentId: 'fitment-a', skuId: 'sku-1', skuCode: 'SKU-1', skuName: '制动盘', skuVersion: 3, platformCode: '9YA', years: '2018–2023' },
@@ -397,6 +398,10 @@ test('catalog v2 manages vehicle platform master data and audited fitment confli
     async get(id) { return platforms.find((item) => item.id === id || item.platformCode === id) || null },
     async create(input, actor) { const item = { id: `platform-${platforms.length + 1}`, ...input, version: 1, createdBy: actor, history: [] }; platforms.push(item); return item },
     async update(id, input, actor) { const item = platforms.find((candidate) => candidate.id === id); if (!item) return null; Object.assign(item, input, { version: item.version + 1, updatedBy: actor }); return item },
+    async listVariants() { return { items: variants, total: variants.length, statusCounts: { active: variants.filter((item) => item.lifecycleStatus === 'active').length } } },
+    async getVariant(id) { return variants.find((item) => item.id === id) || null },
+    async createVariant(input, actor) { const platform = platforms.find((item) => item.id === input.platformId); const item = { id: `variant-${variants.length + 1}`, ...input, platformCode: platform?.platformCode || '', version: 1, createdBy: actor, history: [] }; variants.push(item); return item },
+    async updateVariant(id, input, actor) { const item = variants.find((candidate) => candidate.id === id); if (!item) return null; Object.assign(item, input, { version: item.version + 1, updatedBy: actor }); return item },
     async conflicts({ state = 'open', skuId = '' } = {}) { const items = conflicts.filter((item) => state !== 'resolved' && (!skuId || item.left.skuId === skuId || item.right?.skuId === skuId)); return { items, total: items.length, counts: { open: items.length, resolved: 0, blocking: items.length } } },
     async resolveConflict(input, actor) { const index = conflicts.findIndex((item) => item.key === input.conflictKey); if (index < 0) return null; const [item] = conflicts.splice(index, 1); return { conflictKey: item.key, resolutionType: input.resolutionType, note: input.note, resolvedBy: actor } },
   }
@@ -408,6 +413,15 @@ test('catalog v2 manages vehicle platform master data and audited fitment confli
   assert.equal(created.statusCode, 201)
   assert.equal(created.json().platformCode, '9YA')
   assert.equal((await app.inject('/api/v2/catalog/vehicle-platforms')).json().total, 1)
+  const variant = await app.inject({ method: 'POST', url: '/api/v2/catalog/vehicle-variants', payload: {
+    platformId: created.json().id, variantCode: '9YA-DCBE-CN', variantLabel: '3.0T 中国版', yearFrom: 2018, yearTo: 2023,
+    engineCodes: ['DCBE'], marketCodes: ['CN'], driveTypes: ['AWD'], lifecycleStatus: 'active', sourceSystem: 'Porsche PET', sourceReference: '9YA model index',
+  } })
+  assert.equal(variant.statusCode, 201)
+  assert.equal(variant.json().platformCode, '9YA')
+  assert.equal((await app.inject('/api/v2/catalog/vehicle-variants?status=active')).json().total, 1)
+  const variantDenied = await app.inject({ method: 'PATCH', url: `/api/v2/catalog/vehicle-variants/${variant.json().id}`, headers: { 'x-operator-role': 'catalog_editor' }, payload: { expectedVersion: 1, variantLabel: '不应修改' } })
+  assert.equal(variantDenied.statusCode, 403)
   const queue = await app.inject('/api/v2/catalog/fitment-conflicts?state=open')
   assert.equal(queue.statusCode, 200)
   assert.equal(queue.json().counts.blocking, 1)

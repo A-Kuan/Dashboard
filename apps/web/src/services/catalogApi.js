@@ -65,10 +65,12 @@ export function mapCatalogSku(item) {
       id: identifier.id, type: identifier.isPrimary ? '主 OE' : identifier.type || '其他编号', value: identifier.rawValue, relation: identifier.isPrimary ? '当前号' : '参考编号', isPrimary: identifier.isPrimary,
     })),
     fitments: (item.fitments || []).map((fitment) => ({
-      id: fitment.id, vehicle: fitment.vehicleLabel, platformId: fitment.vehiclePlatformId || '', years: fitment.years,
-      yearFrom: fitment.yearFrom, yearTo: fitment.yearTo, engineCodes: fitment.engineCodes || [], marketCodes: fitment.marketCodes || [],
-      prCodes: fitment.prCodes || [], bodyStyles: fitment.bodyStyles || [], position: fitment.position || '',
+      id: fitment.id, vehicle: fitment.vehicleLabel, platformId: fitment.vehiclePlatformId || '', variantMasterId: fitment.variantMasterId || '',
+      variantCode: fitment.variantCode || '', variantLabel: fitment.variantLabel || '', years: fitment.years,
+      yearFrom: fitment.yearFrom, yearTo: fitment.yearTo, engineCodes: fitment.engineCodes || [], transmissionCodes: fitment.transmissionCodes || [], marketCodes: fitment.marketCodes || [],
+      prCodes: fitment.prCodes || [], bodyStyles: fitment.bodyStyles || [], driveTypes: fitment.driveTypes || [], position: fitment.position || '',
       condition: fitment.includeConditions?.note || '', exclusion: fitment.excludeConditions?.note || '',
+      includeRules: fitment.includeConditions?.rules || [], excludeRules: fitment.excludeConditions?.rules || [],
       evidenceId: fitment.evidenceId || '', verificationStatus: fitment.verificationStatus || 'pending',
       reviewNote: fitment.reviewNote || '', reviewedBy: fitment.reviewedBy || '', reviewedAt: fitment.reviewedAt || '',
       reviewVersion: fitment.reviewVersion || 1,
@@ -149,6 +151,23 @@ export function getCatalogVehiclePlatform(id) {
 export function saveCatalogVehiclePlatform(platform) {
   const path = platform.id ? `/api/v2/catalog/vehicle-platforms/${encodeURIComponent(platform.id)}` : '/api/v2/catalog/vehicle-platforms'
   return request(path, { method: platform.id ? 'PATCH' : 'POST', body: JSON.stringify(platform) })
+}
+
+export function listCatalogVehicleVariants({ platformId = '', query = '', status = '' } = {}) {
+  const params = new URLSearchParams()
+  if (platformId) params.set('platformId', platformId)
+  if (query.trim()) params.set('q', query.trim())
+  if (status) params.set('status', status)
+  return request(`/api/v2/catalog/vehicle-variants?${params}`)
+}
+
+export function getCatalogVehicleVariant(id) {
+  return request(`/api/v2/catalog/vehicle-variants/${encodeURIComponent(id)}`)
+}
+
+export function saveCatalogVehicleVariant(variant) {
+  const path = variant.id ? `/api/v2/catalog/vehicle-variants/${encodeURIComponent(variant.id)}` : '/api/v2/catalog/vehicle-variants'
+  return request(path, { method: variant.id ? 'PATCH' : 'POST', body: JSON.stringify(variant) })
 }
 
 export function listCatalogFitmentConflicts({ state = 'open', query = '' } = {}) {
@@ -560,11 +579,12 @@ export function draftToCatalogPayload(draft, source) {
     fitments: draft.fitments.filter((item) => item.vehicle.trim()).map((item) => {
       const range = parsedYears(item.years)
       return {
-        id: item.persistedId || '', vehiclePlatformId: item.platformId || inferredPlatformId(item.vehicle), vehicleLabel: item.vehicle,
+        id: item.persistedId || '', vehiclePlatformId: item.platformId || inferredPlatformId(item.vehicle), variantMasterId: item.variantMasterId || '', vehicleLabel: item.vehicle,
         years: item.years, yearFrom: item.yearFrom || range.yearFrom, yearTo: item.yearTo || range.yearTo,
-        engineCodes: valueList(item.engineCodes), marketCodes: valueList(item.marketCodes), prCodes: valueList(item.prCodes),
-        bodyStyles: valueList(item.bodyStyles), position: item.position || '',
-        includeConditions: item.condition ? { note: item.condition } : {}, excludeConditions: item.exclusion ? { note: item.exclusion } : {},
+        engineCodes: valueList(item.engineCodes), transmissionCodes: valueList(item.transmissionCodes), marketCodes: valueList(item.marketCodes), prCodes: valueList(item.prCodes),
+        bodyStyles: valueList(item.bodyStyles), driveTypes: valueList(item.driveTypes), position: item.position || '',
+        includeConditions: { ...(item.condition ? { note: item.condition } : {}), ...(item.includeRules?.length ? { rules: item.includeRules } : {}) },
+        excludeConditions: { ...(item.exclusion ? { note: item.exclusion } : {}), ...(item.excludeRules?.length ? { rules: item.excludeRules } : {}) },
         evidenceKey: hasEvidence ? 'source-0' : '', verificationStatus: 'pending',
       }
     }),

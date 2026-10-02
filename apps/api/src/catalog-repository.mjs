@@ -47,9 +47,10 @@ function mapIdentifier(row) {
 
 function mapFitment(row) {
   return {
-    id: row.id, vehiclePlatformId: row.vehicle_platform_id || '', platformMasterId: row.platform_master_id || row.platform_lookup_id || '', vehicleLabel: row.vehicle_label, years: row.years,
-    yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes || [], marketCodes: row.market_codes || [],
-    prCodes: row.pr_codes || [], bodyStyles: row.body_styles || [], position: row.position,
+    id: row.id, vehiclePlatformId: row.vehicle_platform_id || '', platformMasterId: row.platform_master_id || row.platform_lookup_id || '',
+    variantMasterId: row.variant_master_id || '', variantCode: row.variant_code || '', variantLabel: row.variant_label || '', vehicleLabel: row.vehicle_label, years: row.years,
+    yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes || [], transmissionCodes: row.transmission_codes || [], marketCodes: row.market_codes || [],
+    prCodes: row.pr_codes || [], bodyStyles: row.body_styles || [], driveTypes: row.drive_types || [], position: row.position,
     includeConditions: row.include_conditions || {}, excludeConditions: row.exclude_conditions || {},
     evidenceId: row.source_evidence_id || '', verificationStatus: row.verification_status, sortOrder: row.sort_order,
     reviewNote: row.review_note || '', reviewedBy: row.reviewed_by || '', reviewedAt: row.reviewed_at,
@@ -67,6 +68,27 @@ function fitmentRisks(row) {
   if (row.platform_lookup_id && ((row.year_from && row.platform_year_from && row.year_from < row.platform_year_from) || (row.year_to && row.platform_year_to && row.year_to > row.platform_year_to))) {
     risks.push({ code: 'outsidePlatformYears', label: '适配年款超出平台主数据边界', blocking: true })
   }
+  if (row.variant_master_id && row.variant_status !== 'active') risks.push({ code: 'inactiveVariant', label: '车型版本尚未启用', blocking: true })
+  if (row.variant_master_id && row.variant_platform_id !== row.platform_lookup_id) risks.push({ code: 'variantPlatformMismatch', label: '车型版本不属于所选平台', blocking: true })
+  if (row.variant_master_id && ((row.year_from && row.variant_year_from && row.year_from < row.variant_year_from) || (row.year_to && row.variant_year_to && row.year_to > row.variant_year_to))) {
+    risks.push({ code: 'outsideVariantYears', label: '适配年款超出车型版本边界', blocking: true })
+  }
+  const dimensions = [
+    ['engine_codes', 'variant_engine_codes', '发动机代码'], ['transmission_codes', 'variant_transmission_codes', '变速箱代码'],
+    ['market_codes', 'variant_market_codes', '市场代码'], ['body_styles', 'variant_body_styles', '车身形式'],
+    ['drive_types', 'variant_drive_types', '驱动形式'], ['pr_codes', 'variant_pr_codes', 'PR 代码'],
+  ]
+  for (const [fitmentField, variantField, label] of dimensions) {
+    const allowed = new Set(row[variantField] || [])
+    if (row.variant_master_id && (row[fitmentField] || []).some((value) => allowed.size && !allowed.has(value))) risks.push({ code: `outsideVariant${fitmentField}`, label: `${label}不属于车型版本`, blocking: true })
+  }
+  const includeRules = Array.isArray(row.include_conditions?.rules) ? row.include_conditions.rules : []
+  const excludeRules = Array.isArray(row.exclude_conditions?.rules) ? row.exclude_conditions.rules : []
+  const excluded = new Set(excludeRules.map((rule) => JSON.stringify([rule.field, [...(rule.values || [])].sort()])))
+  if (includeRules.some((rule) => excluded.has(JSON.stringify([rule.field, [...(rule.values || [])].sort()])))) risks.push({ code: 'contradictoryRules', label: '包含与排除规则相互矛盾', blocking: true })
+  const includeNote = String(row.include_conditions?.note || '').trim().toLowerCase()
+  const excludeNote = String(row.exclude_conditions?.note || '').trim().toLowerCase()
+  if (includeNote && includeNote === excludeNote) risks.push({ code: 'contradictoryNotes', label: '包含与排除备注相同', blocking: true })
   if (!row.position && !(row.pr_codes || []).length && !Object.keys(row.include_conditions || {}).length && !Object.keys(row.exclude_conditions || {}).length) {
     risks.push({ code: 'missingConditions', label: '适配条件过于宽泛', blocking: false })
   }
@@ -172,9 +194,12 @@ const qualityIssueExpression = `ARRAY_REMOVE(ARRAY[
   CASE WHEN EXISTS (
     SELECT 1 FROM catalog_fitment qf
     LEFT JOIN catalog_vehicle_platform qp ON qp.id=qf.platform_master_id OR upper(trim(qf.vehicle_platform_id))=qp.platform_code OR upper(trim(qf.vehicle_platform_id))=ANY(qp.aliases)
-    WHERE qf.sku_id=s.id AND (qp.id IS NULL OR qp.lifecycle_status<>'active'
+    LEFT JOIN catalog_vehicle_variant qv ON qv.id=qf.variant_master_id
+    WHERE qf.sku_id=s.id AND (qp.id IS NULL OR qp.lifecycle_status<>'active' OR (qf.variant_master_id IS NOT NULL AND qv.lifecycle_status<>'active')
       OR (qf.year_from IS NOT NULL AND qp.year_from IS NOT NULL AND qf.year_from<qp.year_from)
-      OR (qf.year_to IS NOT NULL AND qp.year_to IS NOT NULL AND qf.year_to>qp.year_to))
+      OR (qf.year_to IS NOT NULL AND qp.year_to IS NOT NULL AND qf.year_to>qp.year_to)
+      OR (qf.year_from IS NOT NULL AND qv.year_from IS NOT NULL AND qf.year_from<qv.year_from)
+      OR (qf.year_to IS NOT NULL AND qv.year_to IS NOT NULL AND qf.year_to>qv.year_to))
   ) THEN 'fitmentConflict' END,
   CASE WHEN NOT EXISTS (SELECT 1 FROM catalog_source_evidence qe WHERE qe.sku_id=s.id AND (qe.source_system<>'' OR qe.source_record_id<>'' OR qe.catalog_path<>'' OR qe.raw_payload<>'{}'::jsonb)) THEN 'evidence' END,
   CASE WHEN EXISTS (
@@ -194,7 +219,8 @@ export function createCatalogRepository(pool) {
   async function childRows(client, skuId, includeChanges = false) {
     const identifiers = await client.query('SELECT * FROM catalog_part_identifier WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
     const evidence = await client.query('SELECT * FROM catalog_source_evidence WHERE sku_id=$1 ORDER BY sort_order, captured_at', [skuId])
-    const fitments = await client.query('SELECT * FROM catalog_fitment WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
+    const fitments = await client.query(`SELECT f.*,v.variant_code,v.variant_label FROM catalog_fitment f
+      LEFT JOIN catalog_vehicle_variant v ON v.id=f.variant_master_id WHERE f.sku_id=$1 ORDER BY f.sort_order,f.created_at`, [skuId])
     const interchanges = await client.query('SELECT * FROM catalog_interchange_relation WHERE sku_id=$1 ORDER BY sort_order, created_at', [skuId])
     const changes = includeChanges ? await client.query('SELECT * FROM catalog_change_log WHERE sku_id=$1 ORDER BY version DESC, changed_at DESC', [skuId]) : null
     const reviewEvents = includeChanges ? await client.query('SELECT * FROM catalog_review_event WHERE sku_id=$1 ORDER BY changed_at DESC', [skuId]) : null
@@ -240,10 +266,10 @@ export function createCatalogRepository(pool) {
 
     for (const item of input.fitments) {
       await client.query(`INSERT INTO catalog_fitment
-        (id,sku_id,vehicle_platform_id,platform_master_id,vehicle_label,years,year_from,year_to,engine_codes,market_codes,pr_codes,body_styles,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,review_note,reviewed_by,reviewed_at,review_version,sort_order)
-        VALUES ($1,$2,$3,(SELECT id FROM catalog_vehicle_platform WHERE platform_code=upper(trim($4)) OR upper(trim($4))=ANY(aliases) LIMIT 1),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19,$20::timestamptz,$21,$22)`,
-      [item.id || randomUUID(), skuId, item.vehiclePlatformId || null, item.vehiclePlatformId || '', item.vehicleLabel, item.years, item.yearFrom, item.yearTo,
-        item.engineCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.position, JSON.stringify(item.includeConditions),
+        (id,sku_id,vehicle_platform_id,platform_master_id,variant_master_id,vehicle_label,years,year_from,year_to,engine_codes,transmission_codes,market_codes,pr_codes,body_styles,drive_types,position,include_conditions,exclude_conditions,source_evidence_id,verification_status,review_note,reviewed_by,reviewed_at,review_version,sort_order)
+        VALUES ($1,$2,$3,(SELECT id FROM catalog_vehicle_platform WHERE platform_code=upper(trim($4)) OR upper(trim($4))=ANY(aliases) LIMIT 1),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19,$20,$21,$22,$23::timestamptz,$24,$25)`,
+      [item.id || randomUUID(), skuId, item.vehiclePlatformId || null, item.vehiclePlatformId || '', item.variantMasterId || null,
+        item.vehicleLabel, item.years, item.yearFrom, item.yearTo, item.engineCodes, item.transmissionCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.driveTypes, item.position, JSON.stringify(item.includeConditions),
         JSON.stringify(item.excludeConditions), evidenceIds.get(item.evidenceKey || item.evidenceId) || null, item.verificationStatus,
         item.reviewNote || '', item.reviewedBy || '', item.reviewedAt || null, item.reviewVersion || 1, item.sortOrder])
     }
@@ -269,7 +295,7 @@ export function createCatalogRepository(pool) {
   function mergeEntityKey(type, item) {
     if (type === 'identifier') return `${item.type}:${item.normalizedValue}`
     if (type === 'evidence') return item.immutableHash || JSON.stringify([item.sourceType, item.sourceSystem, item.sourceRecordId, item.catalogPath, item.figurePosition, item.vinContext])
-    if (type === 'fitment') return JSON.stringify([item.vehiclePlatformId, item.vehicleLabel, item.years, item.yearFrom, item.yearTo, item.engineCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.position, item.includeConditions, item.excludeConditions])
+    if (type === 'fitment') return JSON.stringify([item.vehiclePlatformId, item.variantMasterId, item.vehicleLabel, item.years, item.yearFrom, item.yearTo, item.engineCodes, item.transmissionCodes, item.marketCodes, item.prCodes, item.bodyStyles, item.driveTypes, item.position, item.includeConditions, item.excludeConditions])
     return ''
   }
 
@@ -606,7 +632,8 @@ export function createCatalogRepository(pool) {
       const base = `FROM catalog_fitment f
         JOIN catalog_sku s ON s.id=f.sku_id
         LEFT JOIN catalog_source_evidence e ON e.id=f.source_evidence_id
-        LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)`
+        LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)
+        LEFT JOIN catalog_vehicle_variant v ON v.id=f.variant_master_id`
       const countValues = [...values]
       const [count, statusCounts] = await Promise.all([
         pool.query(`SELECT count(*)::int AS total ${base} ${where}`, countValues),
@@ -614,7 +641,10 @@ export function createCatalogRepository(pool) {
       ])
       values.push(safeSize, (safePage - 1) * safeSize)
       const { rows } = await pool.query(`SELECT f.*,true AS platform_lookup_checked,p.id AS platform_lookup_id,p.lifecycle_status AS platform_status,
-        p.year_from AS platform_year_from,p.year_to AS platform_year_to,s.sku_code,s.canonical_name_zh,s.brand_label,s.lifecycle_status,s.version AS sku_version,
+        p.year_from AS platform_year_from,p.year_to AS platform_year_to,v.platform_id AS variant_platform_id,v.variant_code,v.variant_label,v.lifecycle_status AS variant_status,
+        v.year_from AS variant_year_from,v.year_to AS variant_year_to,v.engine_codes AS variant_engine_codes,
+        v.transmission_codes AS variant_transmission_codes,v.market_codes AS variant_market_codes,v.body_styles AS variant_body_styles,
+        v.drive_types AS variant_drive_types,v.pr_codes AS variant_pr_codes,s.sku_code,s.canonical_name_zh,s.brand_label,s.lifecycle_status,s.version AS sku_version,
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_identifier,
         e.source_system,e.source_record_id,e.catalog_path,e.figure_position,e.original_name,e.confidence AS evidence_confidence
         ${base} ${where}
@@ -648,9 +678,13 @@ export function createCatalogRepository(pool) {
       if (!note) throw fitmentReviewError('请填写适配审核结论')
       return withTransaction(pool, async (client) => {
         const current = (await client.query(`SELECT f.*,true AS platform_lookup_checked,p.id AS platform_lookup_id,p.lifecycle_status AS platform_status,
-          p.year_from AS platform_year_from,p.year_to AS platform_year_to,s.version AS sku_version,s.lifecycle_status
+          p.year_from AS platform_year_from,p.year_to AS platform_year_to,v.platform_id AS variant_platform_id,v.variant_code,v.variant_label,v.lifecycle_status AS variant_status,
+          v.year_from AS variant_year_from,v.year_to AS variant_year_to,v.engine_codes AS variant_engine_codes,
+          v.transmission_codes AS variant_transmission_codes,v.market_codes AS variant_market_codes,v.body_styles AS variant_body_styles,
+          v.drive_types AS variant_drive_types,v.pr_codes AS variant_pr_codes,s.version AS sku_version,s.lifecycle_status
           FROM catalog_fitment f JOIN catalog_sku s ON s.id=f.sku_id
           LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)
+          LEFT JOIN catalog_vehicle_variant v ON v.id=f.variant_master_id
           WHERE f.id=$1 FOR UPDATE OF f,s`, [id])).rows[0]
         if (!current) return null
         if (current.sku_version !== expectedSkuVersion) throw versionConflict(current.sku_version)
@@ -668,7 +702,8 @@ export function createCatalogRepository(pool) {
           lifecycle_status=CASE WHEN lifecycle_status='verified' AND $3<>'verified' THEN 'draft' ELSE lifecycle_status END,
           verification_level=CASE WHEN lifecycle_status='verified' AND $3<>'verified' THEN 'unverified' ELSE verification_level END,
           updated_by=$2,updated_at=now(),version=version+1 WHERE id=$1 RETURNING *`, [current.sku_id, actor, targetStatus])).rows[0]
-        const fitment = mapFitment(rows[0])
+        const enrichedFitment = { ...current, ...rows[0] }
+        const fitment = mapFitment(enrichedFitment)
         await client.query(`INSERT INTO catalog_fitment_review_event
           (id,sku_id,fitment_id,from_status,to_status,action,note,fitment_snapshot,sku_version,changed_by)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)`, [randomUUID(), current.sku_id, id, current.verification_status,
@@ -678,7 +713,7 @@ export function createCatalogRepository(pool) {
           fitmentId: id, vehiclePlatformId: fitment.vehiclePlatformId, vehicleLabel: fitment.vehicleLabel,
           fitmentStatus: targetStatus, reviewNote: note,
         })
-        return { sku: await getWith(client, current.sku_id, true), fitment, risks: fitmentRisks(rows[0]) }
+        return { sku: await getWith(client, current.sku_id, true), fitment, risks: fitmentRisks(enrichedFitment) }
       })
     },
 
@@ -746,7 +781,7 @@ export function createCatalogRepository(pool) {
       }
       const items = []
       for (const row of rows) items.push(await getWith(pool, row.id, true))
-      const [resolutions, merges, platforms, platformChanges, fitmentScopeResolutions] = await Promise.all([
+      const [resolutions, merges, platforms, platformChanges, variants, variantChanges, fitmentScopeResolutions] = await Promise.all([
         pool.query(`SELECT * FROM catalog_identifier_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -756,6 +791,8 @@ export function createCatalogRepository(pool) {
           ORDER BY merged_at,id`, [status]),
         pool.query('SELECT * FROM catalog_vehicle_platform ORDER BY platform_code'),
         pool.query('SELECT * FROM catalog_vehicle_platform_change_event ORDER BY changed_at,id'),
+        pool.query('SELECT * FROM catalog_vehicle_variant ORDER BY platform_id,variant_code'),
+        pool.query('SELECT * FROM catalog_vehicle_variant_change_event ORDER BY changed_at,id'),
         pool.query(`SELECT * FROM catalog_fitment_scope_resolution
           WHERE ($1='' OR sku_id_a IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1) OR sku_id_b IN (SELECT id FROM catalog_sku WHERE lifecycle_status=$1))
           ORDER BY resolved_at,id`, [status]),
@@ -781,6 +818,16 @@ export function createCatalogRepository(pool) {
           id: row.id, platformId: row.platform_id, version: row.version, action: row.action,
           snapshot: row.snapshot, changedBy: row.changed_by, changedAt: row.changed_at,
         })),
+        vehicleVariants: variants.rows.map((row) => ({
+          id: row.id, platformId: row.platform_id, variantCode: row.variant_code, variantLabel: row.variant_label,
+          yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes || [], transmissionCodes: row.transmission_codes || [],
+          marketCodes: row.market_codes || [], bodyStyles: row.body_styles || [], driveTypes: row.drive_types || [], prCodes: row.pr_codes || [],
+          lifecycleStatus: row.lifecycle_status, sourceSystem: row.source_system, sourceReference: row.source_reference, notes: row.notes, version: row.version,
+        })),
+        vehicleVariantChanges: variantChanges.rows.map((row) => ({
+          id: row.id, variantId: row.variant_id, version: row.version, action: row.action,
+          snapshot: row.snapshot, changedBy: row.changed_by, changedAt: row.changed_at,
+        })),
         fitmentScopeResolutions: fitmentScopeResolutions.rows.map((row) => ({
           id: row.id, conflictKey: row.conflict_key, conflictType: row.conflict_type, fitmentIdA: row.fitment_id_a,
           fitmentIdB: row.fitment_id_b, skuIdA: row.sku_id_a, skuIdB: row.sku_id_b, platformId: row.platform_id,
@@ -801,6 +848,8 @@ export function createCatalogRepository(pool) {
           fitmentReviewEvents: items.reduce((sum, item) => sum + item.fitmentReviewEvents.length, 0),
           vehiclePlatforms: relations.vehiclePlatforms.length,
           vehiclePlatformChanges: relations.vehiclePlatformChanges.length,
+          vehicleVariants: relations.vehicleVariants.length,
+          vehicleVariantChanges: relations.vehicleVariantChanges.length,
           fitmentScopeResolutions: relations.fitmentScopeResolutions.length,
           identifierResolutions: relations.identifierResolutions.length,
           merges: relations.merges.length,

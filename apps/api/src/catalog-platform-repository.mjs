@@ -21,6 +21,50 @@ function mapPlatform(row) {
   }
 }
 
+function mapVariant(row) {
+  return {
+    id: row.id, platformId: row.platform_id, platformCode: row.platform_code || '', variantCode: row.variant_code,
+    variantLabel: row.variant_label, yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes || [],
+    transmissionCodes: row.transmission_codes || [], marketCodes: row.market_codes || [], bodyStyles: row.body_styles || [],
+    driveTypes: row.drive_types || [], prCodes: row.pr_codes || [], lifecycleStatus: row.lifecycle_status,
+    sourceSystem: row.source_system, sourceReference: row.source_reference, notes: row.notes, version: row.version,
+    createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at,
+    fitmentCount: Number(row.fitment_count || 0),
+  }
+}
+
+function normalizeVariant(input, platform, existing = {}) {
+  const result = {
+    platformId: clean(input?.platformId ?? existing.platformId),
+    variantCode: code(input?.variantCode ?? existing.variantCode),
+    variantLabel: clean(input?.variantLabel ?? existing.variantLabel),
+    yearFrom: input?.yearFrom === '' || input?.yearFrom == null ? existing.yearFrom ?? null : Number(input.yearFrom),
+    yearTo: input?.yearTo === '' || input?.yearTo == null ? existing.yearTo ?? null : Number(input.yearTo),
+    engineCodes: values(input?.engineCodes ?? existing.engineCodes ?? []).map(code),
+    transmissionCodes: values(input?.transmissionCodes ?? existing.transmissionCodes ?? []).map(code),
+    marketCodes: values(input?.marketCodes ?? existing.marketCodes ?? []).map(code),
+    bodyStyles: values(input?.bodyStyles ?? existing.bodyStyles ?? []),
+    driveTypes: values(input?.driveTypes ?? existing.driveTypes ?? []),
+    prCodes: values(input?.prCodes ?? existing.prCodes ?? []).map(code),
+    lifecycleStatus: clean(input?.lifecycleStatus ?? existing.lifecycleStatus ?? 'draft'),
+    sourceSystem: clean(input?.sourceSystem ?? existing.sourceSystem),
+    sourceReference: clean(input?.sourceReference ?? existing.sourceReference),
+    notes: clean(input?.notes ?? existing.notes),
+  }
+  if (!result.platformId || !result.variantCode || !result.variantLabel) throw error('所属平台、版本编码和版本名称为必填项')
+  if (![result.yearFrom, result.yearTo].every((year) => year == null || (Number.isInteger(year) && year >= 1900 && year <= 2200))) throw error('版本年款必须是 1900 至 2200 的整数')
+  if (result.yearFrom && result.yearTo && result.yearFrom > result.yearTo) throw error('版本起始年款不能晚于结束年款')
+  if (platform && ((result.yearFrom && platform.yearFrom && result.yearFrom < platform.yearFrom) || (result.yearTo && platform.yearTo && result.yearTo > platform.yearTo))) {
+    throw error('车型版本年款不能超出所属平台边界', 422, 'VARIANT_OUTSIDE_PLATFORM')
+  }
+  if (!['draft', 'active', 'retired'].includes(result.lifecycleStatus)) throw error('车型版本状态无效')
+  if (result.lifecycleStatus === 'active' && platform?.lifecycleStatus !== 'active') throw error('所属平台尚未启用，不能启用车型版本', 422, 'VARIANT_ACTIVATION_BLOCKED')
+  if (result.lifecycleStatus === 'active' && (!result.yearFrom || !result.yearTo || !result.sourceSystem || !result.sourceReference || !result.engineCodes.length)) {
+    throw error('启用车型版本前必须补齐年款、发动机代码和来源依据', 422, 'VARIANT_ACTIVATION_BLOCKED')
+  }
+  return result
+}
+
 function normalizePlatform(input, existing = {}) {
   const result = {
     platformCode: code(input?.platformCode ?? existing.platformCode),
@@ -57,7 +101,7 @@ function rangeOverlaps(left, right) {
 
 function normalizedPosition(value) { return clean(value).toLowerCase().replace(/\s+/g, '') }
 function scopeSignature(row) {
-  return JSON.stringify([row.engine_codes || [], row.market_codes || [], row.pr_codes || [], row.body_styles || [], row.include_conditions || {}, row.exclude_conditions || {}])
+  return JSON.stringify([row.variant_master_id || '', row.engine_codes || [], row.transmission_codes || [], row.market_codes || [], row.pr_codes || [], row.body_styles || [], row.drive_types || [], row.include_conditions || {}, row.exclude_conditions || {}])
 }
 function platformKey(row) { return row.platform_id || code(row.vehicle_platform_id) }
 function samePosition(left, right) {
@@ -72,9 +116,9 @@ function side(row) {
   return {
     fitmentId: row.id, skuId: row.sku_id, skuCode: row.sku_code, skuName: row.canonical_name_zh || '未命名零件',
     skuVersion: row.sku_version, primaryOe: row.primary_oe || '', vehicleLabel: row.vehicle_label,
-    platformCode: row.platform_code || row.vehicle_platform_id || '', years: row.years,
+    platformCode: row.platform_code || row.vehicle_platform_id || '', variantId: row.variant_master_id || '', variantCode: row.variant_code || '', variantLabel: row.variant_label || '', years: row.years,
     yearFrom: row.year_from, yearTo: row.year_to, position: row.position, engineCodes: row.engine_codes || [],
-    marketCodes: row.market_codes || [], prCodes: row.pr_codes || [], includeConditions: row.include_conditions || {},
+    transmissionCodes: row.transmission_codes || [], marketCodes: row.market_codes || [], prCodes: row.pr_codes || [], bodyStyles: row.body_styles || [], driveTypes: row.drive_types || [], includeConditions: row.include_conditions || {},
     excludeConditions: row.exclude_conditions || {}, verificationStatus: row.verification_status,
   }
 }
@@ -98,12 +142,26 @@ export function createCatalogPlatformRepository(pool) {
     return { ...mapPlatform(rows[0]), history: history.rows.map((row) => ({ id: row.id, version: row.version, action: row.action, snapshot: row.snapshot, changedBy: row.changed_by, changedAt: row.changed_at })) }
   }
 
+  async function getVariant(id, client = pool) {
+    const { rows } = await client.query(`SELECT v.*,p.platform_code,
+      (SELECT count(*)::int FROM catalog_fitment f WHERE f.variant_master_id=v.id) AS fitment_count
+      FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id
+      WHERE v.id=$1 OR (v.platform_id=(SELECT id FROM catalog_vehicle_platform WHERE platform_code=upper(trim($2)) OR upper(trim($2))=ANY(aliases) LIMIT 1) AND v.variant_code=upper(trim($1))) LIMIT 1`, [id, clean(id).split(':')[0]])
+    if (!rows[0]) return null
+    const history = await client.query('SELECT id,version,action,snapshot,changed_by,changed_at FROM catalog_vehicle_variant_change_event WHERE variant_id=$1 ORDER BY version DESC,changed_at DESC', [rows[0].id])
+    return { ...mapVariant(rows[0]), history: history.rows.map((row) => ({ id: row.id, version: row.version, action: row.action, snapshot: row.snapshot, changedBy: row.changed_by, changedAt: row.changed_at })) }
+  }
+
   async function rawConflictRows(client = pool) {
     return (await client.query(`SELECT f.*,s.sku_code,s.canonical_name_zh,s.version AS sku_version,
       p.id AS platform_id,p.platform_code,p.lifecycle_status AS platform_status,p.year_from AS platform_year_from,p.year_to AS platform_year_to,
+      v.platform_id AS variant_platform_id,v.variant_code,v.variant_label,v.lifecycle_status AS variant_status,v.year_from AS variant_year_from,v.year_to AS variant_year_to,
+      v.engine_codes AS variant_engine_codes,v.transmission_codes AS variant_transmission_codes,v.market_codes AS variant_market_codes,
+      v.body_styles AS variant_body_styles,v.drive_types AS variant_drive_types,v.pr_codes AS variant_pr_codes,
       (SELECT normalized_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) AS primary_oe
       FROM catalog_fitment f JOIN catalog_sku s ON s.id=f.sku_id AND s.lifecycle_status<>'discontinued'
       LEFT JOIN catalog_vehicle_platform p ON p.id=f.platform_master_id OR upper(trim(f.vehicle_platform_id))=p.platform_code OR upper(trim(f.vehicle_platform_id))=ANY(p.aliases)
+      LEFT JOIN catalog_vehicle_variant v ON v.id=f.variant_master_id
       ORDER BY f.created_at,f.id`)).rows
   }
 
@@ -119,9 +177,29 @@ export function createCatalogPlatformRepository(pool) {
       if (platform && ((row.year_from && platform.yearFrom && row.year_from < platform.yearFrom) || (row.year_to && platform.yearTo && row.year_to > platform.yearTo))) {
         conflicts.push({ key: `year_outside_platform:${row.id}:${platform.id}`, type: 'year_outside_platform', severity: 'blocking', title: '适配年款超出平台边界', explanation: `适配 ${row.year_from || '?'}–${row.year_to || '?'}，平台主数据 ${platform.yearFrom || '?'}–${platform.yearTo || '?'}`, platform, left: side(row), right: null, resolution: null })
       }
+      if (row.variant_master_id && row.variant_status !== 'active') conflicts.push({ key: `inactive_variant:${row.id}:${row.variant_master_id}`, type: 'inactive_variant', severity: 'blocking', title: '车型版本尚未启用', explanation: `${row.variant_code || '所选版本'} 当前不可用于适配审核`, platform, left: side(row), right: null, resolution: null })
+      if (row.variant_master_id && row.variant_platform_id !== row.platform_id) conflicts.push({ key: `variant_platform_mismatch:${row.id}:${row.variant_master_id}`, type: 'variant_platform_mismatch', severity: 'blocking', title: '车型版本不属于所选平台', explanation: `${row.variant_code || '所选版本'} 与 ${platform?.platformCode || '当前平台'} 不匹配`, platform, left: side(row), right: null, resolution: null })
+      if (row.variant_master_id && ((row.year_from && row.variant_year_from && row.year_from < row.variant_year_from) || (row.year_to && row.variant_year_to && row.year_to > row.variant_year_to))) {
+        conflicts.push({ key: `year_outside_variant:${row.id}:${row.variant_master_id}`, type: 'year_outside_variant', severity: 'blocking', title: '适配年款超出车型版本边界', explanation: `适配 ${row.year_from || '?'}–${row.year_to || '?'}，车型版本 ${row.variant_year_from || '?'}–${row.variant_year_to || '?'}`, platform, left: side(row), right: null, resolution: null })
+      }
+      const dimensions = [
+        ['engine_codes', 'variant_engine_codes', '发动机代码'], ['transmission_codes', 'variant_transmission_codes', '变速箱代码'],
+        ['market_codes', 'variant_market_codes', '市场代码'], ['body_styles', 'variant_body_styles', '车身形式'],
+        ['drive_types', 'variant_drive_types', '驱动形式'], ['pr_codes', 'variant_pr_codes', 'PR 代码'],
+      ]
+      for (const [fitmentField, variantField, label] of dimensions) {
+        const allowed = new Set(row[variantField] || [])
+        const outside = (row[fitmentField] || []).filter((value) => allowed.size && !allowed.has(value))
+        if (row.variant_master_id && outside.length) conflicts.push({ key: `variant_dimension:${row.id}:${fitmentField}`, type: 'variant_dimension', severity: 'blocking', title: `${label}不属于车型版本`, explanation: `${outside.join('、')} 不在 ${row.variant_code} 的标准范围内`, platform, left: side(row), right: null, resolution: null })
+      }
       const include = clean(row.include_conditions?.note).toLowerCase()
       const exclude = clean(row.exclude_conditions?.note).toLowerCase()
       if (include && exclude && include === exclude) conflicts.push({ key: `self_condition:${row.id}`, type: 'self_condition', severity: 'blocking', title: '包含与排除条件相同', explanation: '同一条适配同时包含并排除相同条件', platform, left: side(row), right: null, resolution: null })
+      const includeRules = Array.isArray(row.include_conditions?.rules) ? row.include_conditions.rules : []
+      const excludeRules = Array.isArray(row.exclude_conditions?.rules) ? row.exclude_conditions.rules : []
+      const excludeKeys = new Set(excludeRules.map((rule) => JSON.stringify([rule.field, [...(rule.values || [])].sort()])))
+      const contradiction = includeRules.find((rule) => excludeKeys.has(JSON.stringify([rule.field, [...(rule.values || [])].sort()])))
+      if (contradiction) conflicts.push({ key: `structured_condition:${row.id}:${contradiction.field}`, type: 'structured_condition', severity: 'blocking', title: '结构化条件相互矛盾', explanation: `${contradiction.field} 同时出现在包含和排除规则中`, platform, left: side(row), right: null, resolution: null })
     }
     for (let i = 0; i < rows.length; i += 1) for (let j = i + 1; j < rows.length; j += 1) {
       const left = rows[i]
@@ -161,6 +239,71 @@ export function createCatalogPlatformRepository(pool) {
       return { items: rows.map(mapPlatform), total: rows.length, statusCounts: Object.fromEntries(counts.rows.map((row) => [row.lifecycle_status, row.count])) }
     },
     get,
+    async listVariants({ platformId = '', query = '', status = '' } = {}) {
+      const clauses = []
+      const params = []
+      if (platformId) { params.push(platformId); clauses.push(`(v.platform_id=$${params.length} OR p.platform_code=upper(trim($${params.length})))`) }
+      if (status) { params.push(status); clauses.push(`v.lifecycle_status=$${params.length}`) }
+      if (clean(query)) { params.push(`%${clean(query).toLowerCase()}%`); clauses.push(`lower(concat_ws(' ',p.platform_code,v.variant_code,v.variant_label,array_to_string(v.engine_codes,' '),array_to_string(v.pr_codes,' '))) LIKE $${params.length}`) }
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+      const { rows } = await pool.query(`SELECT v.*,p.platform_code,
+        (SELECT count(*)::int FROM catalog_fitment f WHERE f.variant_master_id=v.id) AS fitment_count
+        FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id ${where}
+        ORDER BY CASE v.lifecycle_status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,p.platform_code,v.variant_code`, params)
+      const counts = await pool.query('SELECT lifecycle_status,count(*)::int AS count FROM catalog_vehicle_variant GROUP BY lifecycle_status')
+      return { items: rows.map(mapVariant), total: rows.length, statusCounts: Object.fromEntries(counts.rows.map((row) => [row.lifecycle_status, row.count])) }
+    },
+    getVariant,
+    async createVariant(input, actor) {
+      const platform = await get(clean(input?.platformId))
+      if (!platform) throw error('所属车型平台不存在', 404, 'PLATFORM_NOT_FOUND')
+      const value = normalizeVariant(input, platform)
+      return withTransaction(pool, async (client) => {
+        const id = randomUUID()
+        let row
+        try {
+          row = (await client.query(`INSERT INTO catalog_vehicle_variant
+            (id,platform_id,variant_code,variant_label,year_from,year_to,engine_codes,transmission_codes,market_codes,body_styles,drive_types,pr_codes,lifecycle_status,source_system,source_reference,notes,created_by,updated_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+          [id, platform.id, value.variantCode, value.variantLabel, value.yearFrom, value.yearTo, value.engineCodes,
+            value.transmissionCodes, value.marketCodes, value.bodyStyles, value.driveTypes, value.prCodes,
+            value.lifecycleStatus, value.sourceSystem, value.sourceReference, value.notes, actor])).rows[0]
+        } catch (reason) {
+          if (reason.code === '23505') throw error('该平台下的车型版本编码已存在', 409, 'VARIANT_CODE_EXISTS')
+          throw reason
+        }
+        const snapshot = mapVariant({ ...row, platform_code: platform.platformCode })
+        await client.query('INSERT INTO catalog_vehicle_variant_change_event (id,variant_id,version,action,snapshot,changed_by) VALUES ($1,$2,1,$3,$4::jsonb,$5)', [randomUUID(), id, 'create', JSON.stringify(snapshot), actor])
+        return getVariant(id, client)
+      })
+    },
+    async updateVariant(id, input, actor) {
+      const expectedVersion = Number(input?.expectedVersion)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw error('expectedVersion 必须是正整数')
+      return withTransaction(pool, async (client) => {
+        const locked = (await client.query('SELECT * FROM catalog_vehicle_variant WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!locked) return null
+        const current = await getVariant(id, client)
+        if (current.version !== expectedVersion) throw error(`车型版本已更新（当前 v${current.version}）`, 409, 'VARIANT_VERSION_CONFLICT', { currentVersion: current.version })
+        const platform = await get(clean(input?.platformId || current.platformId), client)
+        if (!platform) throw error('所属车型平台不存在', 404, 'PLATFORM_NOT_FOUND')
+        const value = normalizeVariant(input, platform, current)
+        let row
+        try {
+          row = (await client.query(`UPDATE catalog_vehicle_variant SET platform_id=$2,variant_code=$3,variant_label=$4,year_from=$5,year_to=$6,
+            engine_codes=$7,transmission_codes=$8,market_codes=$9,body_styles=$10,drive_types=$11,pr_codes=$12,lifecycle_status=$13,
+            source_system=$14,source_reference=$15,notes=$16,version=version+1,updated_by=$17,updated_at=now() WHERE id=$1 RETURNING *`,
+          [id, platform.id, value.variantCode, value.variantLabel, value.yearFrom, value.yearTo, value.engineCodes, value.transmissionCodes,
+            value.marketCodes, value.bodyStyles, value.driveTypes, value.prCodes, value.lifecycleStatus, value.sourceSystem, value.sourceReference, value.notes, actor])).rows[0]
+        } catch (reason) {
+          if (reason.code === '23505') throw error('该平台下的车型版本编码已存在', 409, 'VARIANT_CODE_EXISTS')
+          throw reason
+        }
+        const snapshot = mapVariant({ ...row, platform_code: platform.platformCode })
+        await client.query('INSERT INTO catalog_vehicle_variant_change_event (id,variant_id,version,action,snapshot,changed_by) VALUES ($1,$2,$3,$4,$5::jsonb,$6)', [randomUUID(), id, row.version, 'update', JSON.stringify(snapshot), actor])
+        return getVariant(id, client)
+      })
+    },
     async create(input, actor) {
       const value = normalizePlatform(input)
       return withTransaction(pool, async (client) => {

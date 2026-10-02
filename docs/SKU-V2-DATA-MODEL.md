@@ -69,14 +69,17 @@ CatalogSku
 | `sku_id` | UUID | 所属 SKU |
 | `vehicle_platform_id` | text | 来源平台编码，保留原始业务键 |
 | `platform_master_id` | UUID | 解析后的 `catalog_vehicle_platform` 外键；平台建立后自动回填 |
+| `variant_master_id` | UUID | 可空；精确指向 `catalog_vehicle_variant` 车型版本 |
 | `year_from/year_to` | smallint | 年款范围 |
 | `engine_codes` | text[] | 发动机代码 |
+| `transmission_codes` | text[] | 变速箱代码 |
 | `market_codes` | text[] | 市场范围 |
 | `pr_codes` | text[] | PR/选装代码 |
 | `body_styles` | text[] | 车身形式 |
+| `drive_types` | text[] | 驱动形式 |
 | `position` | enum | 安装位置/左右侧 |
-| `include_conditions` | jsonb | 必须满足条件 |
-| `exclude_conditions` | jsonb | 排除条件 |
+| `include_conditions` | jsonb | `rules[]` 结构化必须满足条件，并兼容旧 `note` |
+| `exclude_conditions` | jsonb | `rules[]` 结构化排除条件，并兼容旧 `note` |
 | `source_evidence_id` | UUID | 每条适配必须可追溯 |
 | `verification_status` | enum | pending/verified/rejected/conflict |
 | `review_note` | text | 最近一次审核结论 |
@@ -91,9 +94,15 @@ CatalogSku
 
 车型平台主数据与旧 `vehicle_variant` 业务聚合完全分离。它保存稳定的平台编码、品牌/车系/代际、生产年款边界、市场、车身形式、别名、来源系统与来源引用；状态为 `draft/active/retired`。只有同时具备起止年款和来源依据的平台可以启用。所有修改使用乐观锁，并向 `catalog_vehicle_platform_change_event` 追加完整快照，不覆盖历史。
 
+### `catalog_vehicle_variant`
+
+车型版本是平台下的第二级主数据，使用平台内唯一的 `variant_code` 表达可以被业务复用的具体配置边界。版本保存起止年款、发动机、变速箱、市场、车身、驱动、PR 代码、来源依据和 `draft/active/retired` 生命周期。启用版本至少需要完整年款、一个发动机代码及来源依据，且年款不能超出所属平台。每次修改使用乐观锁并向 `catalog_vehicle_variant_change_event` 追加完整快照。
+
+适配可保持平台级，也可关联一个已启用车型版本。关联版本后，年款以及发动机、变速箱、市场、车身、驱动、PR 代码必须落在版本允许范围内。`include_conditions.rules[]` 与 `exclude_conditions.rules[]` 的字段限定为 `engineCode/transmissionCode/marketCode/bodyStyle/driveType/prCode/position`，操作限定为 `in/not_in/equals`；同字段同值同时出现在包含和排除规则中属于阻断性冲突。旧 `note` 继续保留用于无法结构化的补充说明。
+
 ### `catalog_fitment_scope_resolution`
 
-适配冲突由当前平台和适配关系实时计算，不把容易失真的扫描结果缓存成事实表。成对冲突的人工结论单独追加保存稳定 `conflict_key`、冲突类型、两条适配、两条 SKU、平台、冲突时快照、处理结论、必填依据和操作人。`accepted_overlap` 与 `same_application` 解除当前冲突阻断；`correction_required` 保持阻断，直到适配数据被真正修正。未识别平台、未启用平台、年款越界和单条记录内部自相矛盾不允许人工忽略。
+适配冲突由当前平台、车型版本和适配关系实时计算，不把容易失真的扫描结果缓存成事实表。成对冲突的人工结论单独追加保存稳定 `conflict_key`、冲突类型、两条适配、两条 SKU、平台、冲突时快照、处理结论、必填依据和操作人。`accepted_overlap` 与 `same_application` 解除当前冲突阻断；`correction_required` 保持阻断，直到适配数据被真正修正。未识别/未启用平台、版本平台不符、未启用版本、年款或版本维度越界，以及单条记录内部自相矛盾都不允许人工忽略。
 
 ### `source_evidence`
 

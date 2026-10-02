@@ -15,7 +15,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import '../sku-editor.css'
-import { findDuplicateIdentifiers, listCatalogVehiclePlatforms, saveCatalogDraft, submitCatalogReview } from '../services/catalogApi'
+import { findDuplicateIdentifiers, listCatalogVehiclePlatforms, listCatalogVehicleVariants, saveCatalogDraft, submitCatalogReview } from '../services/catalogApi'
 
 const sourceLabels = {
   epc: 'EPC / VIN',
@@ -38,6 +38,21 @@ const sourceDefaults = {
   manual: { sourceSystem: '手工录入', catalog: '—', position: '—', originalName: '—', vin: '—' },
 }
 
+const ruleFields = [
+  ['engineCode', '发动机代码'], ['transmissionCode', '变速箱代码'], ['marketCode', '市场代码'],
+  ['bodyStyle', '车身形式'], ['driveType', '驱动形式'], ['prCode', 'PR 代码'], ['position', '安装位置'],
+]
+
+function editableRules(rules = []) {
+  return rules.map((rule, index) => ({ ...rule, id: rule.id || `rule-${index}-${rule.field}`, values: Array.isArray(rule.values) ? rule.values : [] }))
+}
+
+function RuleBuilder({ title, tone, rules, onChange }) {
+  const add = () => onChange([...rules, { id: `rule-${Date.now()}`, field: 'engineCode', operator: tone === 'exclude' ? 'not_in' : 'in', values: [] }])
+  const update = (id, field, value) => onChange(rules.map((rule) => rule.id === id ? { ...rule, [field]: value } : rule))
+  return <section className={`fitment-rule-builder ${tone}`}><header><div><strong>{title}</strong><small>字段化规则会参与发布前冲突检测</small></div><button type="button" onClick={add}><Plus size={15} weight="bold" />添加规则</button></header>{rules.map((rule) => <div className="fitment-rule-row" key={rule.id}><select aria-label={`${title}字段`} value={rule.field} onChange={(event) => update(rule.id, 'field', event.target.value)}>{ruleFields.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><select aria-label={`${title}关系`} value={rule.operator} onChange={(event) => update(rule.id, 'operator', event.target.value)}><option value="in">包含任一</option><option value="equals">必须等于</option><option value="not_in">不得包含</option></select><input aria-label={`${title}值`} value={(rule.values || []).join(', ')} onChange={(event) => update(rule.id, 'values', event.target.value.split(/[,，、]/).map((value) => value.trim()).filter(Boolean))} placeholder="多个值用逗号分隔" /><button aria-label={`删除${title}`} type="button" onClick={() => onChange(rules.filter((item) => item.id !== rule.id))}><Trash size={16} /></button></div>)}{!rules.length ? <p>暂无结构化规则，可保留下面的旧备注作为补充说明。</p> : null}</section>
+}
+
 function makeInitialDraft(source, record) {
   if (record) {
     return {
@@ -51,8 +66,10 @@ function makeInitialDraft(source, record) {
       identifiers: record.identifiers.filter((item) => !item.isPrimary && item.type !== '主 OE').map((item, index) => ({ id: item.id || `existing-${index}`, type: item.type, value: item.value, relation: item.relation })),
       fitments: record.fitments.map((item, index) => ({
         id: `fitment-${index}`, persistedId: item.id, vehicle: item.vehicle, platformId: item.platformId, years: item.years,
-        yearFrom: item.yearFrom, yearTo: item.yearTo, engineCodes: item.engineCodes?.join(', ') || '', prCodes: item.prCodes?.join(', ') || '',
-        position: item.position, condition: item.condition, exclusion: item.exclusion, verificationStatus: item.verificationStatus,
+        variantMasterId: item.variantMasterId || '', yearFrom: item.yearFrom, yearTo: item.yearTo, engineCodes: item.engineCodes?.join(', ') || '',
+        transmissionCodes: item.transmissionCodes?.join(', ') || '', marketCodes: item.marketCodes?.join(', ') || '', prCodes: item.prCodes?.join(', ') || '',
+        bodyStyles: item.bodyStyles?.join(', ') || '', driveTypes: item.driveTypes?.join(', ') || '', position: item.position,
+        condition: item.condition, exclusion: item.exclusion, includeRules: editableRules(item.includeRules), excludeRules: editableRules(item.excludeRules), verificationStatus: item.verificationStatus,
       })),
       evidence: { ...record.evidence, sourceSystem: record.evidence.system, position: record.evidence.figure, vin: record.evidence.catalog.includes('VIN:') ? record.evidence.catalog.replace('VIN: ', '') : '—' },
     }
@@ -68,7 +85,7 @@ function makeInitialDraft(source, record) {
     unit: '件',
     primaryOe: isManual ? '' : '9Y0 615 301 M',
     identifiers: isManual ? [] : [{ id: 'relation-1', type: '历史 OE', value: '9Y0 615 301 K', relation: '被替代' }],
-    fitments: isManual ? [] : [{ id: 'fitment-1', vehicle: 'Cayenne (9YA)', platformId: '9YA', years: '2018–2023', yearFrom: 2018, yearTo: 2023, engineCodes: '', prCodes: '', position: '前轴', condition: '350mm 制动盘', exclusion: '排除 PSCB' }],
+    fitments: isManual ? [] : [{ id: 'fitment-1', vehicle: 'Cayenne (9YA)', platformId: '9YA', variantMasterId: '', years: '2018–2023', yearFrom: 2018, yearTo: 2023, engineCodes: '', transmissionCodes: '', marketCodes: '', prCodes: '', bodyStyles: '', driveTypes: '', position: '前轴', condition: '350mm 制动盘', exclusion: '排除 PSCB', includeRules: [], excludeRules: [] }],
     evidence: sourceDefaults[source] || sourceDefaults.manual,
   }
 }
@@ -94,10 +111,13 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
   const [persistedRecord, setPersistedRecord] = useState(() => record?.dataOrigin === 'live' ? record : null)
   const [duplicateMatches, setDuplicateMatches] = useState([])
   const [vehiclePlatforms, setVehiclePlatforms] = useState([])
+  const [vehicleVariants, setVehicleVariants] = useState([])
 
   useEffect(() => {
     let active = true
-    listCatalogVehiclePlatforms({ status: 'active' }).then((result) => { if (active) setVehiclePlatforms(result.items || []) }).catch(() => { if (active) setVehiclePlatforms([]) })
+    Promise.all([listCatalogVehiclePlatforms({ status: 'active' }), listCatalogVehicleVariants({ status: 'active' })])
+      .then(([platforms, variants]) => { if (active) { setVehiclePlatforms(platforms.items || []); setVehicleVariants(variants.items || []) } })
+      .catch(() => { if (active) { setVehiclePlatforms([]); setVehicleVariants([]) } })
     return () => { active = false }
   }, [])
 
@@ -125,8 +145,26 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
   const updateIdentifier = (id, field, value) => { setSubmitted(false); setDraft((current) => ({ ...current, identifiers: current.identifiers.map((item) => item.id === id ? { ...item, [field]: value } : item) })) }
   const removeIdentifier = (id) => { setSubmitted(false); setDraft((current) => ({ ...current, identifiers: current.identifiers.filter((item) => item.id !== id) })) }
 
-  const addFitment = () => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: [...current.fitments, { id: `fitment-${Date.now()}`, vehicle: '', platformId: '', years: '', engineCodes: '', prCodes: '', position: '', condition: '', exclusion: '' }] })) }
+  const addFitment = () => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: [...current.fitments, { id: `fitment-${Date.now()}`, vehicle: '', platformId: '', variantMasterId: '', years: '', engineCodes: '', transmissionCodes: '', marketCodes: '', prCodes: '', bodyStyles: '', driveTypes: '', position: '', condition: '', exclusion: '', includeRules: [], excludeRules: [] }] })) }
   const updateFitment = (id, field, value) => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, [field]: value } : item) })) }
+  const selectPlatform = (id, platformId) => {
+    setSubmitted(false)
+    setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? { ...item, platformId, variantMasterId: vehicleVariants.some((variant) => variant.id === item.variantMasterId && variant.platformCode === platformId) ? item.variantMasterId : '' } : item) }))
+  }
+  const selectVariant = (id, variantId) => {
+    const variant = vehicleVariants.find((item) => item.id === variantId)
+    setSubmitted(false)
+    setDraft((current) => ({ ...current, fitments: current.fitments.map((item) => item.id === id ? {
+      ...item, variantMasterId: variantId,
+      ...(variant ? {
+        platformId: variant.platformCode, vehicle: item.vehicle || `${variant.variantLabel} (${variant.platformCode})`,
+        years: item.years || `${variant.yearFrom}–${variant.yearTo}`, yearFrom: item.yearFrom || variant.yearFrom, yearTo: item.yearTo || variant.yearTo,
+        engineCodes: item.engineCodes || variant.engineCodes.join(', '), transmissionCodes: item.transmissionCodes || variant.transmissionCodes.join(', '),
+        marketCodes: item.marketCodes || variant.marketCodes.join(', '), prCodes: item.prCodes || variant.prCodes.join(', '),
+        bodyStyles: item.bodyStyles || variant.bodyStyles.join(', '), driveTypes: item.driveTypes || variant.driveTypes.join(', '),
+      } : {}),
+    } : item) }))
+  }
   const removeFitment = (id) => { setSubmitted(false); setDraft((current) => ({ ...current, fitments: current.fitments.filter((item) => item.id !== id) })) }
 
   const checkPrimaryDuplicate = async () => {
@@ -236,8 +274,23 @@ export function SkuEditor({ source = 'manual', record, dictionaries = {}, onBack
             </> : null}
 
             {step === 'fitment' ? <>
-              <div className="sku-form-heading"><div><h2>适配车型</h2><p>适配结论必须包含车型和必要条件。</p></div><button className="outline-add" type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加车型</button></div>
-              <div className="fitment-editor-list">{draft.fitments.map((item, index) => <article className="fitment-editor-card" key={item.id}><header><span>适配 {index + 1}</span><em>{item.verificationStatus === 'verified' ? '已审核，修改后需重审' : '待专项审核'}</em><button aria-label="删除适配" type="button" onClick={() => removeFitment(item.id)}><Trash size={17} /></button></header><div className="sku-form-grid"><Field label="车型名称" required><input value={item.vehicle} onChange={(event) => updateFitment(item.id, 'vehicle', event.target.value)} placeholder="例如：Cayenne (9YA)" /></Field><Field label="标准平台" required hint={vehiclePlatforms.length ? '只显示已启用平台' : '暂无已启用平台，请先到车型平台治理中建立'}><select value={item.platformId || ''} onChange={(event) => updateFitment(item.id, 'platformId', event.target.value)}><option value="">请选择平台</option>{item.platformId && !vehiclePlatforms.some((platform) => platform.platformCode === item.platformId) ? <option value={item.platformId}>{item.platformId} · 未纳入主数据</option> : null}{vehiclePlatforms.map((platform) => <option value={platform.platformCode} key={platform.id}>{platform.platformCode} · {platform.brandLabel} {platform.seriesLabel} · {platform.yearFrom}–{platform.yearTo}</option>)}</select></Field><Field label="年款范围" required><input value={item.years} onChange={(event) => updateFitment(item.id, 'years', event.target.value)} placeholder="例如：2018–2023" /></Field><Field label="安装位置"><input value={item.position || ''} onChange={(event) => updateFitment(item.id, 'position', event.target.value)} placeholder="例如：前轴 / 左侧" /></Field><Field label="发动机代码"><input value={item.engineCodes || ''} onChange={(event) => updateFitment(item.id, 'engineCodes', event.target.value)} placeholder="多个代码用逗号分隔" /></Field><Field label="PR 代码"><input value={item.prCodes || ''} onChange={(event) => updateFitment(item.id, 'prCodes', event.target.value)} placeholder="例如：1ZT, 1ZK" /></Field><Field label="包含条件"><input value={item.condition || ''} onChange={(event) => updateFitment(item.id, 'condition', event.target.value)} placeholder="例如：350mm 制动盘" /></Field><Field label="排除条件"><input value={item.exclusion || ''} onChange={(event) => updateFitment(item.id, 'exclusion', event.target.value)} placeholder="例如：排除 PSCB" /></Field><Field label="数据来源"><input disabled value={draft.evidence.sourceSystem} /></Field></div></article>)}{!draft.fitments.length ? <div className="fitment-empty"><Cube size={31} weight="duotone" /><strong>尚未添加适配车型</strong><span>只有完成适配核验的 SKU 才能进入发布状态。</span><button type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加第一条适配</button></div> : null}</div>
+              <div className="sku-form-heading"><div><h2>适配车型与版本规则</h2><p>先选标准平台和车型版本，再补充零件特有条件。</p></div><button className="outline-add" type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加车型</button></div>
+              <div className="fitment-editor-list">{draft.fitments.map((item, index) => {
+                const variants = vehicleVariants.filter((variant) => variant.platformCode === item.platformId)
+                return <article className="fitment-editor-card" key={item.id}><header><span>适配 {index + 1}</span><em>{item.verificationStatus === 'verified' ? '已审核，修改后需重审' : '待专项审核'}</em><button aria-label="删除适配" type="button" onClick={() => removeFitment(item.id)}><Trash size={17} /></button></header><div className="sku-form-grid">
+                  <Field label="车型名称" required><input value={item.vehicle} onChange={(event) => updateFitment(item.id, 'vehicle', event.target.value)} placeholder="例如：Cayenne (9YA)" /></Field>
+                  <Field label="标准平台" required hint={vehiclePlatforms.length ? '只显示已启用平台' : '暂无已启用平台，请先建立平台'}><select value={item.platformId || ''} onChange={(event) => selectPlatform(item.id, event.target.value)}><option value="">请选择平台</option>{item.platformId && !vehiclePlatforms.some((platform) => platform.platformCode === item.platformId) ? <option value={item.platformId}>{item.platformId} · 未纳入主数据</option> : null}{vehiclePlatforms.map((platform) => <option value={platform.platformCode} key={platform.id}>{platform.platformCode} · {platform.brandLabel} {platform.seriesLabel} · {platform.yearFrom}–{platform.yearTo}</option>)}</select></Field>
+                  <Field label="车型版本" hint={item.platformId ? variants.length ? '选择后可带入标准边界' : '该平台暂无已启用版本，可按平台级适配' : '请先选择平台'}><select value={item.variantMasterId || ''} disabled={!item.platformId} onChange={(event) => selectVariant(item.id, event.target.value)}><option value="">平台级适配</option>{variants.map((variant) => <option value={variant.id} key={variant.id}>{variant.variantCode} · {variant.variantLabel}</option>)}</select></Field>
+                  <Field label="年款范围" required><input value={item.years} onChange={(event) => updateFitment(item.id, 'years', event.target.value)} placeholder="例如：2018–2023" /></Field>
+                  <Field label="安装位置"><input value={item.position || ''} onChange={(event) => updateFitment(item.id, 'position', event.target.value)} placeholder="例如：前轴 / 左侧" /></Field>
+                  <Field label="发动机代码"><input value={item.engineCodes || ''} onChange={(event) => updateFitment(item.id, 'engineCodes', event.target.value)} placeholder="例如：DCBE, DCBD" /></Field>
+                  <Field label="变速箱代码"><input value={item.transmissionCodes || ''} onChange={(event) => updateFitment(item.id, 'transmissionCodes', event.target.value)} placeholder="例如：A48.00" /></Field>
+                  <Field label="市场代码"><input value={item.marketCodes || ''} onChange={(event) => updateFitment(item.id, 'marketCodes', event.target.value)} placeholder="CN, EU" /></Field>
+                  <Field label="车身形式"><input value={item.bodyStyles || ''} onChange={(event) => updateFitment(item.id, 'bodyStyles', event.target.value)} placeholder="SUV, Coupe" /></Field>
+                  <Field label="驱动形式"><input value={item.driveTypes || ''} onChange={(event) => updateFitment(item.id, 'driveTypes', event.target.value)} placeholder="AWD" /></Field>
+                  <Field label="PR 代码"><input value={item.prCodes || ''} onChange={(event) => updateFitment(item.id, 'prCodes', event.target.value)} placeholder="例如：1ZT, 1ZK" /></Field>
+                </div><div className="fitment-rule-grid"><RuleBuilder title="包含规则" tone="include" rules={item.includeRules || []} onChange={(rules) => updateFitment(item.id, 'includeRules', rules)} /><RuleBuilder title="排除规则" tone="exclude" rules={item.excludeRules || []} onChange={(rules) => updateFitment(item.id, 'excludeRules', rules)} /></div><div className="sku-form-grid fitment-legacy-notes"><Field label="包含备注"><input value={item.condition || ''} onChange={(event) => updateFitment(item.id, 'condition', event.target.value)} placeholder="补充无法结构化的说明" /></Field><Field label="排除备注"><input value={item.exclusion || ''} onChange={(event) => updateFitment(item.id, 'exclusion', event.target.value)} placeholder="保留旧资料说明" /></Field><Field label="数据来源"><input disabled value={draft.evidence.sourceSystem} /></Field></div></article>
+              })}{!draft.fitments.length ? <div className="fitment-empty"><Cube size={31} weight="duotone" /><strong>尚未添加适配车型</strong><span>只有完成适配核验的 SKU 才能进入发布状态。</span><button type="button" onClick={addFitment}><Plus size={17} weight="bold" />添加第一条适配</button></div> : null}</div>
             </> : null}
 
             {step === 'review' ? <>

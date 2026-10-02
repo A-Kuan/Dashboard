@@ -47,7 +47,10 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 - `GET /api/v2/catalog/vehicle-platforms?q=&status=`：读取独立于旧车型业务的车型平台主数据、适配使用数和越界风险数。
 - `GET /api/v2/catalog/vehicle-platforms/:id`：读取平台完整资料及不可覆盖的版本历史。
 - `POST /api/v2/catalog/vehicle-platforms` / `PATCH /api/v2/catalog/vehicle-platforms/:id`：资料管理员建立或按 `expectedVersion` 更新平台；启用前必须有年款边界和来源依据。
-- `GET /api/v2/catalog/fitment-conflicts?state=&q=&skuId=`：实时扫描未识别/未启用平台、年款越界、条件自相矛盾、同 SKU 范围重叠和同 OE 多资料冲突。
+- `GET /api/v2/catalog/vehicle-variants?platformId=&q=&status=`：读取平台下的车型版本，可按平台、状态、版本/发动机/PR 关键词筛选。
+- `GET /api/v2/catalog/vehicle-variants/:id`：读取车型版本和不可覆盖的版本历史。
+- `POST /api/v2/catalog/vehicle-variants` / `PATCH /api/v2/catalog/vehicle-variants/:id`：资料管理员建立或按 `expectedVersion` 更新车型版本；启用前必须有年款、发动机代码和来源依据，且不能超出平台边界。
+- `GET /api/v2/catalog/fitment-conflicts?state=&q=&skuId=`：实时扫描未识别/未启用平台、版本平台不符、未启用版本、年款/版本字段越界、结构化条件矛盾、同 SKU 范围重叠和同 OE 多资料冲突。
 - `POST /api/v2/catalog/fitment-conflicts/resolve`：审核员对成对冲突提交版本锁、必填依据和 `accepted_overlap`、`same_application` 或 `correction_required` 结论。
 - `GET /api/v2/catalog/conflicts`：读取有效 SKU 之间的规范化编号冲突及已有处理结论。
 - `POST /api/v2/catalog/conflicts/resolve`：对一组 SKU 与编号写入带版本锁的人工判断和依据。
@@ -73,9 +76,9 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 批量状态操作返回 `succeeded`、`failed`、`results` 和 `failures`。部分失败不会撤销已经成功的记录，也不会跳过单条资料原有的审核事件与变更快照；调用方需要明确展示失败原因并允许重新选择处理。
 
-质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、适配专项审核、车型平台/范围冲突、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。适配关系可以在 SKU 提交审核前后处理，但所有关系必须处于 `verified` 且没有开放的适配冲突，才能批准整条 SKU。录入员不能自行写入已通过状态；新增或实质修改平台、年款、发动机、PR 码、位置、包含/排除条件时，关系自动回到 `pending`。
+质量队列目前检查标准名称、品牌与分类、主 OE、适配车型、适配专项审核、车型平台/版本/范围冲突、来源证据和跨 SKU 编号冲突。草稿与待审核资料始终进入队列；已核验资料出现新风险时也会重新进入队列。适配关系可以在 SKU 提交审核前后处理，但所有关系必须处于 `verified` 且没有开放的适配冲突，才能批准整条 SKU。录入员不能自行写入已通过状态；新增或实质修改平台、车型版本、年款、发动机、变速箱、市场、车身、驱动、PR 码、位置、包含/排除规则时，关系自动回到 `pending`。
 
-适配审批要求平台编码能够匹配一条已启用的车型平台、年款位于平台生产边界内，且来源证据齐全；不满足时返回 `422 FITMENT_REVIEW_BLOCKED`。SKU 最终批准前再次运行跨关系冲突扫描，存在开放冲突时返回 `422 FITMENT_CONFLICT_BLOCKED`。`correction_required` 只记录退回依据，不解除阻断；只有确认条件可区分或同一应用的结论才解除阻断。审核会同时提升适配关系版本和 SKU 版本，写入不可覆盖的 `catalog_fitment_review_event` 及 SKU 变更快照。并发版本不一致分别返回 `CATALOG_VERSION_CONFLICT` 或 `FITMENT_REVIEW_VERSION_CONFLICT`。平台管理仅授予资料管理员，适配冲突结论授予资料审核员和资料管理员。
+适配审批要求平台编码能够匹配一条已启用平台、年款位于平台边界内，且来源证据齐全。选择车型版本时，还会校验版本归属、状态、年款和发动机/变速箱/市场/车身/驱动/PR 范围；包含与排除规则不能相互矛盾。不满足时返回 `422 FITMENT_REVIEW_BLOCKED`。SKU 最终批准前再次运行跨关系冲突扫描，存在开放冲突时返回 `422 FITMENT_CONFLICT_BLOCKED`。`correction_required` 只记录退回依据，不解除阻断；只有确认条件可区分或同一应用的结论才解除阻断。审核会同时提升适配关系版本和 SKU 版本，写入不可覆盖的 `catalog_fitment_review_event` 及 SKU 变更快照。并发版本不一致分别返回 `CATALOG_VERSION_CONFLICT` 或 `FITMENT_REVIEW_VERSION_CONFLICT`。平台及车型版本管理仅授予资料管理员，适配冲突结论授予资料审核员和资料管理员。
 
 编号冲突支持三种结论：`shared_reference`（合法共用参考号）、`separate_scope`（适用范围不同）和 `merge_required`（确认为重复、待合并）。前两种结论会解除对应 SKU 对之间的质量阻断；`merge_required` 继续保留冲突，防止资料在真正合并前通过审核。每次判断必须填写依据，同时提升两条 SKU 的版本并分别写入 `resolve_identifier_conflict` 变更快照。
 
@@ -111,7 +114,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 ### 运营指标
 
 - `GET /api/v2/catalog/metrics?days=30`：读取指定统计周期内的真实资料、审核与导入聚合数据，`days` 支持 14、30 或 90。
-- `GET /api/v2/catalog/export?format=json|csv&status=`：仅资料管理员可用。JSON 返回含 SKU/适配版本历史、车型平台及其变更快照、适配冲突结论、编号冲突结论、合并索引、数据计数与 SHA-256 校验值的 `catalog-export-v1` 审计包；CSV 返回便于表格核对的一行一 SKU 视图。单次最多 5000 条。
+- `GET /api/v2/catalog/export?format=json|csv&status=`：仅资料管理员可用。JSON 返回含 SKU/适配版本历史、车型平台与车型版本及其变更快照、适配冲突结论、编号冲突结论、合并索引、数据计数与 SHA-256 校验值的 `catalog-export-v1` 审计包；CSV 返回便于表格核对的一行一 SKU 视图。单次最多 5000 条。
 
 响应包含资料状态、完整度区间、质量问题、审核提交/通过/退回/平均耗时/逾期数、导入批次与成功率，以及按日汇总的创建、提交、通过和退回趋势。日期边界按 `Asia/Shanghai` 业务日计算；没有数据时返回零值，不生成演示数据。
 
