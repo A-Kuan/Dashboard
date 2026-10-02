@@ -2,6 +2,7 @@
 Description=Dashboard SKU API operational integrity check
 After=dashboard-sku-api.service
 Requires=dashboard-sku-api.service
+OnFailure=dashboard-sku-alert@operations-check.service
 
 [Service]
 Type=oneshot
@@ -10,6 +11,7 @@ Group=dashboard-sku
 WorkingDirectory=/opt/dashboard-sku-api/current
 Environment=NODE_ENV=production
 Environment=CATALOG_BACKUP_DIR=/opt/dashboard-sku-api/backups
+EnvironmentFile=-/etc/dashboard-sku/backup-offsite.env
 ExecStart=/usr/bin/node scripts/check-operations.mjs
 UMask=0027
 NoNewPrivileges=true

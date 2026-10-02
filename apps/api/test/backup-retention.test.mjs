@@ -72,3 +72,20 @@ test('refuses an unexpectedly broad deletion plan', async () => {
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('removes a matching offsite receipt only with its managed scheduled set', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dashboard-retention-receipt-'))
+  try {
+    const now = Date.parse('2026-10-02T12:00:00.000Z')
+    const recent = await backupSet(directory, { index: 1, createdAt: new Date(now) })
+    const old = await backupSet(directory, { index: 2, createdAt: new Date(now - 30 * 86400000) })
+    const receiptPath = join(directory, `${old.base}.offsite.json`)
+    await writeFile(receiptPath, '{}\n')
+    const result = await pruneScheduledBackups({ directory, apply: true, keepRecent: 1, keepWeekly: 0, minimumAgeHours: 0, now: () => now })
+    assert.equal(result.deletedSets, 1)
+    assert.equal(await exists(receiptPath), false)
+    assert.ok(await exists(recent.manifest))
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})

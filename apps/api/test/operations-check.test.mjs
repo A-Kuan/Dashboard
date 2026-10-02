@@ -26,6 +26,17 @@ async function fixture() {
   return { root, backupDirectory, manifestPath, cleanup: () => rm(root, { recursive: true, force: true }) }
 }
 
+async function addScheduledOffsiteReceipt(files) {
+  const manifestName = 'scheduled.manifest.json'
+  const manifestPath = join(files.backupDirectory, manifestName)
+  await writeFile(manifestPath, `${JSON.stringify({ purpose: 'scheduled' })}\n`)
+  await writeFile(join(files.backupDirectory, 'scheduled.offsite.json'), `${JSON.stringify({
+    receiptVersion: 'dashboard-offsite-backup-v1', status: 'complete', provider: 'aliyun-oss', manifest: manifestName,
+    bucket: 'backup-bucket', region: 'oss-cn-hangzhou', uploadedAt: '2026-10-02T09:59:00.000Z', objects: [{}, {}, {}],
+  })}\n`)
+  return manifestPath
+}
+
 test('checks release identity, readiness, metrics, backup integrity and storage together', async () => {
   const files = await fixture()
   try {
@@ -73,6 +84,36 @@ test('fails closed for a stale backup or saturated database pool', async () => {
         ? response({ status: 'ready', releaseRevision: revision })
         : response(`dashboard_api_build_info{revision="${revision}"} 1\ndashboard_api_database_pool_waiting_requests 7\n`),
     }), /7 waiting requests/)
+  } finally {
+    await files.cleanup()
+  }
+})
+
+test('requires a matching complete offsite receipt when configured', async () => {
+  const files = await fixture()
+  try {
+    const scheduledManifest = await addScheduledOffsiteReceipt(files)
+    const checkedAt = Date.parse('2026-10-02T10:00:00.000Z')
+    const result = await checkApiOperations({
+      endpoint: 'http://api.test', releaseDirectory: files.root, backupDirectory: files.backupDirectory, now: () => checkedAt,
+      requireOffsiteBackup: true,
+      fetchImpl: async (url) => url.endsWith('/api/ready')
+        ? response({ status: 'ready', releaseRevision: revision })
+        : response(`dashboard_api_build_info{revision="${revision}"} 1\ndashboard_api_database_pool_waiting_requests 0\n`),
+      verifyBackup: async () => ({ valid: true }), getAvailableBytes: async () => 4 * 1024 * 1024 * 1024,
+    })
+    assert.equal(result.offsite.provider, 'aliyun-oss')
+    assert.equal(result.offsite.objects, 3)
+    await rm(join(files.backupDirectory, 'scheduled.offsite.json'))
+    await assert.rejects(checkApiOperations({
+      endpoint: 'http://api.test', releaseDirectory: files.root, backupDirectory: files.backupDirectory, now: () => checkedAt,
+      requireOffsiteBackup: true,
+      fetchImpl: async (url) => url.endsWith('/api/ready')
+        ? response({ status: 'ready', releaseRevision: revision })
+        : response(`dashboard_api_build_info{revision="${revision}"} 1\ndashboard_api_database_pool_waiting_requests 0\n`),
+      verifyBackup: async () => ({ valid: true }), getAvailableBytes: async () => 4 * 1024 * 1024 * 1024,
+    }), /valid offsite receipt/)
+    assert.ok(scheduledManifest)
   } finally {
     await files.cleanup()
   }

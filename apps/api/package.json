@@ -10,6 +10,7 @@
     "backup": "node scripts/backup-database.mjs",
     "backup:verify": "node scripts/verify-backup.mjs",
     "backup:scheduled": "node scripts/run-scheduled-backup.mjs",
+    "alert:send": "node scripts/send-operational-alert.mjs",
     "backup:prune": "node scripts/prune-backups.mjs",
     "restore:verify": "node scripts/verify-restored-database.mjs",
     "operations:check": "node scripts/check-operations.mjs",
@@ -17,6 +18,8 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@alicloud/credentials": "2.4.7",
+    "ali-oss": "6.23.0",
     "fastify": "^5.6.1",
     "pg": "^8.16.3"
   }

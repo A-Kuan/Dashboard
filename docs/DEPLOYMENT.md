@@ -164,6 +164,31 @@ systemctl status dashboard-sku-backup.service dashboard-sku-backup.timer
 
 首次启用必须手动运行一次 service，确认输出 `status=ok`、新清单 `purpose=scheduled`、配套文件校验通过且 `deletedSets=0`。不得用通配符或独立的系统清理任务删除备份目录。
 
+### OSS 异地副本与主动告警
+
+每日备份可以在本机校验通过后复制到阿里云 OSS。上传固定采用“数据库归档、EPC 资源、清单”顺序，只有前三个对象逐一通过远端元数据校验后才原子写入本机 `.offsite.json` 完成凭据；清单在最后上传，因此远端存在清单即表示整组对象已提交。对象启用服务端 AES256 加密并禁止同名覆盖，重试时只接受校验值完全相同的既有对象。程序不具备远端删除逻辑。
+
+OSS Bucket 必须启用版本控制，并使用独立、最小权限的 RAM 身份，只授予目标前缀的 PutObject、HeadObject/GetObject 权限，不授予 DeleteObject、Bucket 管理或其他业务 Bucket 权限。生产首选把该 RAM 角色绑定到 ECS，设置 `OSS_ECS_RAM_ROLE` 后由官方凭据组件通过 IMDSv2 获取短期 STS 凭据；不在服务器落长期 AccessKey。静态密钥只作为兼容回退，两种凭据来源不能同时启用。建议使用不同地域的专用 Bucket，并在 OSS 侧配置生命周期；仓库和 journal 中不得保存或输出访问密钥。
+
+先从 `deploy/backup-offsite.env.example` 创建只允许 root 读取的配置。首次启用时保留 `OFFSITE_BACKUP_REQUIRED=0`，手动生成一份每日备份并确认 `offsite.status=complete`、三项对象和本机 receipt 均存在；再设为 `1`。设为 required 后，每五分钟巡检会把“最新每日备份缺少完整异地凭据”视为故障。
+
+```bash
+sudo install -d -o root -g root -m 0750 /etc/dashboard-sku
+sudo install -o root -g root -m 0600 deploy/backup-offsite.env.example /etc/dashboard-sku/backup-offsite.env
+sudo install -o root -g root -m 0600 deploy/notifications.env.example /etc/dashboard-sku/notifications.env
+# 使用 root 编辑上面两个文件并填入真实值；不要把结果复制回仓库。
+
+sudo install -m 0644 deploy/dashboard-sku-alert@.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-backup.service /etc/systemd/system/
+sudo install -m 0644 deploy/dashboard-sku-operations-check.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start dashboard-sku-backup.service
+sudo systemctl start dashboard-sku-alert@manual-test.service
+journalctl -u dashboard-sku-backup.service -u dashboard-sku-alert@manual-test.service --since '-10 minutes' --no-pager
+```
+
+备份或五分钟巡检失败时，systemd 会调用统一通知单元。通知支持钉钉签名机器人、企业微信机器人和普通 JSON webhook；内容只包含来源、主机、时间和故障提示，不包含密钥、数据库内容或请求头。同一来源默认 30 分钟只通知一次，防止持续故障造成消息风暴；通知发送失败不会递归触发自身。
+
 恢复不能直接覆盖生产库。仓库内的恢复演练工具只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
 
 ```bash
@@ -223,7 +248,7 @@ sudo systemctl start dashboard-sku-operations-check.service
 systemctl status dashboard-sku-operations-check.service dashboard-sku-operations-check.timer
 ```
 
-该定时检查提供本机故障信号，不等同于站外通知。短信、企业微信或邮件通知应在确认接收渠道后接入，不能在仓库中保存 webhook 或令牌。
+该定时检查同时核对可选的异地备份凭据；失败会通过 `dashboard-sku-alert@.service` 发送站外通知。真实 webhook 与签名密钥只能保存在 `/etc/dashboard-sku/notifications.env`，不能写入仓库。
 
 完整浏览器回归会建立和修改验收数据，只能用于本地或一次性数据库，不得直接指向生产。生产环境使用只读冒烟脚本：
 
