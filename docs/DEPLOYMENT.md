@@ -37,7 +37,7 @@ npm run test:sites
 - PostgreSQL 数据库：`dashboard_sku`
 - PostgreSQL / 系统用户：`dashboard-sku`
 - 外部接口前缀：`/sku-preview/api/`
-- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002T111303Z-f416a437`
+- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002T113721Z-d4637500`
 - 空库备份：`/opt/dashboard-sku-api/backups/20260927-pre-smoke-empty.dump`
 - 本次迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-b885538.dump`
 - 版本锁迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-3de9223.dump`
@@ -56,6 +56,7 @@ npm run test:sites
 - 可观测性与恢复演练发布备份：`/opt/dashboard-sku-api/backups/20261002T101322Z-0b4ee179-dashboard_sku.dump`（SHA-256 `ecebcc38e1eda0f47ff1709ef61237bb4eb3a94d3b872610ab157f4cca6c339c`，2,115,796 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `1936622781d1341965c434c8c768a1132beb73ef038bc01110f97a5bab13eac8`，8,381 字节）；三者属主均为 `dashboard-sku:dashboard-sku`，权限均为 `0640`
 - 首份带版本来源的每日自动备份：`/opt/dashboard-sku-api/backups/20261002T104114Z-7c0f7bc9-dashboard_sku.dump`（SHA-256 `99d7c4daec391210ca4914fd61ed0dcd503973a5b59881feee70184d912446fd`，2,115,796 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `9e9304ec71d36a2361d53e5bbdad7990944ddb8ca088865127ed1e3ca3fdbb2e`，8,407 字节）；清单 `purpose=scheduled`、`releaseRevision=0c1213d60041296be8e8b13e90b2638e2effa009`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
 - 异地备份能力上线后的本机验证备份：`/opt/dashboard-sku-api/backups/20261002T111521Z-14bd7736-dashboard_sku.dump`（SHA-256 `525237654810b39176e1b2e3b22eaf111a8c9a275b18951671194a6551c2a4a3`，2,115,796 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `8be1ab4adc41e6fc0c52aa75bfe6a8b6f518cdb0f775ca50fe5d18953209f88b`，8,407 字节）；清单 `purpose=scheduled`、`releaseRevision=f416a4376bcfca74acb314a1aad87cc73665892e`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
+- 每月异地恢复能力发布备份：`/opt/dashboard-sku-api/backups/20261002T113756Z-f3cd63ed-dashboard_sku.dump`（SHA-256 `3bb9bb392125c3116bbf99787f92661084aaa7c11821cde7cb950fb220aefd61`，2,115,796 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `255c4c865273950449111fe78c855f562bf73fd49193ff22a94c6be0324a0062`，8,405 字节）；清单 `purpose=release`、`releaseRevision=d463750070b15c99a2935ab84ce3d06d4b798b37`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
 
 API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
 
@@ -323,6 +324,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:production-sm
 `20261002T104035Z-0c1213d6` API 发布后已在线验证每日自动备份与安全保留：发布备份标记为 `purpose=release`，不进入自动清理；每日 timer 已启用并安排在次日 03:20 后随机 15 分钟内运行。手动触发生成了带完整 release SHA 的 `purpose=scheduled` 配套备份，归档、EPC 快照、关键表数量和校验值均通过；策略识别 2 组每日备份、保留 2 组、删除 0，历史、发布与不完整文件均未接管。该定时备份又完成一次隔离恢复，30 个迁移与 API 冒烟通过，随后验证数据库和临时目录均清零。发布前后保持 17 条旧 SKU、46 条 OE、1 条适配、20 条变更记录，新 `catalog_sku` 为 0，systemd 无失败单元；API 回滚点为 `20261002T103305Z-c503953f`。
 
 `20261002T111303Z-f416a437` API 发布后已在线验证 OSS 异地副本与主动告警基础设施：受保护主分支、服务器 79 项 API 测试、隔离浏览器回归和线上只读冒烟均通过；API readiness 返回完整提交 `f416a4376bcfca74acb314a1aad87cc73665892e`。每日备份与五分钟巡检已接入统一 OnFailure 通知单元，配置目录权限为 `0750 root:root`，两个私有配置均为 `0600 root:root`；手动通知测试在未配置 webhook 时安全返回 disabled。手动每日备份生成并复核归档、EPC 快照与清单，输出 `offsite.status=disabled`、保留 3 组、删除 0；巡检明确返回 `offsite.status=not-required`。OSS 上传和外部通知保持显式关闭，等待专用 Bucket/RAM 角色与真实接收渠道后再启用，不使用虚构凭据。发布前后保持 17 条旧 SKU、46 条 OE、1 条适配、20 条变更记录，新 `catalog_sku` 为 0；API、两项 timer 均 active，systemd 无失败单元，API 回滚点为 `20261002T104035Z-0c1213d6`。
+
+`20261002T113721Z-d4637500` API 发布后已在线验证每月异地恢复演练基础设施：服务器 81 项 API 测试、受保护主分支、隔离浏览器回归和线上只读冒烟通过；月度 timer 已启用，首次计划在 2026-10-04 04:20:51 CST 运行。未配置 OSS 时手动启动安全返回 `status=disabled`，`offsite-restore-drills` 不留下载目录、恢复数据库计数为 0。扩展后的本机恢复入口又使用本次发布备份完成真实隔离恢复，30 个迁移、API readiness、旧 SKU、v2 资料、指标与 EPC 解压全部通过，随后一次性数据库及两类临时目录均清零。OSS 上传、远端下载和外部通知继续显式关闭，等待真实 Bucket、RAM 角色与 webhook 后再进行第一次远端恢复。发布前后保持 17 条旧 SKU、46 条 OE、1 条适配、20 条变更记录，新 `catalog_sku` 为 0；API、三项 timer 均 active，systemd 无失败单元，API 回滚点为 `20261002T111303Z-f416a437`。
 
 ## 回滚
 
