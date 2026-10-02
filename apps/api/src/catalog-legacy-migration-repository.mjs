@@ -214,16 +214,33 @@ function previewItem(snapshot, mapped, sourceHash, migrated, issues) {
   }
 }
 
-function planView(plan, items = []) {
+function actorDetails(actor) {
+  if (typeof actor === 'string') return { id: `legacy:${text(actor)}`, name: text(actor), role: '', identityProvider: 'legacy' }
+  return { id: text(actor?.id), name: text(actor?.name), role: text(actor?.role), identityProvider: text(actor?.identityProvider) }
+}
+
+async function insertPlanEvent(client, planId, action, actor, note = '', payload = {}) {
+  const identity = actorDetails(actor)
+  await client.query(`INSERT INTO catalog_legacy_migration_plan_event
+    (id,plan_id,action,actor_id,actor_name,actor_role,identity_provider,note,payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), planId, action, identity.id, identity.name,
+    identity.role, identity.identityProvider, text(note), JSON.stringify(payload)])
+}
+
+function planView(plan, items = [], events = []) {
   return {
     id: plan.id, state: plan.state, reason: plan.reason, migrateCount: plan.migrate_count, excludeCount: plan.exclude_count,
-    version: plan.version, createdBy: plan.created_by, createdAt: plan.created_at, submittedAt: plan.submitted_at,
-    reviewedBy: plan.reviewed_by, reviewedAt: plan.reviewed_at, reviewNote: plan.review_note,
-    committedBatchId: plan.committed_batch_id, committedBy: plan.committed_by, committedAt: plan.committed_at,
+    version: plan.version, createdBy: plan.created_by, createdById: plan.created_by_id, createdByRole: plan.created_by_role,
+    createdAt: plan.created_at, submittedAt: plan.submitted_at, reviewedBy: plan.reviewed_by, reviewedById: plan.reviewed_by_id,
+    reviewedByRole: plan.reviewed_by_role, reviewedAt: plan.reviewed_at, reviewNote: plan.review_note,
+    committedBatchId: plan.committed_batch_id, committedBy: plan.committed_by, committedById: plan.committed_by_id,
+    committedByRole: plan.committed_by_role, committedAt: plan.committed_at,
     items: items.map((item) => ({
       id: item.id, legacySkuId: item.legacy_sku_id, sourceHash: item.source_hash, decision: item.decision,
       exclusionReason: item.exclusion_reason, overrides: item.overrides, preview: item.preview_snapshot, sortOrder: item.sort_order,
     })),
+    events: events.map((event) => ({ id: event.id, action: event.action, actorId: event.actor_id, actorName: event.actor_name,
+      actorRole: event.actor_role, identityProvider: event.identity_provider, note: event.note, payload: event.payload, createdAt: event.created_at })),
   }
 }
 
@@ -374,6 +391,8 @@ export function createCatalogLegacyMigrationRepository(pool) {
     },
 
     async createPlan(rawInput, actor) {
+      const identity = actorDetails(actor)
+      if (!identity.id || !identity.name) throw problem('CATALOG_IDENTITY_REQUIRED', '提交迁移方案需要可信操作人身份', 401)
       const candidates = Array.isArray(rawInput?.items) ? rawInput.items : []
       if (!candidates.length || candidates.length > 100) throw problem('INVALID_LEGACY_MIGRATION_PLAN', '迁移方案需包含 1 至 100 条处理决定', 400)
       const ids = candidates.map((item) => text(item?.legacySkuId))
@@ -411,14 +430,16 @@ export function createCatalogLegacyMigrationRepository(pool) {
         const migrateCount = prepared.filter((item) => item.decision === 'migrate').length
         const excludeCount = prepared.length - migrateCount
         const plan = (await client.query(`INSERT INTO catalog_legacy_migration_plan
-          (id,state,reason,migrate_count,exclude_count,created_by) VALUES ($1,'submitted',$2,$3,$4,$5) RETURNING *`,
-        [planId, reason, migrateCount, excludeCount, actor])).rows[0]
+          (id,state,reason,migrate_count,exclude_count,created_by,created_by_id,created_by_role) VALUES ($1,'submitted',$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [planId, reason, migrateCount, excludeCount, identity.name, identity.id, identity.role])).rows[0]
         for (const item of prepared) await client.query(`INSERT INTO catalog_legacy_migration_plan_item
           (id,plan_id,legacy_sku_id,source_hash,decision,exclusion_reason,overrides,preview_snapshot,sort_order)
           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)`, [randomUUID(), planId, item.legacySkuId, item.sourceHash,
           item.decision, item.exclusionReason, JSON.stringify(item.overrides), JSON.stringify(item.preview), item.sortOrder])
+        await insertPlanEvent(client, planId, 'submitted', identity, reason, { migrateCount, excludeCount })
         const itemRows = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [planId])).rows
-        return planView(plan, itemRows)
+        const events = (await client.query('SELECT * FROM catalog_legacy_migration_plan_event WHERE plan_id=$1 ORDER BY created_at,id', [planId])).rows
+        return planView(plan, itemRows, events)
       })
     },
 
@@ -434,10 +455,12 @@ export function createCatalogLegacyMigrationRepository(pool) {
       const plan = (await pool.query('SELECT * FROM catalog_legacy_migration_plan WHERE id=$1', [id])).rows[0]
       if (!plan) return null
       const items = (await pool.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
-      return planView(plan, items)
+      const events = (await pool.query('SELECT * FROM catalog_legacy_migration_plan_event WHERE plan_id=$1 ORDER BY created_at,id', [id])).rows
+      return planView(plan, items, events)
     },
 
     async reviewPlan(id, rawInput, actor) {
+      const identity = actorDetails(actor)
       const decision = rawInput?.decision === 'reject' ? 'reject' : rawInput?.decision === 'approve' ? 'approve' : ''
       const note = text(rawInput?.note)
       if (!decision) throw problem('INVALID_LEGACY_MIGRATION_REVIEW', '请选择通过或退回', 400)
@@ -447,30 +470,47 @@ export function createCatalogLegacyMigrationRepository(pool) {
         if (!plan) throw problem('LEGACY_MIGRATION_PLAN_NOT_FOUND', '迁移方案不存在', 404)
         if (plan.state !== 'submitted') throw problem('LEGACY_MIGRATION_PLAN_STATE_CONFLICT', '只有待审核方案可以审核', 409, { state: plan.state })
         if (Number(rawInput?.expectedVersion) !== plan.version) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案已被其他人更新，请刷新后重试', 409, { currentVersion: plan.version })
-        const next = (await client.query(`UPDATE catalog_legacy_migration_plan SET state=$2,reviewed_by=$3,reviewed_at=now(),review_note=$4,version=version+1
-          WHERE id=$1 RETURNING *`, [id, decision === 'approve' ? 'approved' : 'rejected', actor, note])).rows[0]
+        if (identity.id === plan.created_by_id) throw problem('LEGACY_MIGRATION_SELF_REVIEW_FORBIDDEN', '方案提交人不能审核自己的迁移方案', 403)
+        const next = (await client.query(`UPDATE catalog_legacy_migration_plan SET state=$2,reviewed_by=$3,reviewed_by_id=$4,reviewed_by_role=$5,
+          reviewed_at=now(),review_note=$6,version=version+1 WHERE id=$1 RETURNING *`,
+        [id, decision === 'approve' ? 'approved' : 'rejected', identity.name, identity.id, identity.role, note])).rows[0]
+        await insertPlanEvent(client, id, decision === 'approve' ? 'approved' : 'rejected', identity, note)
         const items = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
-        return planView(next, items)
+        const events = (await client.query('SELECT * FROM catalog_legacy_migration_plan_event WHERE plan_id=$1 ORDER BY created_at,id', [id])).rows
+        return planView(next, items, events)
       })
     },
 
     async commitPlan(id, rawInput, actor) {
+      const identity = actorDetails(actor)
       const plan = await this.getPlan(id)
       if (!plan) throw problem('LEGACY_MIGRATION_PLAN_NOT_FOUND', '迁移方案不存在', 404)
       if (plan.state !== 'approved') throw problem('LEGACY_MIGRATION_PLAN_STATE_CONFLICT', '只有已批准方案可以正式迁移', 409, { state: plan.state })
       if (Number(rawInput?.expectedVersion) !== plan.version) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案已被其他人更新，请刷新后重试', 409, { currentVersion: plan.version })
-      const claimed = (await pool.query(`UPDATE catalog_legacy_migration_plan SET state='committing',version=version+1
-        WHERE id=$1 AND state='approved' AND version=$2 RETURNING *`, [id, plan.version])).rows[0]
+      const claimed = await withTransaction(pool, async (client) => {
+        const row = (await client.query(`UPDATE catalog_legacy_migration_plan SET state='committing',version=version+1
+          WHERE id=$1 AND state='approved' AND version=$2 RETURNING *`, [id, plan.version])).rows[0]
+        if (row) await insertPlanEvent(client, id, 'commit_started', identity, '', { expectedVersion: plan.version })
+        return row
+      })
       if (!claimed) throw problem('LEGACY_MIGRATION_PLAN_VERSION_CONFLICT', '方案状态已变化，请刷新查看结果', 409)
       try {
         const migratable = plan.items.filter((item) => item.decision === 'migrate')
-        const batch = await this.commit({ reason: `已批准方案 ${plan.id}：${plan.reason}`, items: migratable.map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, overrides: item.overrides })) }, actor)
-        const updated = (await pool.query(`UPDATE catalog_legacy_migration_plan SET state='committed',committed_batch_id=$2,committed_by=$3,
-          committed_at=now(),version=version+1 WHERE id=$1 AND state='committing' AND version=$4 RETURNING *`, [id, batch.id, actor, claimed.version])).rows[0]
-        const items = (await pool.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
-        return { ...planView(updated, items), batch }
+        const batch = await this.commit({ reason: `已批准方案 ${plan.id}：${plan.reason}`, items: migratable.map((item) => ({ legacySkuId: item.legacySkuId, sourceHash: item.sourceHash, overrides: item.overrides })) }, identity.name)
+        return withTransaction(pool, async (client) => {
+          const updated = (await client.query(`UPDATE catalog_legacy_migration_plan SET state='committed',committed_batch_id=$2,committed_by=$3,
+            committed_by_id=$4,committed_by_role=$5,committed_at=now(),version=version+1
+            WHERE id=$1 AND state='committing' AND version=$6 RETURNING *`, [id, batch.id, identity.name, identity.id, identity.role, claimed.version])).rows[0]
+          await insertPlanEvent(client, id, 'committed', identity, '', { batchId: batch.id, summary: batch.summary })
+          const items = (await client.query('SELECT * FROM catalog_legacy_migration_plan_item WHERE plan_id=$1 ORDER BY sort_order,created_at', [id])).rows
+          const events = (await client.query('SELECT * FROM catalog_legacy_migration_plan_event WHERE plan_id=$1 ORDER BY created_at,id', [id])).rows
+          return { ...planView(updated, items, events), batch }
+        })
       } catch (error) {
-        await pool.query("UPDATE catalog_legacy_migration_plan SET state='approved',version=version+1 WHERE id=$1 AND state='committing'", [id]).catch(() => {})
+        await withTransaction(pool, async (client) => {
+          await client.query("UPDATE catalog_legacy_migration_plan SET state='approved',version=version+1 WHERE id=$1 AND state='committing'", [id])
+          await insertPlanEvent(client, id, 'commit_failed', identity, error.message, { errorCode: error.errorCode || 'LEGACY_SKU_MIGRATION_FAILED' })
+        }).catch(() => {})
         throw error
       }
     },

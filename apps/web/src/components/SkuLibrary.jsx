@@ -233,7 +233,7 @@ export function SkuLibrary({ onNavigate, sidebarCollapsed, onToggleSidebar }) {
     return (
       <div className={`workbench-home sku-workspace legacy-migration-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <WorkbenchSidebar active="sku" collapsed={sidebarCollapsed} onToggle={onToggleSidebar} onNavigate={onNavigate} onUnavailable={(label) => notify(`${label}将在后续业务阶段接入`)} />
-        <SkuLegacyMigration capabilities={catalogSession?.capabilities || []} onBack={() => { setLegacyMigrationOpen(false); loadCatalog() }} onCompleted={() => loadCatalog()} onNotify={notify} />
+        <SkuLegacyMigration session={catalogSession} capabilities={catalogSession?.capabilities || []} onBack={() => { setLegacyMigrationOpen(false); loadCatalog() }} onCompleted={() => loadCatalog()} onNotify={notify} />
         {toast ? <div className="workbench-toast"><Check size={17} weight="bold" />{toast}</div> : null}
       </div>
     )

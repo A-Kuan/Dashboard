@@ -41,4 +41,6 @@ npm run build:server
 
 部署结构和回滚说明见 [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
 
+生产身份桥、角色映射与职责分离要求见 [docs/CATALOG_IDENTITY.md](./docs/CATALOG_IDENTITY.md)。
+
 品牌、零件大类、SKU 状态等选择项使用共享可配置字典，配置与接口约定见 [docs/DICTIONARIES.md](./docs/DICTIONARIES.md)。

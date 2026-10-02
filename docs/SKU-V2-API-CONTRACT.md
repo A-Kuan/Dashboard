@@ -7,7 +7,10 @@
 ### 旧 SKU 受控迁移
 
 - `GET /api/v2/catalog/legacy-migration-preview?q=&page=&pageSize=`：只读比对旧 SKU、OE 关系、适配与当前字典/新资料库，返回字段映射、来源哈希、阻断问题、复核提示和建议选择；不会写入数据。
-- `POST /api/v2/catalog/legacy-migrations`：资料录入及以上角色提交迁移原因与明确选中的 `{legacySkuId, sourceHash}`。服务端重新读取并校验来源哈希，只把无阻断问题的记录写为 `draft / unverified`，旧表不修改、不删除。
+- `POST /api/v2/catalog/legacy-migration-plans`：资料录入角色提交迁移、排除与字段修正决定，形成待审核方案，不立即写入新资料库。
+- `POST /api/v2/catalog/legacy-migration-plans/:id/review`：独立审核角色批准或退回方案；稳定用户 ID 与提交人相同时拒绝自审。
+- `POST /api/v2/catalog/legacy-migration-plans/:id/commit`：仅资料管理员可执行已批准方案。服务端重新读取并校验来源哈希，只把无阻断问题的记录写为 `draft / unverified`，旧表不修改、不删除。
+- `POST /api/v2/catalog/legacy-migrations`：已关闭直接迁移，始终要求先走方案审批。
 - `GET /api/v2/catalog/legacy-migrations/:id`：读取批次与逐条成功、跳过、失败结果。
 
 每条成功迁移都保存旧来源快照、映射快照、操作者、批次和 `migrate_legacy` 变更记录；重复提交同一旧 SKU 会返回 `skipped`，来源在预览后变化会返回冲突并要求重新预览。旧适配条件与图片地址在无法无损结构化时保留在来源快照并标记人工复核，不静默猜测标准字段。
@@ -30,7 +33,7 @@ v2 使用独立的 `catalog_*` 数据表。录入批次、来源证据、零件�
 
 - `GET /api/v2/catalog/session`：返回当前操作者、角色和能力列表。
 
-角色分为只读查看、资料录入、资料审核和资料管理员。开发环境默认使用资料管理员，并允许通过工作台角色菜单切换以验收权限；这不等同于正式登录。生产环境默认只读，只有在身份代理已经完成认证并设置 `TRUST_PROXY_IDENTITY=1` 时，服务端才接受代理传入的操作者与角色头。所有 v2 写接口都在服务端校验能力，前端禁用按钮仅用于交互提示。
+角色分为只读查看、资料录入、资料审核和资料管理员。开发环境默认使用资料管理员，并允许通过工作台角色菜单切换以验收权限；这不等同于正式登录。生产环境默认只读，只有身份代理完成认证、提供共享密钥与稳定用户 ID 后，服务端才接受代理传入的操作者与角色头，具体合同见 `CATALOG_IDENTITY.md`。新旧资料接口的写操作都在服务端校验能力，前端禁用按钮仅用于交互提示。
 
 ### 导入批次
 

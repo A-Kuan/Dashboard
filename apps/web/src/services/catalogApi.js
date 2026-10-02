@@ -10,10 +10,16 @@ export function setStoredCatalogRole(role) {
   window.localStorage.setItem(operatorRoleKey, role)
 }
 
+function operatorHeaders() {
+  const role = getStoredCatalogRole()
+  const name = role === 'catalog_editor' ? '开发资料员' : role === 'catalog_reviewer' ? '开发审核员' : role === 'catalog_viewer' ? '开发只读员' : '开发管理员'
+  return { 'x-operator-id': `development:${role}`, 'x-operator-name': encodeURIComponent(name), 'x-operator-role': role }
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
-    headers: { 'content-type': 'application/json', 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole(), ...options.headers },
+    headers: { 'content-type': 'application/json', ...operatorHeaders(), ...options.headers },
   })
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
@@ -490,7 +496,7 @@ export function cloneCatalogImportMapping(profileId, name) {
 
 export async function downloadCatalogImportTemplate() {
   const response = await fetch(`${apiBase}/api/v2/catalog/import-template?format=csv`, {
-    headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },
+    headers: operatorHeaders(),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -567,7 +573,7 @@ export async function downloadCatalogExport(format = 'json', status = '') {
   const params = new URLSearchParams({ format })
   if (status && status !== 'all') params.set('status', status)
   const response = await fetch(`${apiBase}/api/v2/catalog/export?${params}`, {
-    headers: { 'x-operator-name': 'hushanxing-workbench', 'x-operator-role': getStoredCatalogRole() },
+    headers: operatorHeaders(),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))

@@ -23,6 +23,10 @@ test('production workbench uses its real API without writing data', { skip: !bas
     assert.equal(sessionResponse.ok(), true)
     const session = await sessionResponse.json()
     await page.getByText(session.roleLabel, { exact: true }).waitFor({ state: 'visible', timeout: 10000 })
+    if (session.role === 'catalog_viewer') {
+      assert.equal(session.authenticated, false)
+      assert.equal(session.authMode, 'anonymous-readonly')
+    }
 
     assert.equal(await page.getByText('真实资料库为空，当前为开发演示数据', { exact: true }).isVisible().catch(() => false), false)
     assert.equal(await page.getByText('API 未连接，当前为开发演示数据', { exact: true }).isVisible().catch(() => false), false)
@@ -39,8 +43,8 @@ test('production workbench uses its real API without writing data', { skip: !bas
     assert.equal(planListResponse.ok(), true)
     assert.equal(await page.getByText('方案内 0 条迁移', { exact: false }).isVisible(), true)
     assert.equal(await page.getByRole('button', { name: '提交审核 0 条', exact: true }).isEnabled(), false)
-    if (!session.capabilities.includes('catalog.import')) assert.equal(await page.getByRole('button', { name: '选择全部建议项', exact: true }).isEnabled(), false)
-    if (!session.capabilities.includes('catalog.import')) {
+    if (!session.capabilities.includes('catalog.migration.plan')) assert.equal(await page.getByRole('button', { name: '选择全部建议项', exact: true }).isEnabled(), false)
+    if (!session.capabilities.includes('catalog.migration.plan')) {
       const denied = await page.request.post(new URL('api/v2/catalog/legacy-migration-plans', baseUrl).toString(), { data: { items: [], reason: '只读冒烟' } })
       assert.equal(denied.status(), 403)
     }

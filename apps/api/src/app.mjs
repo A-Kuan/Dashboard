@@ -99,7 +99,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/legacy-migrations', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })
-    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    const actor = requireCatalogCapability(request, reply, 'catalog.migration.execute')
     if (!actor) return
     return reply.code(409).send({ error: 'LEGACY_MIGRATION_PLAN_REQUIRED', message: '旧资料必须先提交迁移方案并通过审核' })
   })
@@ -113,9 +113,9 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/legacy-migration-plans', async (request, reply) => {
     if (!catalogLegacyMigrationRepository?.createPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
-    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    const actor = requireCatalogCapability(request, reply, 'catalog.migration.plan')
     if (!actor) return
-    return reply.code(201).send(await catalogLegacyMigrationRepository.createPlan(request.body, actor.name))
+    return reply.code(201).send(await catalogLegacyMigrationRepository.createPlan(request.body, actor))
   })
   app.get('/api/v2/catalog/legacy-migration-plans', async (request, reply) => {
     if (!catalogLegacyMigrationRepository?.listPlans) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
@@ -133,15 +133,15 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v2/catalog/legacy-migration-plans/:id/review', async (request, reply) => {
     if (!catalogLegacyMigrationRepository?.reviewPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
-    const actor = requireCatalogCapability(request, reply, 'catalog.review')
+    const actor = requireCatalogCapability(request, reply, 'catalog.migration.review')
     if (!actor) return
-    return catalogLegacyMigrationRepository.reviewPlan(request.params.id, request.body, actor.name)
+    return catalogLegacyMigrationRepository.reviewPlan(request.params.id, request.body, actor)
   })
   app.post('/api/v2/catalog/legacy-migration-plans/:id/commit', async (request, reply) => {
     if (!catalogLegacyMigrationRepository?.commitPlan) return reply.code(503).send({ error: 'LEGACY_MIGRATION_GOVERNANCE_UNAVAILABLE', message: '迁移方案服务未配置' })
-    const actor = requireCatalogCapability(request, reply, 'catalog.import')
+    const actor = requireCatalogCapability(request, reply, 'catalog.migration.execute')
     if (!actor) return
-    return catalogLegacyMigrationRepository.commitPlan(request.params.id, request.body, actor.name)
+    return catalogLegacyMigrationRepository.commitPlan(request.params.id, request.body, actor)
   })
   app.get('/api/v1/skus', async (request) => ({ items: await repository.list(request.query?.q || '') }))
   app.get('/api/v1/skus/:id', async (request, reply) => {
@@ -149,37 +149,47 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!item) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     return item
   })
-  app.post('/api/v1/skus/validate-code', async (request) => {
+  app.post('/api/v1/skus/validate-code', async (request, reply) => {
+    const actor = requireCatalogCapability(request, reply, 'catalog.read')
+    if (!actor) return
     const code = String(request.body?.skuCode || '').trim()
     return { available: Boolean(code) && !(await repository.codeExists(code, request.body?.exceptId || null)) }
   })
   app.post('/api/v1/skus', async (request, reply) => {
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     const input = { ...normalizeSkuInput(request.body), lifecycleStatus: '草稿' }
     if (await repository.codeExists(input.skuCode)) return reply.code(409).send({ error: 'SKU_CODE_EXISTS', message: 'SKU 编码已存在' })
-    return reply.code(201).send(await repository.create(input, request.headers['x-operator-name'] || '系统操作员'))
+    return reply.code(201).send(await repository.create(input, actor.name))
   })
   app.put('/api/v1/skus/:id', async (request, reply) => {
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     requireSkuVersion(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     const input = { ...normalizeSkuInput(request.body), lifecycleStatus: existing.lifecycleStatus }
     if (await repository.codeExists(input.skuCode, existing.id)) return reply.code(409).send({ error: 'SKU_CODE_EXISTS', message: 'SKU 编码已存在' })
-    return repository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '保存草稿')
+    return repository.update(existing.id, input, actor.name, '保存草稿')
   })
   app.post('/api/v1/skus/:id/publish', async (request, reply) => {
+    const actor = requireCatalogCapability(request, reply, 'catalog.submit')
+    if (!actor) return
     requireSkuVersion(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     const input = validatePublishableSku(normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '在售' }))
-    return repository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '发布 SKU')
+    return repository.update(existing.id, input, actor.name, '发布 SKU')
   })
   app.post('/api/v1/skus/:id/discontinue', async (request, reply) => {
+    const actor = requireCatalogCapability(request, reply, 'catalog.lifecycle')
+    if (!actor) return
     requireSkuVersion(request.body)
     const existing = await repository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'SKU_NOT_FOUND', message: 'SKU 不存在' })
     if (existing.lifecycleStatus !== '在售') return reply.code(409).send({ error: 'INVALID_STATUS_TRANSITION', message: '只有在售 SKU 可以停产' })
     const input = normalizeSkuInput({ ...existing, ...request.body, lifecycleStatus: '停产' })
-    return repository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '停产 SKU')
+    return repository.update(existing.id, input, actor.name, '停产 SKU')
   })
 
   app.get('/api/v1/vehicles', async (request, reply) => {
@@ -194,33 +204,41 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   })
   app.post('/api/v1/vehicles', async (request, reply) => {
     if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     const input = { ...normalizeVehicleInput(request.body), lifecycleStatus: '草稿' }
     if (await vehicleRepository.codeExists(input.vehicleCode)) return reply.code(409).send({ error: 'VEHICLE_CODE_EXISTS', message: '车型版本编码已存在' })
-    return reply.code(201).send(await vehicleRepository.create(input, request.headers['x-operator-name'] || '系统操作员'))
+    return reply.code(201).send(await vehicleRepository.create(input, actor.name))
   })
   app.put('/api/v1/vehicles/:id', async (request, reply) => {
     if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     requireVehicleVersion(request.body)
     const existing = await vehicleRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
     const input = normalizeVehicleInput({ ...existing, ...request.body, lifecycleStatus: existing.lifecycleStatus })
     if (await vehicleRepository.codeExists(input.vehicleCode, existing.id)) return reply.code(409).send({ error: 'VEHICLE_CODE_EXISTS', message: '车型版本编码已存在' })
-    return vehicleRepository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员')
+    return vehicleRepository.update(existing.id, input, actor.name)
   })
   app.post('/api/v1/vehicles/:id/publish', async (request, reply) => {
     if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.submit')
+    if (!actor) return
     requireVehicleVersion(request.body)
     const existing = await vehicleRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
     const input = normalizeVehicleInput({ ...existing, ...request.body, lifecycleStatus: '已发布' })
     if (!input.requirements.length) return reply.code(422).send({ error: 'VEHICLE_NOT_PUBLISHABLE', message: '至少需要一条常用配件记录' })
-    return vehicleRepository.update(existing.id, input, request.headers['x-operator-name'] || '系统操作员', '发布车型资料')
+    return vehicleRepository.update(existing.id, input, actor.name, '发布车型资料')
   })
   app.post('/api/v1/vehicles/:id/auto-match', async (request, reply) => {
     if (!vehicleRepository) return reply.code(503).send({ error: 'VEHICLE_SERVICE_UNAVAILABLE', message: '车型库服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'catalog.edit')
+    if (!actor) return
     const existing = await vehicleRepository.get(request.params.id)
     if (!existing) return reply.code(404).send({ error: 'VEHICLE_NOT_FOUND', message: '车型不存在' })
-    return vehicleRepository.autoMatch(existing.id, request.headers['x-operator-name'] || '系统操作员')
+    return vehicleRepository.autoMatch(existing.id, actor.name)
   })
 
   app.get('/api/v1/dictionaries', async (_request, reply) => {
