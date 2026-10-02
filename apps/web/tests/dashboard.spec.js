@@ -865,6 +865,69 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
   await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
 })
 
+test('runs an inquiry through supplier comparison, quote and follow-up', async ({ page }) => {
+  const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
+  const createdResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
+    customerName: '业务闭环测试汽修', contactName: '王师傅', channel: 'phone', vehicleLabel: 'Porsche Cayenne (95B)',
+    vin: 'WP1AA29P39LA12345', priority: 'high', nextAction: '核对 OE 并向供应商询价',
+    items: [
+      { requirementText: '前刹车片', oeNumber: '95B 698 151 H', requestedQuantity: 2, unit: '套', targetBrand: 'Porsche' },
+      { requirementText: '前制动盘', oeNumber: '95B 615 301 G', requestedQuantity: 1, unit: '对', targetBrand: 'Porsche' },
+    ],
+  } })
+  expect(createdResponse.status()).toBe(201)
+  let inquiry = await createdResponse.json()
+  expect(inquiry.status).toBe('new')
+  expect(inquiry.items).toHaveLength(2)
+
+  const firstOfferResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/items/${inquiry.items[0].id}/offers`, { headers: editorHeaders, data: {
+    supplierName: '华东供应商', brandLabel: 'Porsche', unitPrice: 600, availability: 'in_stock', leadTimeDays: 1, selected: true,
+  } })
+  expect(firstOfferResponse.status()).toBe(201)
+  inquiry = await firstOfferResponse.json()
+  expect(inquiry.status).toBe('sourcing')
+  const secondOfferResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/items/${inquiry.items[1].id}/offers`, { headers: editorHeaders, data: {
+    supplierName: '华东供应商', brandLabel: 'Porsche', unitPrice: 1200, availability: 'ordered', leadTimeDays: 2, selected: true,
+  } })
+  expect(secondOfferResponse.status()).toBe(201)
+  inquiry = await secondOfferResponse.json()
+
+  const quoteResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/quotes`, { headers: editorHeaders, data: {
+    discountAmount: 60, freightAmount: 100, note: '含税报价，VIN 复核后订货',
+    items: [
+      { inquiryItemId: inquiry.items[0].id, supplierOfferId: inquiry.items[0].offers[0].id, saleUnitPrice: 780 },
+      { inquiryItemId: inquiry.items[1].id, supplierOfferId: inquiry.items[1].offers[0].id, saleUnitPrice: 1600 },
+    ],
+  } })
+  expect(quoteResponse.status()).toBe(201)
+  inquiry = await quoteResponse.json()
+  expect(inquiry.status).toBe('quoting')
+  expect(inquiry.quotes[0].totalAmount).toBe(3200)
+  expect(inquiry.quotes[0].marginAmount).toBe(700)
+
+  const sentResponse = await page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/send`, { headers: editorHeaders, data: {
+    expectedRevision: 1, nextAction: '明天下午回访客户', note: '已通过微信发送报价',
+  } })
+  expect(sentResponse.ok()).toBeTruthy()
+  inquiry = await sentResponse.json()
+  expect(inquiry.status).toBe('quoted')
+  expect(inquiry.quotes[0].state).toBe('sent')
+
+  const followUpResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: inquiry.version, status: 'follow_up', nextAction: '确认客户到店时间', note: '客户已读，等待确认',
+  } })
+  expect(followUpResponse.ok()).toBeTruthy()
+  inquiry = await followUpResponse.json()
+  const wonResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: inquiry.version, status: 'won', note: '客户确认采购',
+  } })
+  expect(wonResponse.ok()).toBeTruthy()
+  inquiry = await wonResponse.json()
+  expect(inquiry.status).toBe('won')
+  expect(inquiry.quotes[0].state).toBe('accepted')
+  expect(inquiry.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created', 'supplier_offer_added', 'quote_created', 'quote_sent', 'status_changed']))
+})
+
 test('does not expose retired frontend business routes', async ({ page }) => {
   for (const route of ['skus', 'vehicles', 'dictionaries']) {
     await page.goto(`./${route}`)

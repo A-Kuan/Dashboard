@@ -64,6 +64,16 @@ test('production workbench uses its real API without writing data', { skip: !bas
       assert.equal(denied.status(), 403)
     }
 
+    const inquiryListResponse = await page.request.get(new URL('api/v2/business/inquiries?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(inquiryListResponse.ok(), true)
+    const inquiryList = await inquiryListResponse.json()
+    assert.ok(Array.isArray(inquiryList.items))
+    assert.ok(Number.isInteger(inquiryList.total))
+    if (!session.capabilities.includes('business.manage')) {
+      const denied = await page.request.post(new URL('api/v2/business/inquiries', baseUrl).toString(), { data: { customerName: '只读冒烟', items: [{ requirementText: '不应写入' }] } })
+      assert.equal(denied.status(), 403)
+    }
+
     assert.ok(catalogRequests.length > 0)
     assert.ok(catalogRequests.every((url) => url.startsWith(new URL('api/', baseUrl).toString())))
     assert.deepEqual(consoleErrors, [])
