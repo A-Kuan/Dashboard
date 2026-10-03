@@ -2111,6 +2111,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect((await staleQualityAssignmentResponse.json()).error).toBe('MASTER_DATA_QUALITY_TASK_STALE')
   const assignedQuality = await (await page.request.get('/api/v2/business/master-data-quality?kind=vehicle_duplicate&assignedTo=after-sales-reviewer&slaStatus=on_track', { headers: editorHeaders })).json()
   expect(assignedQuality.items.find((item) => item.issueKey === vehicleIssue.issueKey)?.assignedTo.name).toBe('售后审核员')
+  expect(assignedQuality.summary.onTrack).toBeGreaterThanOrEqual(1)
+  expect(assignedQuality.summary.dueSoon).toBe(0)
   const assignedQualityWorkQueue = await (await page.request.get('/api/v2/business/operations-center?kind=vehicle_duplicate&assignedTo=%E5%94%AE%E5%90%8E%E5%AE%A1%E6%A0%B8%E5%91%98', { headers: editorHeaders })).json()
   expect(assignedQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)?.details.taskVersion).toBe(1)
   const qualityDecisionResponse = await page.request.post(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/decisions`, { headers: afterSalesReviewerHeaders, data: {
@@ -2123,8 +2125,13 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   } })
   expect(repeatedQualityDecisionResponse.status()).toBe(200)
   expect((await repeatedQualityDecisionResponse.json()).decision.id).toBe(qualityDecision.decision.id)
-  const suppressedQuality = await (await page.request.get('/api/v2/business/master-data-quality?kind=vehicle_duplicate&status=suppressed', { headers: editorHeaders })).json()
+  const suppressedQuality = await (await page.request.get(`/api/v2/business/master-data-quality?kind=vehicle_duplicate&status=suppressed&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
   expect(suppressedQuality.items.map((item) => item.issueKey)).toContain(vehicleIssue.issueKey)
+  expect(suppressedQuality.summary.assigned).toBe(0)
+  expect(suppressedQuality.summary.unassigned).toBe(0)
+  expect(suppressedQuality.summary.onTrack).toBe(0)
+  expect(suppressedQuality.summary.dueSoon).toBe(0)
+  expect(suppressedQuality.summary.overdue).toBe(0)
   const suppressedVehicleQualityWorkQueue = await (await page.request.get(`/api/v2/business/operations-center?kind=vehicle_duplicate&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
   expect(suppressedVehicleQualityWorkQueue.items.map((item) => item.sourceId)).not.toContain(vehicleIssue.issueKey)
   const refreshDuplicateResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}/vehicles/${duplicateVehicle.id}`, { headers: editorHeaders, data: {

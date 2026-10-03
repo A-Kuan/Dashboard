@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFile, readdir, stat, statfs } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 
@@ -53,6 +54,50 @@ function metricValue(body, name) {
   return match ? Number(match[1]) : null
 }
 
+function count(value) {
+  const result = Number(value)
+  return Number.isInteger(result) && result >= 0 ? result : null
+}
+
+export function summarizeBusinessQualityQueue(body) {
+  if (!body || !Array.isArray(body.items) || !body.summary || typeof body.summary !== 'object') throw new Error('Business quality queue returned an invalid response')
+  const summary = {
+    open: count(body.summary.open),
+    unassigned: count(body.summary.unassigned),
+    dueSoon: count(body.summary.dueSoon),
+    overdue: count(body.summary.overdue),
+    escalated: count(body.summary.escalated),
+  }
+  if (Object.values(summary).some((value) => value === null)) throw new Error('Business quality queue summary is incomplete')
+  const actionable = summary.unassigned + summary.dueSoon + summary.overdue
+  const topItems = body.items
+    .filter((item) => ['unassigned', 'due_soon', 'overdue'].includes(item.slaStatus))
+    .sort((left, right) => Number(right.escalationLevel || 0) - Number(left.escalationLevel || 0)
+      || ({ overdue: 0, unassigned: 1, due_soon: 2 }[left.slaStatus] ?? 3) - ({ overdue: 0, unassigned: 1, due_soon: 2 }[right.slaStatus] ?? 3)
+      || String(left.issueKey).localeCompare(String(right.issueKey)))
+    .slice(0, 5)
+    .map((item) => ({
+      issueKey: String(item.issueKey || ''),
+      title: String(item.title || ''),
+      slaStatus: String(item.slaStatus || ''),
+      assignedTo: String(item.assignedTo?.name || '待分配'),
+      dueAt: item.dueAt || null,
+      escalationLevel: Number(item.escalationLevel || 0),
+      taskVersion: Number(item.taskVersion || 0),
+      fingerprint: String(item.fingerprint || ''),
+    }))
+  const alertSummary = { unassigned: summary.unassigned, dueSoon: summary.dueSoon, overdue: summary.overdue, escalated: summary.escalated }
+  const dedupeKey = createHash('sha256').update(JSON.stringify({ alertSummary, topItems })).digest('hex')
+  const slaLabels = { unassigned: '未分配', due_soon: '临期', overdue: '超期' }
+  const itemLines = topItems.map((item) => `- ${item.title || item.issueKey}｜${item.assignedTo}｜${slaLabels[item.slaStatus]}${item.dueAt ? `｜截止 ${item.dueAt}` : ''}`)
+  const message = [
+    `主数据质量待办：未分配 ${summary.unassigned}，临期 ${summary.dueSoon}，超期 ${summary.overdue}，升级 ${summary.escalated}。`,
+    ...itemLines,
+    '请在业务跟进中心完成分配、核对或安全合并。',
+  ].join('\n')
+  return { status: actionable ? 'attention_required' : 'clear', alertRequired: actionable > 0, actionable, summary, topItems, dedupeKey, message }
+}
+
 export async function checkApiOperations({
   endpoint = 'http://127.0.0.1:4183',
   releaseDirectory = process.cwd(),
@@ -85,6 +130,10 @@ export async function checkApiOperations({
   if (waitingRequests === null) throw new Error('API metrics are missing the database waiting-request gauge')
   if (waitingRequests > maxDatabaseWaitingRequests) throw new Error(`Database pool has ${waitingRequests} waiting requests`)
 
+  const businessQualityResponse = await fetchImpl(`${endpoint}/api/v2/business/master-data-quality?status=open&pageSize=100`, { signal: AbortSignal.timeout(10000) })
+  if (!businessQualityResponse.ok) throw new Error(`Business quality queue returned HTTP ${businessQualityResponse.status}`)
+  const businessQuality = summarizeBusinessQualityQueue(await businessQualityResponse.json())
+
   const latest = await newestManifest(backupDirectory)
   const backupAgeSeconds = Math.max(0, (now() - latest.modifiedAtMs) / 1000)
   if (backupAgeSeconds > maxBackupAgeSeconds) throw new Error(`Latest database backup is ${Math.round(backupAgeSeconds)} seconds old`)
@@ -101,6 +150,7 @@ export async function checkApiOperations({
     releaseRevision: revision,
     readiness: { database: readiness.database, migrations: readiness.migrations, latestMigration: readiness.latestMigration },
     databasePoolWaitingRequests: waitingRequests,
+    businessQuality,
     backup: { manifestPath: latest.path, ageSeconds: Math.round(backupAgeSeconds), bytes: backup.bytes, sha256: backup.sha256, assetFiles: backup.assetArchive?.fileCount ?? null },
     offsite,
     storage: { availableBytes },

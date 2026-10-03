@@ -29,7 +29,7 @@ export async function sendOperationalAlert({
   const type = String(environment.ALERT_WEBHOOK_TYPE || 'dingtalk').trim().toLowerCase()
   const timestamp = now().getTime()
   const content = [
-    '【虎山行 SKU 系统告警】',
+    '【虎山行工作台告警】',
     `来源：${String(source || 'unknown')}`,
     `主机：${host}`,
     `时间：${new Date(timestamp).toISOString()}`,
