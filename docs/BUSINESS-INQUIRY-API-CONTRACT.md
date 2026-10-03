@@ -51,7 +51,7 @@
 
 该只读接口把散落在询价、待审批报价、销售订单、采购订单、应收、应付、客户售后和供应商退货中的未完成事项归并为统一工作队列。每项返回来源单号、当前状态、客户或供应商、负责人、下一步动作、需要的权限、目标路径、到期时间、紧急程度、金额和来源快照；已经成交、完成、拒绝、取消或结清的事项不会继续出现在队列中。
 
-`kind` 支持询价跟进、`quote_approval` 报价审批、`quote_integrity` 报价资料复核、`quote_expiry` 报价到期、销售履约、采购到货、客户收款、供应商付款、售后审核/退货入库/客户退款、供应商退货审核/退供出库/供应商退款。`urgency` 支持 `overdue`、`today`、`upcoming`、`normal` 和 `unscheduled`，日期边界固定使用中国时区。返回的 `summary` 同时提供各紧急程度、各工作类型的数量和分币种金额，并分别汇总应收、应付、客户待退款与供应商待退款敞口。该接口不复制任务状态，源单一旦流转或结清，工作队列会立即随业务事实变化。
+`kind` 支持 `quick_quote_draft` 快速报价草稿、询价跟进、`quote_approval` 报价审批、`quote_integrity` 报价资料复核、`quote_expiry` 报价到期、销售履约、采购到货、客户收款、供应商付款、售后审核/退货入库/客户退款、供应商退货审核/退供出库/供应商退款。进行中草稿会按缺失的客户、车辆、SKU 或决策依据给出下一步，提交成功或作废后自动退出队列。`urgency` 支持 `overdue`、`today`、`upcoming`、`normal` 和 `unscheduled`，日期边界固定使用中国时区。返回的 `summary` 同时提供各紧急程度、各工作类型的数量和分币种金额，并分别汇总应收、应付、客户待退款与供应商待退款敞口。该接口不复制任务状态，源单一旦流转或结清，工作队列会立即随业务事实变化。
 
 ### 报价风控规则
 
@@ -98,6 +98,21 @@
 - SKU 在各仓库的在库、锁定和可用数量。
 
 未审核 SKU 不进入快速报价候选，避免把草稿资料直接用于对客承诺。
+
+### 快速报价草稿与恢复
+
+- `GET /api/v2/business/quick-quote/drafts?status=active&customerId=&mine=true&page=1&pageSize=30`
+- `POST /api/v2/business/quick-quote/drafts`
+- `GET /api/v2/business/quick-quote/drafts/:id`
+- `PATCH /api/v2/business/quick-quote/drafts/:id`
+- `POST /api/v2/business/quick-quote/drafts/:id/submit`
+- `POST /api/v2/business/quick-quote/drafts/:id/abandon`
+
+创建草稿时提交 8 至 128 位的 `autosaveKey`，同一操作人重试同一编号会返回原草稿，不会覆盖已保存内容。草稿允许只先保存客户、车辆或部分明细；返回的 `readiness` 列出 `missingFields`、明细数和已完成明细数，不会把不完整输入写成询价或报价。
+
+保存、作废和首次提交都必须携带 `expectedVersion`，版本已改变时返回 `409 QUICK_QUOTE_DRAFT_VERSION_CONFLICT`，避免多窗口静默覆盖。草稿会保留创建、保存、提交开始、提交失败、提交成功和作废事件。
+
+提交草稿时还需给出最终 `requestKey`。服务端会重新执行客户、车辆、SKU、适配、履约来源、库存、价格决策和风控校验；失败时草稿回到 `active`，保留内容和结构化 `submissionError`供修正后继续。提交采用 `submitting` 中间态和报价 `requestKey` 防重；即使进程在报价落库后、草稿回写前中断，使用相同编号重试也会恢复并关联原报价，不会重复生成。成功后草稿记录 `submittedInquiryId` 和 `submittedQuoteId`，报价也保留 `sourceDraftId`。
 
 ### 快速报价决策中心
 

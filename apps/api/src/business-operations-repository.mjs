@@ -1,4 +1,5 @@
 const workItemKinds = new Set([
+  'quick_quote_draft',
   'inquiry_follow_up',
   'quote_approval',
   'quote_integrity',
@@ -57,6 +58,49 @@ function addCurrencyAmount(bucket, currency, value) {
 }
 
 const workItemsCte = `WITH work_items AS (
+  SELECT
+    'quick-quote-draft:'||d.id id,
+    'quick_quote_draft'::text kind,
+    'quick_quote_draft'::text source_type,
+    d.id source_id,
+    d.draft_no source_no,
+    d.status,
+    '继续快速报价：'||COALESCE(p.name,'未选择客户') title,
+    COALESCE(p.name,'') counterpart_name,
+    d.customer_partner_id,
+    NULL::text supplier_partner_id,
+    COALESCE(d.payload->>'assignedTo','') assigned_to,
+    CASE
+      WHEN d.status='submitting' THEN '恢复未完成的报价提交'
+      WHEN d.customer_partner_id IS NULL THEN '选择客户并继续报价'
+      WHEN d.customer_vehicle_id IS NULL THEN '选择客户车辆'
+      WHEN jsonb_array_length(COALESCE(d.payload->'items','[]'::jsonb))=0 THEN '添加 SKU 与需求数量'
+      ELSE '补齐履约与决策依据后提交'
+    END next_action,
+    'business.quote'::text action_capability,
+    '/business/quick-quote/drafts/'||d.id route_path,
+    COALESCE(NULLIF(d.payload->>'nextActionAt','')::timestamptz,d.updated_at+interval '1 day') due_at,
+    GREATEST(COALESCE((
+      SELECT sum(COALESCE((line->>'quantity')::numeric,0)*COALESCE((line->>'saleUnitPrice')::numeric,0))
+      FROM jsonb_array_elements(COALESCE(d.payload->'items','[]'::jsonb)) line
+    ),0)+COALESCE((d.payload->>'freightAmount')::numeric,0)-COALESCE((d.payload->>'discountAmount')::numeric,0),0)::numeric amount,
+    COALESCE(NULLIF(d.payload->>'currency',''),'CNY') currency,
+    jsonb_build_object(
+      'customerVehicleId',COALESCE(d.customer_vehicle_id,''),
+      'vehicleLabel',COALESCE(v.vehicle_label,''),
+      'itemCount',jsonb_array_length(COALESCE(d.payload->'items','[]'::jsonb)),
+      'submissionError',d.submission_error,
+      'version',d.version
+    ) details,
+    d.updated_at,
+    CASE WHEN d.status='submitting' THEN -8 ELSE 5 END base_rank
+  FROM business_quick_quote_draft d
+  LEFT JOIN business_partner p ON p.id=d.customer_partner_id
+  LEFT JOIN business_customer_vehicle v ON v.id=d.customer_vehicle_id
+  WHERE d.status IN ('active','submitting')
+
+  UNION ALL
+
   SELECT
     'inquiry:'||i.id id,
     'inquiry_follow_up'::text kind,

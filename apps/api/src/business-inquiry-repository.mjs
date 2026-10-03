@@ -54,6 +54,99 @@ function requestKey(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(normalized)) throw problem('INVALID_QUICK_QUOTE_REQUEST_KEY', '快速报价请求编号必须为 8 至 128 位安全字符')
   return normalized
 }
+function draftAutosaveKey(value) {
+  const normalized = clean(value)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(normalized)) throw problem('INVALID_QUICK_QUOTE_DRAFT_KEY', '草稿自动保存编号必须为 8 至 128 位安全字符')
+  return normalized
+}
+function boundedText(value, label, maxLength) {
+  const normalized = clean(value)
+  if (normalized.length > maxLength || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) throw problem('INVALID_QUICK_QUOTE_DRAFT', `${label}超出可保存范围`)
+  return normalized
+}
+function draftMoney(value, label) {
+  if (value === '' || value == null) return null
+  return money(value, label)
+}
+function draftQuantity(value) {
+  if (value === '' || value == null) return null
+  return quantity(value)
+}
+function normalizeQuickQuoteDraftPayload(rawInput = {}) {
+  const source = rawInput?.payload && typeof rawInput.payload === 'object' && !Array.isArray(rawInput.payload) ? rawInput.payload : rawInput
+  const rawItems = Array.isArray(source.items) ? source.items : []
+  if (rawItems.length > 50) throw problem('INVALID_QUICK_QUOTE_DRAFT', '快速报价草稿最多保存 50 个明细')
+  const priority = boundedText(source.priority, '优先级', 16) || 'normal'
+  if (!['normal', 'high', 'urgent'].includes(priority)) throw problem('INVALID_QUICK_QUOTE_DRAFT', '草稿优先级无效')
+  const currency = boundedText(source.currency, '币种', 3).toUpperCase() || 'CNY'
+  if (!/^[A-Z]{3}$/.test(currency)) throw problem('INVALID_QUICK_QUOTE_DRAFT', '草稿币种必须使用三位大写编码')
+  const lookbackDays = source.decisionLookbackDays === '' || source.decisionLookbackDays == null ? 365 : Number(source.decisionLookbackDays)
+  if (!Number.isInteger(lookbackDays) || lookbackDays < 30 || lookbackDays > 730) throw problem('INVALID_QUICK_QUOTE_DRAFT', '草稿历史参考范围必须为 30 至 730 天')
+  return {
+    schemaVersion: 1,
+    customerPartnerId: boundedText(source.customerPartnerId, '客户编号', 128),
+    customerVehicleId: boundedText(source.customerVehicleId, '客户车辆编号', 128),
+    currency,
+    validUntil: optionalDate(source.validUntil, '报价有效期'),
+    discountAmount: draftMoney(source.discountAmount, '优惠金额'),
+    freightAmount: draftMoney(source.freightAmount, '报价运费'),
+    priority,
+    assignedTo: boundedText(source.assignedTo, '负责人', 128),
+    nextAction: boundedText(source.nextAction, '下一步动作', 240),
+    nextActionAt: optionalTimestamp(source.nextActionAt, '下一步时间'),
+    note: boundedText(source.note, '备注', 2000),
+    decisionLookbackDays: lookbackDays,
+    items: rawItems.map((item, index) => {
+      const fulfillmentSource = boundedText(item.fulfillmentSource, `第 ${index + 1} 项履约来源`, 16)
+      if (fulfillmentSource && !['stock', 'purchase'].includes(fulfillmentSource)) throw problem('INVALID_QUICK_QUOTE_DRAFT', `第 ${index + 1} 项履约来源无效`)
+      const decisionFingerprint = boundedText(item.decisionFingerprint, `第 ${index + 1} 项决策指纹`, 64).toLowerCase()
+      if (decisionFingerprint && !/^[a-f0-9]{64}$/.test(decisionFingerprint)) throw problem('INVALID_QUICK_QUOTE_DRAFT', `第 ${index + 1} 项决策指纹格式无效`)
+      const lineLookbackDays = item.decisionLookbackDays === '' || item.decisionLookbackDays == null ? lookbackDays : Number(item.decisionLookbackDays)
+      if (!Number.isInteger(lineLookbackDays) || lineLookbackDays < 30 || lineLookbackDays > 730) throw problem('INVALID_QUICK_QUOTE_DRAFT', `第 ${index + 1} 项历史参考范围无效`)
+      const leadTimeDays = item.leadTimeDays === '' || item.leadTimeDays == null ? null : Number(item.leadTimeDays)
+      if (leadTimeDays != null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 0 || leadTimeDays > 3650)) throw problem('INVALID_QUICK_QUOTE_DRAFT', `第 ${index + 1} 项到货天数无效`)
+      return {
+        lineId: boundedText(item.lineId, `第 ${index + 1} 项行编号`, 128) || randomUUID(),
+        catalogSkuId: boundedText(item.catalogSkuId, `第 ${index + 1} 项 SKU`, 128),
+        description: boundedText(item.description, `第 ${index + 1} 项说明`, 500),
+        quantity: draftQuantity(item.quantity),
+        unit: boundedText(item.unit, `第 ${index + 1} 项单位`, 32),
+        costUnitPrice: draftMoney(item.costUnitPrice, `第 ${index + 1} 项成本价`),
+        saleUnitPrice: draftMoney(item.saleUnitPrice, `第 ${index + 1} 项销售价`),
+        fulfillmentSource,
+        fulfillmentWarehouseId: boundedText(item.fulfillmentWarehouseId, `第 ${index + 1} 项仓库`, 128),
+        supplierPartnerId: boundedText(item.supplierPartnerId, `第 ${index + 1} 项供应商`, 128),
+        fitmentOverrideReason: boundedText(item.fitmentOverrideReason, `第 ${index + 1} 项适配复核说明`, 1000),
+        decisionFingerprint,
+        decisionLookbackDays: lineLookbackDays,
+        leadTimeDays,
+        notes: boundedText(item.notes, `第 ${index + 1} 项备注`, 1000),
+      }
+    }),
+  }
+}
+function quickQuoteDraftReadiness(payload = {}) {
+  const missingFields = []
+  if (!clean(payload.customerPartnerId)) missingFields.push('customerPartnerId')
+  if (!clean(payload.customerVehicleId)) missingFields.push('customerVehicleId')
+  const items = Array.isArray(payload.items) ? payload.items : []
+  if (!items.length) missingFields.push('items')
+  let completedItemCount = 0
+  items.forEach((item, index) => {
+    const prefix = `items[${index}]`
+    const before = missingFields.length
+    if (!clean(item.catalogSkuId)) missingFields.push(`${prefix}.catalogSkuId`)
+    if (item.quantity == null) missingFields.push(`${prefix}.quantity`)
+    if (item.costUnitPrice == null) missingFields.push(`${prefix}.costUnitPrice`)
+    if (item.saleUnitPrice == null) missingFields.push(`${prefix}.saleUnitPrice`)
+    if (!clean(item.fulfillmentSource)) missingFields.push(`${prefix}.fulfillmentSource`)
+    else if (item.fulfillmentSource === 'stock' && !clean(item.fulfillmentWarehouseId)) missingFields.push(`${prefix}.fulfillmentWarehouseId`)
+    else if (item.fulfillmentSource === 'purchase' && !clean(item.supplierPartnerId)) missingFields.push(`${prefix}.supplierPartnerId`)
+    if (!clean(item.decisionFingerprint)) missingFields.push(`${prefix}.decisionFingerprint`)
+    if (missingFields.length === before) completedItemCount += 1
+  })
+  return { readyToSubmit: missingFields.length === 0, missingFields, itemCount: items.length, completedItemCount }
+}
 function businessStockKey(row) {
   if (clean(row.catalog_sku_id ?? row.catalogSkuId)) return `sku:${clean(row.catalog_sku_id ?? row.catalogSkuId)}`
   const oe = clean(row.oe_number ?? row.oeNumber).toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -158,7 +251,35 @@ function mapOffer(row) {
   return { id: row.id, inquiryId: row.inquiry_id, inquiryItemId: row.inquiry_item_id, supplierName: row.supplier_name, supplierPartnerId: row.supplier_partner_id, brandLabel: row.brand_label, unitPrice: Number(row.unit_price), freightAmount: Number(row.freight_amount), availability: row.availability, leadTimeDays: row.lead_time_days, validUntil: row.valid_until, sourceNote: row.source_note, selected: row.selected, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
 }
 function mapQuote(row) {
-  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, lineageId: row.lineage_id, versionNo: row.version_no, predecessorQuoteId: row.predecessor_quote_id, supersededByQuoteId: row.superseded_by_quote_id, changeReason: row.change_reason, state: row.state, creationMode: row.creation_mode, requestKey: row.request_key, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), marginRate: Number(row.margin_rate), approvalStatus: row.approval_status, riskReasons: row.risk_reasons || [], riskSnapshot: row.risk_snapshot || {}, approvalFingerprint: row.approval_fingerprint, approvedRevision: row.approved_revision, approvedById: row.approved_by_id, approvedByName: row.approved_by_name, approvedAt: row.approved_at, approvalNote: row.approval_note, integrityStatus: row.integrity_status, integrityReasons: row.integrity_reasons || [], integritySnapshot: row.integrity_snapshot || {}, integrityFingerprint: row.integrity_fingerprint, integrityValidatedAt: row.integrity_validated_at, integrityValidatedAction: row.integrity_validated_action, note: row.note, sentAt: row.sent_at, supersededAt: row.superseded_at, acceptedAt: row.accepted_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, lineageId: row.lineage_id, versionNo: row.version_no, predecessorQuoteId: row.predecessor_quote_id, supersededByQuoteId: row.superseded_by_quote_id, changeReason: row.change_reason, state: row.state, creationMode: row.creation_mode, requestKey: row.request_key, sourceDraftId: row.source_draft_id, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), marginRate: Number(row.margin_rate), approvalStatus: row.approval_status, riskReasons: row.risk_reasons || [], riskSnapshot: row.risk_snapshot || {}, approvalFingerprint: row.approval_fingerprint, approvedRevision: row.approved_revision, approvedById: row.approved_by_id, approvedByName: row.approved_by_name, approvedAt: row.approved_at, approvalNote: row.approval_note, integrityStatus: row.integrity_status, integrityReasons: row.integrity_reasons || [], integritySnapshot: row.integrity_snapshot || {}, integrityFingerprint: row.integrity_fingerprint, integrityValidatedAt: row.integrity_validated_at, integrityValidatedAction: row.integrity_validated_action, note: row.note, sentAt: row.sent_at, supersededAt: row.superseded_at, acceptedAt: row.accepted_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
+}
+function mapQuickQuoteDraft(row) {
+  const payload = row.payload || {}
+  return {
+    id: row.id,
+    draftNo: row.draft_no,
+    autosaveKey: row.autosave_key,
+    status: row.status,
+    customerPartnerId: row.customer_partner_id,
+    customerVehicleId: row.customer_vehicle_id,
+    customerName: row.customer_name || '',
+    vehicleLabel: row.vehicle_label || '',
+    payload,
+    readiness: quickQuoteDraftReadiness(payload),
+    submissionRequestKey: row.submission_request_key,
+    submissionError: row.submission_error || {},
+    submittedInquiryId: row.submitted_inquiry_id,
+    submittedQuoteId: row.submitted_quote_id,
+    version: row.version,
+    createdById: row.created_by_id,
+    createdByName: row.created_by_name,
+    updatedById: row.updated_by_id,
+    updatedByName: row.updated_by_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    submittedAt: row.submitted_at,
+    abandonedAt: row.abandoned_at,
+  }
 }
 
 function quoteSnapshot(quote, items = []) {
@@ -200,6 +321,12 @@ async function insertEvent(client, inquiryId, action, actor, { fromStatus = '', 
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), inquiryId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
 }
 
+async function insertQuickQuoteDraftEvent(client, draftId, action, actor, { fromVersion = null, toVersion, snapshot = {} } = {}) {
+  const by = actorDetails(actor)
+  await client.query(`INSERT INTO business_quick_quote_draft_event (id,draft_id,action,from_version,to_version,actor_id,actor_name,snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, [randomUUID(), draftId, action, fromVersion, toVersion, by.id, by.name, JSON.stringify(snapshot)])
+}
+
 async function insertQuoteApprovalEvent(client, quoteId, action, actor, { fromStatus = '', toStatus, note = '', risk }) {
   const by = actorDetails(actor)
   await client.query(`INSERT INTO business_quote_approval_event (id,quote_id,action,from_status,to_status,actor_id,actor_name,note,risk_reasons,risk_snapshot,fingerprint)
@@ -235,6 +362,29 @@ export function createBusinessInquiryRepository(pool) {
     }
   }
 
+  async function getQuickQuoteDraft(id, client = pool) {
+    const row = (await client.query(`SELECT d.*,p.name customer_name,v.vehicle_label
+      FROM business_quick_quote_draft d
+      LEFT JOIN business_partner p ON p.id=d.customer_partner_id
+      LEFT JOIN business_customer_vehicle v ON v.id=d.customer_vehicle_id
+      WHERE d.id=$1 OR d.draft_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
+    if (!row) return null
+    const events = (await client.query('SELECT * FROM business_quick_quote_draft_event WHERE draft_id=$1 ORDER BY created_at DESC,id DESC', [row.id])).rows
+    return {
+      ...mapQuickQuoteDraft(row),
+      events: events.map((event) => ({
+        id: event.id,
+        action: event.action,
+        fromVersion: event.from_version,
+        toVersion: event.to_version,
+        actorId: event.actor_id,
+        actorName: event.actor_name,
+        snapshot: event.snapshot || {},
+        createdAt: event.created_at,
+      })),
+    }
+  }
+
   const repository = {
     async list({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
       const q = clean(query); const currentPage = Math.max(1, Number(page) || 1); const size = Math.min(100, Math.max(1, Number(pageSize) || 30))
@@ -257,6 +407,128 @@ export function createBusinessInquiryRepository(pool) {
     },
 
     get,
+
+    async listQuickQuoteDrafts({ status = 'active', customerId = '', page = 1, pageSize = 30, mine = true } = {}, actor = {}) {
+      const allowedStatuses = new Set(['', 'active', 'submitting', 'submitted', 'abandoned'])
+      const normalizedStatus = clean(status)
+      if (!allowedStatuses.has(normalizedStatus)) throw problem('INVALID_QUICK_QUOTE_DRAFT_STATUS', '快速报价草稿状态无效')
+      const currentPage = Math.max(1, Number(page) || 1); const size = Math.min(100, Math.max(1, Number(pageSize) || 30))
+      const where = []; const values = []
+      if (normalizedStatus) { values.push(normalizedStatus); where.push(`d.status=$${values.length}`) }
+      if (clean(customerId)) { values.push(clean(customerId)); where.push(`d.customer_partner_id=$${values.length}`) }
+      const by = actorDetails(actor)
+      if (mine !== false && by.id) { values.push(by.id); where.push(`d.created_by_id=$${values.length}`) }
+      const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+      const total = Number((await pool.query(`SELECT count(*) FROM business_quick_quote_draft d ${clause}`, values)).rows[0].count)
+      values.push(size, (currentPage - 1) * size)
+      const rows = (await pool.query(`SELECT d.*,p.name customer_name,v.vehicle_label
+        FROM business_quick_quote_draft d
+        LEFT JOIN business_partner p ON p.id=d.customer_partner_id
+        LEFT JOIN business_customer_vehicle v ON v.id=d.customer_vehicle_id
+        ${clause} ORDER BY d.updated_at DESC,d.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
+      return { items: rows.map(mapQuickQuoteDraft), total, page: currentPage, pageSize: size }
+    },
+
+    getQuickQuoteDraft,
+
+    async createQuickQuoteDraft(rawInput = {}, actor) {
+      const autosaveKey = draftAutosaveKey(rawInput.autosaveKey)
+      const payload = normalizeQuickQuoteDraftPayload(rawInput)
+      const by = actorDetails(actor); const id = randomUUID(); const draftNo = generatedNumber('QQD')
+      let created = false; let draftId = id
+      await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-quick-quote-draft:${by.id}:${autosaveKey}`])
+        const existing = (await client.query('SELECT id FROM business_quick_quote_draft WHERE created_by_id=$1 AND autosave_key=$2', [by.id, autosaveKey])).rows[0]
+        if (existing) { draftId = existing.id; return }
+        await client.query(`INSERT INTO business_quick_quote_draft
+          (id,draft_no,autosave_key,customer_partner_id,customer_vehicle_id,payload,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$7,$8)`, [id, draftNo, autosaveKey, payload.customerPartnerId || null, payload.customerVehicleId || null, JSON.stringify(payload), by.id, by.name])
+        await insertQuickQuoteDraftEvent(client, id, 'created', actor, { toVersion: 1, snapshot: { readiness: quickQuoteDraftReadiness(payload) } })
+        created = true
+      })
+      return { created, draft: await getQuickQuoteDraft(draftId) }
+    },
+
+    async saveQuickQuoteDraft(id, rawInput = {}, actor) {
+      const expectedVersion = Number(rawInput.expectedVersion)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw problem('QUICK_QUOTE_DRAFT_VERSION_REQUIRED', '保存草稿必须提交当前版本')
+      const payload = normalizeQuickQuoteDraftPayload(rawInput)
+      await withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM business_quick_quote_draft WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) throw problem('QUICK_QUOTE_DRAFT_NOT_FOUND', '快速报价草稿不存在', 404)
+        if (current.status !== 'active') throw problem('QUICK_QUOTE_DRAFT_STATE_CONFLICT', '只有进行中的草稿可以继续保存', 409, { status: current.status })
+        if (current.version !== expectedVersion) throw problem('QUICK_QUOTE_DRAFT_VERSION_CONFLICT', '草稿已在其他位置更新，请刷新后重试', 409, { currentVersion: current.version })
+        const nextVersion = current.version + 1; const by = actorDetails(actor)
+        await client.query(`UPDATE business_quick_quote_draft SET customer_partner_id=$2,customer_vehicle_id=$3,payload=$4::jsonb,
+          submission_error='{}'::jsonb,version=$5,updated_by_id=$6,updated_by_name=$7,updated_at=now() WHERE id=$1`, [current.id, payload.customerPartnerId || null, payload.customerVehicleId || null, JSON.stringify(payload), nextVersion, by.id, by.name])
+        await insertQuickQuoteDraftEvent(client, current.id, 'saved', actor, { fromVersion: current.version, toVersion: nextVersion, snapshot: { readiness: quickQuoteDraftReadiness(payload) } })
+      })
+      return getQuickQuoteDraft(id)
+    },
+
+    async abandonQuickQuoteDraft(id, rawInput = {}, actor) {
+      const expectedVersion = Number(rawInput.expectedVersion)
+      await withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM business_quick_quote_draft WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) throw problem('QUICK_QUOTE_DRAFT_NOT_FOUND', '快速报价草稿不存在', 404)
+        if (current.status === 'abandoned') return
+        if (current.status !== 'active') throw problem('QUICK_QUOTE_DRAFT_STATE_CONFLICT', '当前草稿状态不能作废', 409, { status: current.status })
+        if (!Number.isInteger(expectedVersion) || expectedVersion !== current.version) throw problem('QUICK_QUOTE_DRAFT_VERSION_CONFLICT', '草稿已在其他位置更新，请刷新后重试', 409, { currentVersion: current.version })
+        const nextVersion = current.version + 1; const by = actorDetails(actor)
+        await client.query(`UPDATE business_quick_quote_draft SET status='abandoned',version=$2,abandoned_at=now(),updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [current.id, nextVersion, by.id, by.name])
+        await insertQuickQuoteDraftEvent(client, current.id, 'abandoned', actor, { fromVersion: current.version, toVersion: nextVersion, snapshot: { reason: boundedText(rawInput.reason, '草稿作废原因', 500) } })
+      })
+      return getQuickQuoteDraft(id)
+    },
+
+    async submitQuickQuoteDraft(id, rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey)
+      const expectedVersion = Number(rawInput.expectedVersion)
+      const submission = await withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM business_quick_quote_draft WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) throw problem('QUICK_QUOTE_DRAFT_NOT_FOUND', '快速报价草稿不存在', 404)
+        if (current.status === 'submitted') return { alreadySubmitted: true, quoteId: current.submitted_quote_id, inquiryId: current.submitted_inquiry_id }
+        if (current.status === 'abandoned') throw problem('QUICK_QUOTE_DRAFT_STATE_CONFLICT', '已作废草稿不能提交', 409, { status: current.status })
+        if (current.status === 'submitting') {
+          if (current.submission_request_key !== key) throw problem('QUICK_QUOTE_DRAFT_SUBMISSION_CONFLICT', '草稿正在使用另一请求编号提交', 409)
+          return { payload: current.payload, startedVersion: current.version }
+        }
+        if (!Number.isInteger(expectedVersion) || expectedVersion !== current.version) throw problem('QUICK_QUOTE_DRAFT_VERSION_CONFLICT', '草稿已在其他位置更新，请刷新后重试', 409, { currentVersion: current.version })
+        const readiness = quickQuoteDraftReadiness(current.payload)
+        if (!readiness.readyToSubmit) throw problem('QUICK_QUOTE_DRAFT_INCOMPLETE', '草稿还缺少必需报价信息', 409, readiness)
+        const nextVersion = current.version + 1; const by = actorDetails(actor)
+        await client.query(`UPDATE business_quick_quote_draft SET status='submitting',submission_request_key=$2,submission_error='{}'::jsonb,
+          version=$3,updated_by_id=$4,updated_by_name=$5,updated_at=now() WHERE id=$1`, [current.id, key, nextVersion, by.id, by.name])
+        await insertQuickQuoteDraftEvent(client, current.id, 'submission_started', actor, { fromVersion: current.version, toVersion: nextVersion, snapshot: { requestKey: key, readiness } })
+        return { payload: current.payload, startedVersion: nextVersion }
+      })
+      if (submission.alreadySubmitted) return { created: false, quoteId: submission.quoteId, inquiryId: submission.inquiryId, draft: await getQuickQuoteDraft(id), inquiry: await get(submission.inquiryId) }
+      let quoteResult
+      try {
+        quoteResult = await repository.createQuickQuote({ ...submission.payload, requestKey: key }, actor, { sourceDraftId: id })
+      } catch (error) {
+        await withTransaction(pool, async (client) => {
+          const current = (await client.query('SELECT * FROM business_quick_quote_draft WHERE id=$1 FOR UPDATE', [id])).rows[0]
+          if (!current || current.status !== 'submitting' || current.submission_request_key !== key) return
+          const nextVersion = current.version + 1; const by = actorDetails(actor)
+          const submissionError = { error: error.errorCode || 'QUICK_QUOTE_SUBMISSION_FAILED', message: error.message, details: error.details || null, failedAt: new Date().toISOString() }
+          await client.query(`UPDATE business_quick_quote_draft SET status='active',submission_error=$2::jsonb,version=$3,updated_by_id=$4,updated_by_name=$5,updated_at=now() WHERE id=$1`, [id, JSON.stringify(submissionError), nextVersion, by.id, by.name])
+          await insertQuickQuoteDraftEvent(client, id, 'submission_failed', actor, { fromVersion: current.version, toVersion: nextVersion, snapshot: submissionError })
+        })
+        throw error
+      }
+      await withTransaction(pool, async (client) => {
+        const current = (await client.query('SELECT * FROM business_quick_quote_draft WHERE id=$1 FOR UPDATE', [id])).rows[0]
+        if (!current) throw problem('QUICK_QUOTE_DRAFT_NOT_FOUND', '快速报价草稿不存在', 404)
+        if (current.status === 'submitted') return
+        if (current.status !== 'submitting' || current.submission_request_key !== key) throw problem('QUICK_QUOTE_DRAFT_SUBMISSION_CONFLICT', '草稿提交状态已变化', 409)
+        const nextVersion = current.version + 1; const by = actorDetails(actor)
+        await client.query(`UPDATE business_quick_quote_draft SET status='submitted',submitted_inquiry_id=$2,submitted_quote_id=$3,
+          submitted_at=now(),submission_error='{}'::jsonb,version=$4,updated_by_id=$5,updated_by_name=$6,updated_at=now() WHERE id=$1`, [id, quoteResult.inquiry.id, quoteResult.quoteId, nextVersion, by.id, by.name])
+        await insertQuickQuoteDraftEvent(client, id, 'submitted', actor, { fromVersion: current.version, toVersion: nextVersion, snapshot: { requestKey: key, inquiryId: quoteResult.inquiry.id, quoteId: quoteResult.quoteId } })
+      })
+      return { created: quoteResult.created, quoteId: quoteResult.quoteId, inquiryId: quoteResult.inquiry.id, draft: await getQuickQuoteDraft(id), inquiry: quoteResult.inquiry }
+    },
 
     async quoteContext({ customerQuery = '', vehicleQuery = '', skuQuery = '', customerId = '', customerVehicleId = '', platformId = '', variantId = '', pageSize = 20 } = {}) {
       const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
@@ -428,7 +700,7 @@ export function createBusinessInquiryRepository(pool) {
       }
     },
 
-    async createQuickQuote(rawInput = {}, actor) {
+    async createQuickQuote(rawInput = {}, actor, { sourceDraftId = '' } = {}) {
       const key = requestKey(rawInput.requestKey); const customerPartnerId = clean(rawInput.customerPartnerId); const customerVehicleId = clean(rawInput.customerVehicleId)
       const requested = Array.isArray(rawInput.items) ? rawInput.items : []
       if (!customerPartnerId) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价必须选择客户或门店')
@@ -438,8 +710,11 @@ export function createBusinessInquiryRepository(pool) {
       const by = actorDetails(actor)
       const result = await withTransaction(pool, async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-quick-quote:${key}`])
-        const existing = (await client.query('SELECT inquiry_id,id FROM business_quote WHERE request_key=$1', [key])).rows[0]
-        if (existing) return { created: false, inquiryId: existing.inquiry_id, quoteId: existing.id }
+        const existing = (await client.query('SELECT inquiry_id,id,source_draft_id FROM business_quote WHERE request_key=$1', [key])).rows[0]
+        if (existing) {
+          if (clean(sourceDraftId) && existing.source_draft_id !== clean(sourceDraftId)) throw problem('QUICK_QUOTE_REQUEST_KEY_CONFLICT', '该快速报价请求编号已用于其他草稿', 409)
+          return { created: false, inquiryId: existing.inquiry_id, quoteId: existing.id }
+        }
         const customer = (await client.query("SELECT * FROM business_partner WHERE id=$1 AND partner_type IN ('customer','both') FOR SHARE", [customerPartnerId])).rows[0]
         if (!customer || customer.status !== 'active') throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价选择的客户不存在或不可用', 400)
         const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR SHARE', [customerVehicleId, customer.id])).rows[0]
@@ -516,8 +791,8 @@ export function createBusinessInquiryRepository(pool) {
         const risk = await evaluateQuoteRisk(client, { customerPartnerId: customer.id, currency, totalAmount, marginAmount })
         await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,customer_partner_id,customer_vehicle_id,contact_name,contact_phone,channel,vehicle_label,vin,vehicle_platform_id,vehicle_variant_id,status,priority,assigned_to,next_action,next_action_at,notes,currency,quote_amount,created_by_id,created_by_name,updated_by_id,updated_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,'quick_quote',$8,$9,$10,$11,'quoting',$12,$13,$14,$15,$16,$17,$18,$19,$20,$19,$20)`, [inquiryId, inquiryNo, customer.name, customer.id, vehicle.id, contact?.name || '', contact?.phone || customer.phone, vehicle.vehicle_label, vehicle.vin, vehicle.platform_master_id, vehicle.variant_master_id, clean(rawInput.priority) || 'normal', clean(rawInput.assignedTo), clean(rawInput.nextAction) || '复核并发送报价', optionalTimestamp(rawInput.nextActionAt, '下一步时间'), clean(rawInput.note), clean(rawInput.currency).toUpperCase() || 'CNY', totalAmount, by.id, by.name])
-        await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,lineage_id,version_no,creation_mode,request_key,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,margin_rate,approval_status,risk_reasons,risk_snapshot,approval_fingerprint,note,created_by_id,created_by_name)
-          VALUES ($1,$2,$3,$1,1,'quick',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19)`, [quoteId, inquiryId, quoteNo, key, currency, optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, risk.marginRate, risk.required ? 'pending' : 'not_required', JSON.stringify(risk.reasons), JSON.stringify(risk.snapshot), risk.fingerprint, clean(rawInput.note), by.id, by.name])
+        await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,lineage_id,version_no,creation_mode,request_key,source_draft_id,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,margin_rate,approval_status,risk_reasons,risk_snapshot,approval_fingerprint,note,created_by_id,created_by_name)
+          VALUES ($1,$2,$3,$1,1,'quick',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20)`, [quoteId, inquiryId, quoteNo, key, clean(sourceDraftId) || null, currency, optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, risk.marginRate, risk.required ? 'pending' : 'not_required', JSON.stringify(risk.reasons), JSON.stringify(risk.snapshot), risk.fingerprint, clean(rawInput.note), by.id, by.name])
         for (const [index, item] of normalized.entries()) {
           const inquiryItemId = randomUUID()
           await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,notes)

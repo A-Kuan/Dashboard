@@ -29,10 +29,17 @@ test('rejects incomplete or invalid inquiry input before writing data', () => {
 test('business inquiry routes expose reads while protecting operational writes', async () => {
   const calls = []
   const inquiry = { id: 'inquiry-1', inquiryNo: 'INQ-20261002-ABC123', status: 'new', version: 1, items: [{ id: 'item-1' }], quotes: [] }
+  const draft = { id: 'draft-1', draftNo: 'QQD-20261003-ABC123', status: 'active', version: 1, readiness: { readyToSubmit: false } }
   const repository = {
     quoteContext: async (input) => { calls.push(['quoteContext', input]); return { customers: [], vehicles: [], skus: [] } },
     quoteDecision: async (input) => { calls.push(['quoteDecision', input]); return { decisionFingerprint: 'decision-1', pricing: { marginFloorUnitPrice: 705.89 } } },
     createQuickQuote: async (input, actor) => { calls.push(['createQuickQuote', input, actor]); return { created: true, quoteId: 'quote-quick-1', inquiry } },
+    listQuickQuoteDrafts: async (input, actor) => { calls.push(['listQuickQuoteDrafts', input, actor]); return { items: [draft], total: 1, page: 1, pageSize: 30 } },
+    getQuickQuoteDraft: async (id) => { calls.push(['getQuickQuoteDraft', id]); return id === draft.id ? draft : null },
+    createQuickQuoteDraft: async (input, actor) => { calls.push(['createQuickQuoteDraft', input, actor]); return { created: true, draft } },
+    saveQuickQuoteDraft: async (id, input, actor) => { calls.push(['saveQuickQuoteDraft', id, input, actor]); return { ...draft, version: 2 } },
+    abandonQuickQuoteDraft: async (id, input, actor) => { calls.push(['abandonQuickQuoteDraft', id, input, actor]); return { ...draft, status: 'abandoned', version: 2 } },
+    submitQuickQuoteDraft: async (id, input, actor) => { calls.push(['submitQuickQuoteDraft', id, input, actor]); return { created: true, draft: { ...draft, status: 'submitted' }, inquiry } },
     list: async (input) => { calls.push(['list', input]); return { items: [inquiry], total: 1, page: 1, pageSize: 30, summary: { new: { count: 1, amount: 0 } } } },
     get: async (id) => { calls.push(['get', id]); return id === inquiry.id ? inquiry : null },
     create: async (input, actor) => { calls.push(['create', input, actor]); return inquiry },
@@ -62,6 +69,14 @@ test('business inquiry routes expose reads while protecting operational writes',
   assert.equal(calls.find((entry) => entry[0] === 'quoteDecision')[1].quantity, '2')
   assert.equal(calls.find((entry) => entry[0] === 'quoteDecision')[1].fulfillmentSource, 'purchase')
   assert.equal(calls.find((entry) => entry[0] === 'quoteDecision')[1].supplierPartnerId, 'supplier-1')
+  const drafts = await app.inject({ method: 'GET', url: '/api/v2/business/quick-quote/drafts?status=active&mine=true', headers: { 'x-operator-role': 'catalog_viewer', 'x-operator-id': 'sales-1' } })
+  assert.equal(drafts.statusCode, 200)
+  assert.equal(drafts.json().total, 1)
+  assert.equal(calls.find((entry) => entry[0] === 'listQuickQuoteDrafts')[1].status, 'active')
+  const foundDraft = await app.inject({ method: 'GET', url: `/api/v2/business/quick-quote/drafts/${draft.id}`, headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(foundDraft.statusCode, 200)
+  const missingDraft = await app.inject({ method: 'GET', url: '/api/v2/business/quick-quote/drafts/missing', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(missingDraft.statusCode, 404)
 
   const denied = await app.inject({ method: 'POST', url: '/api/v2/business/inquiries', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { customerName: '无权限客户' } })
   assert.equal(denied.statusCode, 403)
@@ -71,6 +86,8 @@ test('business inquiry routes expose reads while protecting operational writes',
   assert.equal(reviewerDenied.json().details.capability, 'business.quote')
   const quickDenied = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quotes', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { requestKey: 'quick-denied-1' } })
   assert.equal(quickDenied.statusCode, 403)
+  const draftDenied = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/drafts', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { autosaveKey: 'draft-denied-1' } })
+  assert.equal(draftDenied.statusCode, 403)
 
   const editor = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-1' }
   const created = await app.inject({ method: 'POST', url: '/api/v2/business/inquiries', headers: editor, payload: { customerName: '王师傅汽修', items: [{ requirementText: '前刹车片' }] } })
@@ -78,6 +95,15 @@ test('business inquiry routes expose reads while protecting operational writes',
   const quick = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quotes', headers: editor, payload: { requestKey: 'quick-route-001', customerPartnerId: 'partner-1', customerVehicleId: 'vehicle-1', items: [{ catalogSkuId: 'sku-1', quantity: 1, saleUnitPrice: 850 }] } })
   assert.equal(quick.statusCode, 201)
   assert.equal(calls.find((entry) => entry[0] === 'createQuickQuote')[2].name, '业务员甲')
+  const createdDraft = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/drafts', headers: editor, payload: { autosaveKey: 'draft-route-001', customerPartnerId: 'partner-1' } })
+  assert.equal(createdDraft.statusCode, 201)
+  const savedDraft = await app.inject({ method: 'PATCH', url: `/api/v2/business/quick-quote/drafts/${draft.id}`, headers: editor, payload: { expectedVersion: 1, customerPartnerId: 'partner-1', customerVehicleId: 'vehicle-1' } })
+  assert.equal(savedDraft.statusCode, 200)
+  assert.equal(savedDraft.json().version, 2)
+  const submittedDraft = await app.inject({ method: 'POST', url: `/api/v2/business/quick-quote/drafts/${draft.id}/submit`, headers: editor, payload: { expectedVersion: 2, requestKey: 'quick-draft-route-001' } })
+  assert.equal(submittedDraft.statusCode, 201)
+  const abandonedDraft = await app.inject({ method: 'POST', url: `/api/v2/business/quick-quote/drafts/${draft.id}/abandon`, headers: editor, payload: { expectedVersion: 1, reason: '客户取消' } })
+  assert.equal(abandonedDraft.statusCode, 200)
   const offered = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/items/item-1/offers`, headers: editor, payload: { supplierName: '华东供应商', unitPrice: 680 } })
   assert.equal(offered.statusCode, 201)
   const quoted = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/quotes`, headers: editor, payload: { items: [{ inquiryItemId: 'item-1', saleUnitPrice: 850 }] } })

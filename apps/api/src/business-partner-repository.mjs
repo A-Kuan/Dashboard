@@ -159,8 +159,10 @@ export function createBusinessPartnerRepository(pool) {
     if (!['customer', 'both'].includes(customer.partnerType)) throw problem('PARTNER_NOT_CUSTOMER', '该合作方不是客户', 409)
     const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 30)))
     const position = decodeTimelineCursor(cursor)
-    const [summaryResult, nextActionsResult, timelineResult] = await Promise.all([
+    const [summaryResult, nextActionsResult, quickQuoteDraftsResult, timelineResult] = await Promise.all([
       pool.query(`SELECT
+        (SELECT count(*)::int FROM business_quick_quote_draft d WHERE d.customer_partner_id=$1 AND d.status IN ('active','submitting')) active_quick_quote_draft_count,
+        (SELECT count(*)::int FROM business_quick_quote_draft d WHERE d.customer_partner_id=$1 AND d.status='submitted') submitted_quick_quote_draft_count,
         (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1) inquiry_count,
         (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1 AND i.status NOT IN ('won','lost','cancelled')) open_inquiry_count,
         (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1 AND i.status='won') won_inquiry_count,
@@ -185,10 +187,17 @@ export function createBusinessPartnerRepository(pool) {
       pool.query(`SELECT id,inquiry_no,status,priority,next_action,next_action_at,vehicle_label,customer_vehicle_id,quote_amount,currency,updated_at
         FROM business_inquiry WHERE customer_partner_id=$1 AND next_action<>'' AND status NOT IN ('won','lost','cancelled')
         ORDER BY next_action_at ASC NULLS LAST,updated_at DESC,id LIMIT 10`, [customer.id]),
+      pool.query(`SELECT d.id,d.draft_no,d.status,d.customer_vehicle_id,d.payload,d.submission_error,d.version,d.updated_at,v.vehicle_label
+        FROM business_quick_quote_draft d LEFT JOIN business_customer_vehicle v ON v.id=d.customer_vehicle_id
+        WHERE d.customer_partner_id=$1 AND d.status IN ('active','submitting') ORDER BY d.updated_at DESC,d.id LIMIT 10`, [customer.id]),
       pool.query(`WITH timeline AS (
         SELECT 'partner:'||e.id timeline_id,'partner' entity_type,e.partner_id entity_id,NULL::text parent_id,e.action,e.action status,
           '客户资料更新' title,NULL::numeric amount,''::text currency,e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at occurred_at
         FROM business_partner_event e WHERE e.partner_id=$1
+        UNION ALL
+        SELECT 'quote-draft:'||e.id,'quick_quote_draft',d.id,NULL::text,e.action,d.status,d.draft_no,NULL::numeric,
+          COALESCE(NULLIF(d.payload->>'currency',''),'CNY'),e.actor_id,e.actor_name,''::text,e.snapshot,e.created_at
+        FROM business_quick_quote_draft_event e JOIN business_quick_quote_draft d ON d.id=e.draft_id WHERE d.customer_partner_id=$1
         UNION ALL
         SELECT 'inquiry:'||e.id,'inquiry',i.id,NULL::text,e.action,COALESCE(NULLIF(e.to_status,''),i.status),i.inquiry_no,
           i.quote_amount,i.currency,e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
@@ -244,6 +253,7 @@ export function createBusinessPartnerRepository(pool) {
     return {
       customer,
       summary: {
+        activeQuickQuoteDraftCount: summaryRow.active_quick_quote_draft_count, submittedQuickQuoteDraftCount: summaryRow.submitted_quick_quote_draft_count,
         inquiryCount: summaryRow.inquiry_count, openInquiryCount: summaryRow.open_inquiry_count, wonInquiryCount: summaryRow.won_inquiry_count,
         quoteCount: summaryRow.quote_count, pendingQuoteCount: summaryRow.pending_quote_count, pendingQuoteAmount: Number(summaryRow.pending_quote_amount),
         salesOrderCount: summaryRow.sales_order_count, openSalesOrderCount: summaryRow.open_sales_order_count,
@@ -254,6 +264,7 @@ export function createBusinessPartnerRepository(pool) {
         afterSalesCount: summaryRow.after_sales_count, openAfterSalesCount: summaryRow.open_after_sales_count,
         afterSalesCreditedAmount: Number(summaryRow.after_sales_credited_amount), refundedAmount: Number(summaryRow.refunded_amount),
       },
+      quickQuoteDrafts: quickQuoteDraftsResult.rows.map((row) => ({ id: row.id, draftNo: row.draft_no, status: row.status, customerVehicleId: row.customer_vehicle_id, vehicleLabel: row.vehicle_label || '', payload: row.payload || {}, submissionError: row.submission_error || {}, version: row.version, updatedAt: row.updated_at })),
       nextActions: nextActionsResult.rows.map((row) => ({ id: row.id, inquiryNo: row.inquiry_no, status: row.status, priority: row.priority, nextAction: row.next_action, nextActionAt: row.next_action_at, vehicleLabel: row.vehicle_label, customerVehicleId: row.customer_vehicle_id, quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), currency: row.currency, updatedAt: row.updated_at })),
       timeline: { items: timelineRows, nextCursor: timelineResult.rows.length > size && timelineRows.length ? encodeTimelineCursor(timelineRows.at(-1)) : null },
     }
