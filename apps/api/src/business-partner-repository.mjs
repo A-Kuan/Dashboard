@@ -15,6 +15,20 @@ function requestKey(value) {
   return normalized
 }
 function phoneDigits(value) { return clean(value).replace(/\D/g, '') }
+function decodeTimelineCursor(value) {
+  const cursor = clean(value)
+  if (!cursor) return { occurredAt: null, id: null }
+  try {
+    const [occurredAt, id] = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
+    if (!id || !occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('invalid cursor')
+    return { occurredAt: new Date(occurredAt).toISOString(), id: String(id) }
+  } catch {
+    throw problem('INVALID_CUSTOMER_TIMELINE_CURSOR', '客户动态游标无效')
+  }
+}
+function encodeTimelineCursor(item) {
+  return Buffer.from(JSON.stringify([item.occurredAt, item.id])).toString('base64url')
+}
 function money(value, label) {
   const number = Number(value ?? 0)
   if (!Number.isFinite(number) || number < 0) throw problem('INVALID_PARTNER_AMOUNT', `${label}必须是大于等于 0 的金额`)
@@ -139,6 +153,86 @@ export function createBusinessPartnerRepository(pool) {
     return { ...mapPartner(row), contacts: contacts.rows.map(mapContact), vehicles: vehicles.rows.map(mapVehicle), events: events.rows.map((event) => ({ id: event.id, action: event.action, actorId: event.actor_id, actorName: event.actor_name, note: event.note, snapshot: event.snapshot, createdAt: event.created_at })) }
   }
 
+  async function customer360(id, { pageSize = 30, cursor = '' } = {}) {
+    const customer = await get(id)
+    if (!customer) return null
+    if (!['customer', 'both'].includes(customer.partnerType)) throw problem('PARTNER_NOT_CUSTOMER', '该合作方不是客户', 409)
+    const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 30)))
+    const position = decodeTimelineCursor(cursor)
+    const [summaryResult, nextActionsResult, timelineResult] = await Promise.all([
+      pool.query(`SELECT
+        (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1) inquiry_count,
+        (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1 AND i.status NOT IN ('won','lost','cancelled')) open_inquiry_count,
+        (SELECT count(*)::int FROM business_inquiry i WHERE i.customer_partner_id=$1 AND i.status='won') won_inquiry_count,
+        (SELECT count(*)::int FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_partner_id=$1) quote_count,
+        (SELECT count(*)::int FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_partner_id=$1 AND q.state='sent') pending_quote_count,
+        (SELECT COALESCE(sum(q.total_amount),0) FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_partner_id=$1 AND q.state='sent') pending_quote_amount,
+        (SELECT count(*)::int FROM business_sales_order s WHERE s.customer_partner_id=$1) sales_order_count,
+        (SELECT count(*)::int FROM business_sales_order s WHERE s.customer_partner_id=$1 AND s.status NOT IN ('completed','cancelled')) open_sales_order_count,
+        (SELECT count(*)::int FROM business_sales_order s WHERE s.customer_partner_id=$1 AND s.status='completed') completed_sales_order_count,
+        (SELECT COALESCE(sum(s.total_amount),0) FROM business_sales_order s WHERE s.customer_partner_id=$1 AND s.status='completed') completed_sales_amount,
+        (SELECT count(*)::int FROM business_purchase_order p JOIN business_sales_order s ON s.id=p.sales_order_id WHERE s.customer_partner_id=$1 AND p.status NOT IN ('received','cancelled')) open_purchase_order_count,
+        (SELECT count(*)::int FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1) shipment_count`, [customer.id]),
+      pool.query(`SELECT id,inquiry_no,status,priority,next_action,next_action_at,vehicle_label,customer_vehicle_id,quote_amount,currency,updated_at
+        FROM business_inquiry WHERE customer_partner_id=$1 AND next_action<>'' AND status NOT IN ('won','lost','cancelled')
+        ORDER BY next_action_at ASC NULLS LAST,updated_at DESC,id LIMIT 10`, [customer.id]),
+      pool.query(`WITH timeline AS (
+        SELECT 'partner:'||e.id timeline_id,'partner' entity_type,e.partner_id entity_id,NULL::text parent_id,e.action,e.action status,
+          '客户资料更新' title,NULL::numeric amount,''::text currency,e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at occurred_at
+        FROM business_partner_event e WHERE e.partner_id=$1
+        UNION ALL
+        SELECT 'inquiry:'||e.id,'inquiry',i.id,NULL::text,e.action,COALESCE(NULLIF(e.to_status,''),i.status),i.inquiry_no,
+          i.quote_amount,i.currency,e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
+        FROM business_inquiry_event e JOIN business_inquiry i ON i.id=e.inquiry_id WHERE i.customer_partner_id=$1
+        UNION ALL
+        SELECT 'quote:'||q.id,'quote',q.id,q.inquiry_id,'quote_'||q.state,q.state,q.quote_no,q.total_amount,q.currency,
+          q.created_by_id,q.created_by_name,q.note,jsonb_build_object('revision',q.revision,'inquiryId',q.inquiry_id),COALESCE(q.sent_at,q.created_at)
+        FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_partner_id=$1
+        UNION ALL
+        SELECT 'order:'||e.id,e.order_type||'_order',COALESCE(e.sales_order_id,e.purchase_order_id),
+          CASE WHEN e.order_type='purchase' THEN p.sales_order_id ELSE NULL END,e.action,COALESCE(NULLIF(e.to_status,''),CASE WHEN e.order_type='sales' THEN s.status ELSE p.status END),
+          CASE WHEN e.order_type='sales' THEN s.order_no ELSE p.order_no END,
+          CASE WHEN e.order_type='sales' THEN s.total_amount ELSE p.total_amount END,
+          CASE WHEN e.order_type='sales' THEN s.currency ELSE p.currency END,e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
+        FROM business_order_event e
+        LEFT JOIN business_sales_order s ON s.id=e.sales_order_id
+        LEFT JOIN business_purchase_order p ON p.id=e.purchase_order_id
+        LEFT JOIN business_sales_order ps ON ps.id=p.sales_order_id
+        WHERE COALESCE(s.customer_partner_id,ps.customer_partner_id)=$1
+        UNION ALL
+        SELECT 'receipt:'||r.id,'goods_receipt',r.id,p.sales_order_id,'received',r.status,r.receipt_no,
+          (SELECT COALESCE(sum(ri.line_total),0) FROM business_goods_receipt_item ri WHERE ri.goods_receipt_id=r.id),p.currency,
+          r.created_by_id,r.created_by_name,r.note,jsonb_build_object('purchaseOrderId',r.purchase_order_id,'warehouseId',r.warehouse_id),r.created_at
+        FROM business_goods_receipt r JOIN business_purchase_order p ON p.id=r.purchase_order_id JOIN business_sales_order s ON s.id=p.sales_order_id
+        WHERE s.customer_partner_id=$1
+        UNION ALL
+        SELECT 'shipment:'||sh.id,'shipment',sh.id,sh.sales_order_id,'shipped',sh.status,sh.shipment_no,NULL::numeric,s.currency,
+          sh.created_by_id,sh.created_by_name,sh.note,jsonb_build_object('warehouseId',sh.warehouse_id,'reservationId',sh.reservation_id),sh.created_at
+        FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1
+      ) SELECT * FROM timeline
+        WHERE ($2::timestamptz IS NULL OR (occurred_at,timeline_id)<($2::timestamptz,$3::text))
+        ORDER BY occurred_at DESC,timeline_id DESC LIMIT $4`, [customer.id, position.occurredAt, position.id, size + 1]),
+    ])
+    const summaryRow = summaryResult.rows[0]
+    const timelineRows = timelineResult.rows.slice(0, size).map((row) => ({
+      id: row.timeline_id, entityType: row.entity_type, entityId: row.entity_id, parentId: row.parent_id,
+      action: row.action, status: row.status, title: row.title, amount: row.amount == null ? null : Number(row.amount), currency: row.currency,
+      actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, occurredAt: row.occurred_at,
+    }))
+    return {
+      customer,
+      summary: {
+        inquiryCount: summaryRow.inquiry_count, openInquiryCount: summaryRow.open_inquiry_count, wonInquiryCount: summaryRow.won_inquiry_count,
+        quoteCount: summaryRow.quote_count, pendingQuoteCount: summaryRow.pending_quote_count, pendingQuoteAmount: Number(summaryRow.pending_quote_amount),
+        salesOrderCount: summaryRow.sales_order_count, openSalesOrderCount: summaryRow.open_sales_order_count,
+        completedSalesOrderCount: summaryRow.completed_sales_order_count, completedSalesAmount: Number(summaryRow.completed_sales_amount),
+        openPurchaseOrderCount: summaryRow.open_purchase_order_count, shipmentCount: summaryRow.shipment_count,
+      },
+      nextActions: nextActionsResult.rows.map((row) => ({ id: row.id, inquiryNo: row.inquiry_no, status: row.status, priority: row.priority, nextAction: row.next_action, nextActionAt: row.next_action_at, vehicleLabel: row.vehicle_label, customerVehicleId: row.customer_vehicle_id, quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), currency: row.currency, updatedAt: row.updated_at })),
+      timeline: { items: timelineRows, nextCursor: timelineResult.rows.length > size && timelineRows.length ? encodeTimelineCursor(timelineRows.at(-1)) : null },
+    }
+  }
+
   return {
     async list({ query = '', partnerType = '', status = '', page = 1, pageSize = 30 } = {}) {
       const q = clean(query); const type = clean(partnerType); const state = clean(status)
@@ -161,6 +255,8 @@ export function createBusinessPartnerRepository(pool) {
     },
 
     get,
+
+    customer360,
 
     async onboardQuickQuoteCustomer(rawInput = {}, actor) {
       const key = requestKey(rawInput.requestKey)
