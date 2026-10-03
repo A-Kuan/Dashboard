@@ -37,7 +37,7 @@ npm run test:sites
 - PostgreSQL 数据库：`dashboard_sku`
 - PostgreSQL / 系统用户：`dashboard-sku`
 - 外部接口前缀：`/sku-preview/api/`
-- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261002T203712Z-2c53443a`
+- 当前 API 版本：`/opt/dashboard-sku-api/releases/20261003T012354Z-a9553977`
 - 空库备份：`/opt/dashboard-sku-api/backups/20260927-pre-smoke-empty.dump`
 - 本次迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-b885538.dump`
 - 版本锁迁移前备份：`/opt/dashboard-sku-api/backups/20260928-before-3de9223.dump`
@@ -61,6 +61,7 @@ npm run test:sites
 - 迁移后验收闭环发布备份：`/opt/dashboard-sku-api/backups/20261002T125644Z-b40ff8ff-dashboard_sku.dump`（SHA-256 `91d57a1a16a7ca0c83c0bc71e3be49e774fe9f224d58afe442e7105c55631793`，2,115,796 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `53d411e83862b808ce6df73f7fc9b85bc64eb233f20139e2fbc7650e1d922f12`，8,405 字节）；清单 `purpose=release`、`releaseRevision=1389875483ca3dfa6eb52d8091a2ad2a8a984006`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
 - 首批试运行工作台最终发布备份：`/opt/dashboard-sku-api/backups/20261002T141337Z-8df69caf-dashboard_sku.dump`（SHA-256 `0b4426a5fa3aec2a3d9824c18d6c76e8ea2acf5d70bc09edd116c234c0ffb1f7`，2,116,592 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `6d513efc54008495792a278eeb20e55af9069e688a22f84668a139561547f69a`，8,616 字节）；清单 `purpose=release`、`releaseRevision=9c7016db12aac4469464e399b515c253182d1062`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
 - 询价与报价业务底座发布备份：`/opt/dashboard-sku-api/backups/20261002T203735Z-e75593f0-dashboard_sku.dump`（SHA-256 `802b1d03c51d3191fd9b256b2045a93595d6fa8c0053cff402d47e0b6b202745`，2,116,592 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `8168176acc82043743eed367e2702137e5b2004ce4abf9be8a669be4dbce01a1`，8,815 字节）；清单 `purpose=release`、`releaseRevision=2c53443a45bf262f15879115d0e9d9a24f2476e4`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
+- 客户与供应商主数据发布备份：`/opt/dashboard-sku-api/backups/20261003T012417Z-2a632f1a-dashboard_sku.dump`（SHA-256 `d1d96b89ab90dff179cf4b7dca4d6af949c2c1b677736031b865d70f8b7cd17b`，2,136,793 字节）、同名 `.epc-assets.tar.gz`（SHA-256 `9223e8726502a1e1060b42842bda6debd2d0c54834a481f29b18d578fa2c9ec2`，120 字节，0 个资源文件）及 `.manifest.json`（SHA-256 `7f25cc1918e50125939f46672c7199d6a6c3b65fe04bb6b3b15ea8c0acb4ddac`，9,137 字节）；清单 `purpose=release`、`releaseRevision=a9553977d0a0f8b0e8cc8d39d2b3b1ecadb2f03c`，三者属主均为 `dashboard-sku:dashboard-sku`、权限均为 `0640`
 
 API 发布使用独立版本目录和 `current` 软链接。数据库迁移在切换服务前以 `dashboard-sku` 用户运行：
 
@@ -338,6 +339,8 @@ PLAYWRIGHT_BASE_URL=https://121.41.24.42/sku-preview/ npm run test:production-sm
 `20261002T141315Z-9c7016db` API 与 `20261002-e6df0651` 前端联合发布后，旧 SKU 治理新增“首批试运行”工作台：可以按 5、8、10 条生成可解释候选，展示准备度、分类和品牌覆盖、已有适配复核场景以及预计人工任务；采用候选只填充待核对方案，不会自动提交、审批或写入资料库。生产候选从 17 条旧资料中选出 5 条，覆盖 5 个标准分类和 3 个标准品牌，预计复核 97 分钟；上线核对发现并修正了一个旧分类内部编码显示问题，最终页面统一展示标准字典名称。PR #48、#49、两个受保护主分支检查、服务器 82 项 API 测试、隔离浏览器 23 项回归、线上只读浏览器冒烟、Nginx 和运维巡检均通过。发布没有创建真实迁移方案，17 条旧 SKU、46 条 OE、1 条适配、20 条变更记录保持不变，`catalog_sku`、迁移批次、方案、方案明细和事件仍为 0。API 回滚点为 `20261002T135945Z-e6df0651`，前端回滚点为 `20261002-13898754`。
 
 `20261002T203712Z-2c53443a` API 发布后，系统新增询价、需求项、多供应商报价、对客报价和业务事件六张表，打通从客户需求到比价、报价、跟进及成交/丢单的服务端闭环；询价和报价使用版本校验防止多人覆盖，写操作要求可信业务权限，生产匿名身份只能查看。PR #51 与受保护主分支检查、服务器 85 项 API 测试、隔离浏览器 24 项回归和线上只读浏览器冒烟均通过；线上读取返回空业务列表，匿名新建询价返回 403，六张业务表均为 0，未写入模拟客户或报价。发布前后 17 条旧 SKU、46 条 OE、1 条适配保持不变；API、每日备份、运维检查和月度异地恢复 timer 均 active，systemd 无失败单元。API 回滚点为 `20261002T141315Z-9c7016db`；迁移 `032` 只前进，不随应用回滚自动降级。
+
+`20261003T012354Z-a9553977` API 发布后，系统新增客户、门店和供应商统一主数据、联系人、客户车辆及合作方审计事件；询价可以关联客户和客户车辆，供应商报价可以关联供应商，同时保留业务发生时的名称、联系人和车辆快照。合作方与子记录使用双层版本校验，VIN 与税号提供唯一性保护，停用或拉黑不删除历史数据。PR #53、受保护主分支检查、服务器 87 项 API 测试、隔离浏览器 24 项回归和线上只读浏览器冒烟均通过；线上合作方列表为空，匿名新建合作方返回 403，四张主数据表及六张询价报价表均为 0，未写入模拟客户、供应商、车辆或报价。发布前后 17 条旧 SKU、46 条 OE、1 条适配保持不变；API、每日备份、运维检查和月度异地恢复 timer 均 active，systemd 无失败单元。API 回滚点为 `20261002T203712Z-2c53443a`；迁移 `033` 只前进，不随应用回滚自动降级。
 
 ## 回滚
 
