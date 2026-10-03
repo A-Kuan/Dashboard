@@ -127,6 +127,13 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return reply.code(201).send(await businessPartnerRepository.create(request.body, actor))
   })
+  app.post('/api/v2/business/quick-quote/customer-onboarding', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    const result = await businessPartnerRepository.onboardQuickQuoteCustomer(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
   app.get('/api/v2/business/partners/:id', async (request, reply) => {
     if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.read')

@@ -880,14 +880,47 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   }
   expect(selectedSku).toBeTruthy()
   const selectedFitment = selectedSku.fitments.find((fitment) => fitment.verificationStatus === 'verified' && fitment.platformMasterId)
-  const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
-    partnerType: 'customer', name: '快速报价闭环客户', phone: '13800000118',
-    contacts: [{ name: '陈师傅', phone: '13800000118', isPrimary: true }],
-    vehicles: [{ platformMasterId: selectedFitment.platformMasterId, vehicleLabel: selectedFitment.vehicleLabel, modelYear: selectedFitment.yearFrom || 2020, vin: 'WP1ZZZ95ZMLB11888' }],
+  const customerResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-customer-e2e-0001',
+    customer: { name: '快速报价闭环客户', phone: '13800000118', contactName: '陈师傅' },
+    vehicle: { platformMasterId: selectedFitment.platformMasterId, vehicleLabel: selectedFitment.vehicleLabel, modelYear: selectedFitment.yearFrom || 2020, vin: 'WP1ZZZ95ZMLB11888' },
   } })
   expect(customerResponse.status()).toBe(201)
-  const customer = await customerResponse.json()
+  const onboarding = await customerResponse.json()
+  expect(onboarding.createdPartner).toBe(true)
+  expect(onboarding.createdVehicle).toBe(true)
+  expect(onboarding.matchedBy).toBe('created')
+  const customer = onboarding.customer
   expect(customer.vehicles[0].platformMasterId).toBe(selectedFitment.platformMasterId)
+  const repeatedOnboardingResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-customer-e2e-0001', customer: { name: '不会覆盖原客户', phone: '13900000118' },
+    vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11888' },
+  } })
+  expect(repeatedOnboardingResponse.status()).toBe(200)
+  const repeatedOnboarding = await repeatedOnboardingResponse.json()
+  expect(repeatedOnboarding.created).toBe(false)
+  expect(repeatedOnboarding.customer.id).toBe(customer.id)
+  expect(repeatedOnboarding.vehicle.id).toBe(customer.vehicles[0].id)
+  const vinMatchedResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-customer-e2e-0002', customer: { name: '重复车辆线索', phone: '13900000118' },
+    vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11888' },
+  } })
+  expect(vinMatchedResponse.status()).toBe(201)
+  const vinMatched = await vinMatchedResponse.json()
+  expect(vinMatched.createdPartner).toBe(false)
+  expect(vinMatched.createdVehicle).toBe(false)
+  expect(vinMatched.matchedBy).toBe('vin')
+  expect(vinMatched.customer.id).toBe(customer.id)
+  const concurrentOnboardingPayloads = [
+    { requestKey: 'quick-quote-customer-concurrent-1', customer: { name: '并发首次客户', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11889' } },
+    { requestKey: 'quick-quote-customer-concurrent-2', customer: { name: '并发首次客户', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11890' } },
+  ]
+  const concurrentOnboardingResponses = await Promise.all(concurrentOnboardingPayloads.map((data) => page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data })))
+  expect(concurrentOnboardingResponses.every((response) => response.status() === 201)).toBeTruthy()
+  const concurrentOnboardings = await Promise.all(concurrentOnboardingResponses.map((response) => response.json()))
+  expect(new Set(concurrentOnboardings.map((item) => item.customer.id)).size).toBe(1)
+  expect(concurrentOnboardings.filter((item) => item.createdPartner)).toHaveLength(1)
+  expect(new Set(concurrentOnboardings.map((item) => item.vehicle.id)).size).toBe(2)
   const supplierResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
     partnerType: 'supplier', name: '快速报价采购供应商', phone: '057188801188',
     contacts: [{ name: '周经理', phone: '13700000118', isPrimary: true }],

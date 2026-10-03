@@ -53,6 +53,14 @@
 
 车辆可以提交 `platformMasterId` 和 `variantMasterId` 关联车型库；服务端会校验车型状态、平台归属和年款边界，并保存标准平台编码。联系人和车辆写入同时校验合作方版本与子记录版本；VIN 在客户车辆中全局唯一。合作方不提供物理删除接口，停止合作使用 `inactive` 或 `blocked`，避免历史询价和报价失去来源。
 
+### 首次快速报价建档
+
+`POST /api/v2/business/quick-quote/customer-onboarding`
+
+首次来询客户提交 `requestKey`、客户名称与联系电话，以及已经选择标准车型平台或版本的车辆资料。服务端在一个事务中完成重复识别和建档：优先按 VIN、其次按车牌识别既有车辆；未命中车辆时按规范化联系电话识别客户。唯一命中会复用原客户或车辆，多个客户使用同一联系电话时返回 `409 QUICK_QUOTE_CUSTOMER_MATCH_AMBIGUOUS`，不会自动合并；VIN 或车牌已存在但标准车型不一致时返回 `409 CUSTOMER_VEHICLE_MASTER_CONFLICT`，要求人工复核。
+
+首次成功返回 `201`，包括 `customer`、`vehicle`、`createdPartner`、`createdVehicle` 和 `matchedBy`。相同 `requestKey` 重试返回原结果和 `200`，不会重复建客户或车辆。建档成功后把返回的客户与车辆 ID 直接用于快速报价。
+
 ### 快速报价上下文
 
 `GET /api/v2/business/quick-quote/context`
