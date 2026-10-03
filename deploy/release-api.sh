@@ -113,6 +113,7 @@ SELECT jsonb_object_agg(metric,pg_temp.exact_count(table_name))::text FROM (VALU
   ('businessPartnerEvent','business_partner_event'),
   ('businessPartnerMerge','business_partner_merge'),
   ('businessCustomerVehicleMerge','business_customer_vehicle_merge'),
+  ('businessMasterDataQualityDecision','business_master_data_quality_decision'),
   ('businessCustomerOnboardingRequest','business_customer_onboarding_request'),
   ('businessSalesOrder','business_sales_order'),
   ('businessSalesOrderItem','business_sales_order_item'),
