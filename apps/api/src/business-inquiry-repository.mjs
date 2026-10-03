@@ -147,7 +147,7 @@ export function createBusinessInquiryRepository(pool) {
     return {
       ...inquiry,
       items: items.rows.map((row) => ({ ...mapItem(row), offers: offers.rows.filter((offer) => offer.inquiry_item_id === row.id).map(mapOffer) })),
-      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
+      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, fulfillmentSource: item.fulfillment_source, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
       events: events.rows.map((row) => ({ id: row.id, action: row.action, fromStatus: row.from_status, toStatus: row.to_status, actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, createdAt: row.created_at })),
     }
   }
@@ -185,6 +185,9 @@ export function createBusinessInquiryRepository(pool) {
         (SELECT count(*)::int FROM business_partner_contact c WHERE c.partner_id=p.id) contact_count,
         (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id) vehicle_count
         FROM business_partner p WHERE ${customerWhere} ORDER BY p.updated_at DESC LIMIT $${customerValues.length}`, customerValues)).rows.map(mapInquiryCustomer)
+      const suppliers = (await pool.query(`SELECT p.id,p.partner_no,p.name,p.short_name,p.phone,p.status,p.version
+        FROM business_partner p WHERE p.status='active' AND p.partner_type IN ('supplier','both')
+        ORDER BY p.updated_at DESC LIMIT $1`, [size])).rows.map((row) => ({ id: row.id, partnerNo: row.partner_no, name: row.name, shortName: row.short_name, phone: row.phone, status: row.status, version: row.version }))
 
       let customer = null; let selectedVehicle = null
       if (clean(customerId)) {
@@ -231,7 +234,7 @@ export function createBusinessInquiryRepository(pool) {
         const fitment = vehicleContext ? row.fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicleContext)) : null
         return { id: row.id, skuCode: row.sku_code, name: row.canonical_name_zh || row.canonical_name_en, brandLabel: row.brand_label || row.brand_code, categoryLabel: row.category_label || row.category_code, unit: row.unit_label, primaryOe: row.primary_oe || '', version: row.version, onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity), fitmentStatus: vehicleContext ? fitment ? 'matched' : 'not_matched' : 'vehicle_required', fitment: fitmentSnapshot(fitment) }
       })
-      return { customers, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
+      return { customers, suppliers, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
     },
 
     async createQuickQuote(rawInput = {}, actor) {
@@ -267,8 +270,20 @@ export function createBusinessInquiryRepository(pool) {
           const fitment = fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicle)) || null
           const overrideReason = clean(draft.fitmentOverrideReason)
           if (!fitment && overrideReason.length < 8) throw problem('QUICK_QUOTE_FITMENT_NOT_CONFIRMED', `第 ${index + 1} 项 SKU 与客户车辆没有已核验适配，需停止或填写明确的人工复核原因`, 409, { catalogSkuId: sku.id, customerVehicleId: vehicle.id })
-          const requestedQuantity = quantity(draft.quantity); const saleUnitPrice = money(draft.saleUnitPrice, `第 ${index + 1} 项销售单价`); const costUnitPrice = money(draft.costUnitPrice, `第 ${index + 1} 项成本价`, { optional: true })
-          normalized.push({ id: randomUUID(), sku, fitment: fitmentSnapshot(fitment, { overridden: !fitment, overrideReason }), quantity: requestedQuantity, saleUnitPrice, costUnitPrice, description: clean(draft.description) || sku.canonical_name_zh || sku.canonical_name_en, unit: clean(draft.unit) || sku.unit_label || '件', lineTotal: Math.round(requestedQuantity * saleUnitPrice * 100) / 100 })
+          const requestedQuantity = quantity(draft.quantity); const saleUnitPrice = money(draft.saleUnitPrice, `第 ${index + 1} 项销售单价`); const costUnitPrice = money(draft.costUnitPrice, `第 ${index + 1} 项成本价`)
+          const fulfillmentSource = clean(draft.fulfillmentSource)
+          if (!['stock', 'purchase'].includes(fulfillmentSource)) throw problem('QUICK_QUOTE_FULFILLMENT_SOURCE_REQUIRED', `第 ${index + 1} 项必须选择现货或采购来源`)
+          let supplier = null
+          if (fulfillmentSource === 'stock') {
+            const available = Number((await client.query(`SELECT COALESCE(sum(on_hand_quantity-reserved_quantity),0)::numeric quantity
+              FROM business_inventory_balance WHERE catalog_sku_id=$1`, [sku.id])).rows[0].quantity)
+            if (available < requestedQuantity) throw problem('QUICK_QUOTE_STOCK_INSUFFICIENT', `第 ${index + 1} 项可用库存不足，不能按现货报价`, 409, { catalogSkuId: sku.id, requestedQuantity, availableQuantity: available })
+          } else {
+            const supplierPartnerId = clean(draft.supplierPartnerId)
+            supplier = (await client.query("SELECT * FROM business_partner WHERE id=$1 AND status='active' AND partner_type IN ('supplier','both') FOR SHARE", [supplierPartnerId])).rows[0]
+            if (!supplier) throw problem('QUICK_QUOTE_SUPPLIER_REQUIRED', `第 ${index + 1} 项采购来源必须选择有效供应商`, 409)
+          }
+          normalized.push({ id: randomUUID(), sku, fitment: fitmentSnapshot(fitment, { overridden: !fitment, overrideReason }), quantity: requestedQuantity, saleUnitPrice, costUnitPrice, fulfillmentSource, supplier, description: clean(draft.description) || sku.canonical_name_zh || sku.canonical_name_en, unit: clean(draft.unit) || sku.unit_label || '件', lineTotal: Math.round(requestedQuantity * saleUnitPrice * 100) / 100 })
         }
         const subtotal = Math.round(normalized.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100
         if (discountAmount > subtotal + freightAmount) throw problem('INVALID_BUSINESS_AMOUNT', '优惠金额不能大于报价金额')
@@ -282,8 +297,14 @@ export function createBusinessInquiryRepository(pool) {
           const inquiryItemId = randomUUID()
           await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,notes)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15)`, [inquiryItemId, inquiryId, index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.sku.brand_label || item.sku.brand_code, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), clean(requested[index].notes)])
-          await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17)`, [randomUUID(), quoteId, inquiryItemId, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
+          let supplierOfferId = null
+          if (item.fulfillmentSource === 'purchase') {
+            supplierOfferId = randomUUID()
+            await client.query(`INSERT INTO business_supplier_offer (id,inquiry_id,inquiry_item_id,supplier_name,supplier_partner_id,brand_label,unit_price,availability,lead_time_days,source_note,selected,created_by_id,created_by_name)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,'ordered',$8,'快速报价采购来源',true,$9,$10)`, [supplierOfferId, inquiryId, inquiryItemId, item.supplier.name, item.supplier.id, item.sku.brand_label || item.sku.brand_code, item.costUnitPrice, Number.isInteger(Number(requested[index].leadTimeDays)) ? Number(requested[index].leadTimeDays) : null, by.id, by.name])
+          }
+          await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19)`, [randomUUID(), quoteId, inquiryItemId, supplierOfferId, item.fulfillmentSource, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
         }
         await insertEvent(client, inquiryId, 'quick_quote_created', actor, { toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, requestKey: key, customerPartnerId: customer.id, customerVehicleId: vehicle.id, vehiclePlatformId: vehicle.platform_master_id, vehicleVariantId: vehicle.variant_master_id, itemCount: normalized.length, totalAmount } })
         return { created: true, inquiryId, quoteId }
@@ -394,9 +415,13 @@ export function createBusinessInquiryRepository(pool) {
             offer = (await client.query('SELECT * FROM business_supplier_offer WHERE id=$1 AND inquiry_id=$2 AND inquiry_item_id=$3', [draft.supplierOfferId, inquiryId, item.id])).rows[0]
             if (!offer) throw problem('INVALID_QUOTE_ITEMS', `第 ${item.line_no} 项选择的供应商报价无效`)
           }
+          const fulfillmentSource = clean(draft.fulfillmentSource) || (offer ? 'purchase' : 'stock')
+          if (!['stock', 'purchase'].includes(fulfillmentSource)) throw problem('INVALID_QUOTE_FULFILLMENT_SOURCE', `第 ${item.line_no} 项履约来源无效`)
+          if (fulfillmentSource === 'purchase' && !offer) throw problem('QUOTE_SUPPLIER_SOURCE_REQUIRED', `第 ${item.line_no} 项选择采购时必须关联供应商报价`)
+          if (fulfillmentSource === 'stock' && offer) throw problem('QUOTE_STOCK_SOURCE_CONFLICT', `第 ${item.line_no} 项选择现货时不能同时关联供应商报价`)
           const saleUnitPrice = money(draft.saleUnitPrice, `第 ${item.line_no} 项销售单价`)
           const costUnitPrice = offer ? Number(offer.unit_price) : money(draft.costUnitPrice, `第 ${item.line_no} 项成本价`, { optional: true })
-          normalized.push({ id: randomUUID(), item, offer, description: clean(draft.description) || item.requirement_text, costUnitPrice, saleUnitPrice, lineTotal: Math.round(Number(item.requested_quantity) * saleUnitPrice * 100) / 100 })
+          normalized.push({ id: randomUUID(), item, offer, fulfillmentSource, description: clean(draft.description) || item.requirement_text, costUnitPrice, saleUnitPrice, lineTotal: Math.round(Number(item.requested_quantity) * saleUnitPrice * 100) / 100 })
         }
         const subtotal = normalized.reduce((sum, item) => sum + item.lineTotal, 0)
         if (discountAmount > subtotal + freightAmount) throw problem('INVALID_BUSINESS_AMOUNT', '优惠金额不能大于报价金额')
@@ -404,8 +429,8 @@ export function createBusinessInquiryRepository(pool) {
         const marginAmount = Math.round((subtotal - normalized.reduce((sum, item) => sum + Number(item.item.requested_quantity) * item.costUnitPrice, 0) - discountAmount) * 100) / 100
         await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,note,created_by_id,created_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [quoteId, inquiryId, quoteNo, inquiry.currency, optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, clean(rawInput.note), by.id, by.name])
-        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
+        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.fulfillmentSource, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
         await client.query(`UPDATE business_inquiry SET status='quoting',quote_amount=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [inquiryId, totalAmount, by.id, by.name])
         await insertEvent(client, inquiryId, 'quote_created', actor, { fromStatus: inquiry.status, toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, subtotal, totalAmount, marginAmount } })
       })

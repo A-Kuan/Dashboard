@@ -883,6 +883,12 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(customerResponse.status()).toBe(201)
   const customer = await customerResponse.json()
   expect(customer.vehicles[0].platformMasterId).toBe(selectedFitment.platformMasterId)
+  const supplierResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'supplier', name: '快速报价采购供应商', phone: '057188801188',
+    contacts: [{ name: '周经理', phone: '13700000118', isPrimary: true }],
+  } })
+  expect(supplierResponse.status()).toBe(201)
+  const supplier = await supplierResponse.json()
 
   const contextResponse = await page.request.get(`/api/v2/business/quick-quote/context?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&skuQuery=${encodeURIComponent(selectedSku.identity.skuCode)}`, { headers: editorHeaders })
   expect(contextResponse.ok()).toBeTruthy()
@@ -891,11 +897,19 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(context.selectedVehicle.platformMasterId).toBe(selectedFitment.platformMasterId)
   expect(context.skus[0].id).toBe(selectedSku.id)
   expect(context.skus[0].fitmentStatus).toBe('matched')
+  expect(context.suppliers.map((item) => item.id)).toContain(supplier.id)
+
+  const unavailableStockResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-stock-unavailable', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    items: [{ catalogSkuId: selectedSku.id, quantity: 1, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'stock' }],
+  } })
+  expect(unavailableStockResponse.status()).toBe(409)
+  expect((await unavailableStockResponse.json()).error).toBe('QUICK_QUOTE_STOCK_INSUFFICIENT')
 
   const payload = {
     requestKey: 'quick-quote-e2e-0001', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
     validUntil: '2026-10-31', note: '车型、OE 与 SKU 已复核',
-    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600 }],
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id, leadTimeDays: 2 }],
   }
   const quickResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: payload })
   expect(quickResponse.status()).toBe(201)
@@ -910,6 +924,8 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(quick.inquiry.quotes[0].creationMode).toBe('quick')
   expect(quick.inquiry.quotes[0].totalAmount).toBe(1776)
   expect(quick.inquiry.quotes[0].items[0].catalogSkuVersion).toBe(selectedSku.version)
+  expect(quick.inquiry.quotes[0].items[0].fulfillmentSource).toBe('purchase')
+  expect(quick.inquiry.quotes[0].items[0].supplierOfferId).toBeTruthy()
 
   const repeatedResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, items: [{ ...payload.items[0], saleUnitPrice: 999 }] } })
   expect(repeatedResponse.status()).toBe(200)
@@ -926,6 +942,24 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(concurrentResponses.map((response) => response.status()).sort()).toEqual([200, 201])
   const concurrentResults = await Promise.all(concurrentResponses.map((response) => response.json()))
   expect(new Set(concurrentResults.map((result) => result.quoteId)).size).toBe(1)
+
+  let orderInquiry = quick.inquiry
+  const sentResponse = await page.request.post(`/api/v2/business/quotes/${orderInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: {
+    expectedRevision: orderInquiry.quotes[0].revision, nextAction: '等待客户确认快速报价',
+  } })
+  expect(sentResponse.ok()).toBeTruthy()
+  orderInquiry = await sentResponse.json()
+  const wonResponse = await page.request.post(`/api/v2/business/inquiries/${orderInquiry.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: orderInquiry.version, status: 'won', note: '客户接受快速报价',
+  } })
+  expect(wonResponse.ok()).toBeTruthy()
+  orderInquiry = await wonResponse.json()
+  const conversionResponse = await page.request.post(`/api/v2/business/inquiries/${orderInquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(conversionResponse.status()).toBe(201)
+  const conversion = await conversionResponse.json()
+  expect(conversion.salesOrder.items[0].fulfillmentSource).toBe('purchase')
+  expect(conversion.purchaseOrders).toHaveLength(1)
+  expect(conversion.purchaseOrders[0].supplierPartnerId).toBe(supplier.id)
 })
 
 test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
@@ -1130,6 +1164,31 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(stockedBalances.items).toHaveLength(2)
   expect(stockedBalances.items.reduce((sum, item) => sum + item.onHandQuantity, 0)).toBe(3)
   expect(stockedBalances.items.every((item) => item.reservedQuantity === 0)).toBeTruthy()
+
+  const stockInquiryResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
+    customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    items: [{ requirementText: '前刹车片现货复购', oeNumber: '95B 698 151 H', requestedQuantity: 1, unit: '套' }],
+  } })
+  expect(stockInquiryResponse.status()).toBe(201)
+  let stockInquiry = await stockInquiryResponse.json()
+  const stockQuoteResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/quotes`, { headers: editorHeaders, data: {
+    items: [{ inquiryItemId: stockInquiry.items[0].id, fulfillmentSource: 'stock', costUnitPrice: 600, saleUnitPrice: 820 }],
+  } })
+  expect(stockQuoteResponse.status()).toBe(201)
+  stockInquiry = await stockQuoteResponse.json()
+  expect(stockInquiry.quotes[0].items[0].fulfillmentSource).toBe('stock')
+  const sentStockQuoteResponse = await page.request.post(`/api/v2/business/quotes/${stockInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: stockInquiry.quotes[0].revision } })
+  expect(sentStockQuoteResponse.ok()).toBeTruthy()
+  stockInquiry = await sentStockQuoteResponse.json()
+  const wonStockInquiryResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/transition`, { headers: editorHeaders, data: { expectedVersion: stockInquiry.version, status: 'won' } })
+  expect(wonStockInquiryResponse.ok()).toBeTruthy()
+  stockInquiry = await wonStockInquiryResponse.json()
+  const stockConversionResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(stockConversionResponse.status()).toBe(201)
+  const stockConversion = await stockConversionResponse.json()
+  expect(stockConversion.salesOrder.items[0].fulfillmentSource).toBe('stock')
+  expect(stockConversion.purchaseOrders).toHaveLength(0)
+  expect(stockConversion.salesOrder.events[0].snapshot.stockItemCount).toBe(1)
 
   const refreshedSalesResponse = await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })
   expect(refreshedSalesResponse.ok()).toBeTruthy()
