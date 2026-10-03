@@ -213,6 +213,51 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       platformId: request.query?.platformId, variantId: request.query?.variantId, pageSize: request.query?.pageSize,
     })
   })
+  app.get('/api/v2/business/quick-quote/drafts', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInquiryRepository.listQuickQuoteDrafts({
+      status: request.query?.status,
+      customerId: request.query?.customerId,
+      page: request.query?.page,
+      pageSize: request.query?.pageSize,
+      mine: request.query?.mine !== 'false',
+    }, actor)
+  })
+  app.post('/api/v2/business/quick-quote/drafts', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    const result = await businessInquiryRepository.createQuickQuoteDraft(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/quick-quote/drafts/:id', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const draft = await businessInquiryRepository.getQuickQuoteDraft(request.params.id)
+    return draft || reply.code(404).send({ error: 'QUICK_QUOTE_DRAFT_NOT_FOUND', message: '快速报价草稿不存在' })
+  })
+  app.patch('/api/v2/business/quick-quote/drafts/:id', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    return businessInquiryRepository.saveQuickQuoteDraft(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/quick-quote/drafts/:id/abandon', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    return businessInquiryRepository.abandonQuickQuoteDraft(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/quick-quote/drafts/:id/submit', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    const result = await businessInquiryRepository.submitQuickQuoteDraft(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
   app.get('/api/v2/business/quick-quote/decision', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.read')

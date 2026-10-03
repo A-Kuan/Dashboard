@@ -986,6 +986,27 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   const staleDecision = await staleDecisionResponse.json()
   expect(staleDecision.error).toBe('QUICK_QUOTE_DECISION_STALE')
   expect(staleDecision.details.currentFingerprint).not.toBe(initialDecision.decisionFingerprint)
+  const staleDraftCreateResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
+    autosaveKey: 'quick-quote-draft-stale-e2e', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, decisionFingerprint: initialDecision.decisionFingerprint, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id }],
+  } })
+  expect(staleDraftCreateResponse.status()).toBe(201)
+  const staleDraft = (await staleDraftCreateResponse.json()).draft
+  expect(staleDraft.readiness.readyToSubmit).toBe(true)
+  const staleDraftSubmitResponse = await page.request.post(`/api/v2/business/quick-quote/drafts/${staleDraft.id}/submit`, { headers: editorHeaders, data: {
+    expectedVersion: staleDraft.version, requestKey: 'quick-quote-draft-stale-submit',
+  } })
+  expect(staleDraftSubmitResponse.status()).toBe(409)
+  expect((await staleDraftSubmitResponse.json()).error).toBe('QUICK_QUOTE_DECISION_STALE')
+  const failedDraft = await (await page.request.get(`/api/v2/business/quick-quote/drafts/${staleDraft.id}`, { headers: editorHeaders })).json()
+  expect(failedDraft.status).toBe('active')
+  expect(failedDraft.submissionError.error).toBe('QUICK_QUOTE_DECISION_STALE')
+  expect(failedDraft.events.some((event) => event.action === 'submission_failed')).toBeTruthy()
+  const abandonedDraftResponse = await page.request.post(`/api/v2/business/quick-quote/drafts/${staleDraft.id}/abandon`, { headers: editorHeaders, data: {
+    expectedVersion: failedDraft.version, reason: '决策依据已更新，改用新草稿',
+  } })
+  expect(abandonedDraftResponse.ok()).toBeTruthy()
+  expect((await abandonedDraftResponse.json()).status).toBe('abandoned')
   const currentDecision = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 888 })
 
   const payload = {
@@ -993,10 +1014,43 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
     validUntil: '2026-10-31', note: '车型、OE 与 SKU 已复核',
     items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, decisionFingerprint: currentDecision.decisionFingerprint, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id, leadTimeDays: 2 }],
   }
-  const quickResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: payload })
+  const draftCreateResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
+    autosaveKey: 'quick-quote-draft-e2e-0001', customerPartnerId: customer.id,
+  } })
+  expect(draftCreateResponse.status()).toBe(201)
+  const initialDraft = (await draftCreateResponse.json()).draft
+  expect(initialDraft.status).toBe('active')
+  expect(initialDraft.readiness.readyToSubmit).toBe(false)
+  expect(initialDraft.readiness.missingFields).toEqual(expect.arrayContaining(['customerVehicleId', 'items']))
+  const draftResumeResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
+    autosaveKey: 'quick-quote-draft-e2e-0001', customerPartnerId: 'will-not-overwrite',
+  } })
+  expect(draftResumeResponse.status()).toBe(200)
+  expect((await draftResumeResponse.json()).draft.id).toBe(initialDraft.id)
+  const draftSaveResponse = await page.request.patch(`/api/v2/business/quick-quote/drafts/${initialDraft.id}`, { headers: editorHeaders, data: {
+    ...payload, expectedVersion: initialDraft.version,
+  } })
+  expect(draftSaveResponse.ok()).toBeTruthy()
+  const savedDraft = await draftSaveResponse.json()
+  expect(savedDraft.version).toBe(initialDraft.version + 1)
+  expect(savedDraft.readiness.readyToSubmit).toBe(true)
+  const staleDraftSaveResponse = await page.request.patch(`/api/v2/business/quick-quote/drafts/${initialDraft.id}`, { headers: editorHeaders, data: {
+    ...payload, expectedVersion: initialDraft.version, note: '不应覆盖新版本',
+  } })
+  expect(staleDraftSaveResponse.status()).toBe(409)
+  expect((await staleDraftSaveResponse.json()).error).toBe('QUICK_QUOTE_DRAFT_VERSION_CONFLICT')
+  const draftListResponse = await page.request.get('/api/v2/business/quick-quote/drafts?status=active&mine=true', { headers: editorHeaders })
+  expect(draftListResponse.ok()).toBeTruthy()
+  expect((await draftListResponse.json()).items.map((item) => item.id)).toContain(initialDraft.id)
+  const quickResponse = await page.request.post(`/api/v2/business/quick-quote/drafts/${initialDraft.id}/submit`, { headers: editorHeaders, data: {
+    expectedVersion: savedDraft.version, requestKey: payload.requestKey,
+  } })
   expect(quickResponse.status()).toBe(201)
   const quick = await quickResponse.json()
   expect(quick.created).toBe(true)
+  expect(quick.draft.status).toBe('submitted')
+  expect(quick.draft.submittedQuoteId).toBe(quick.quoteId)
+  expect(quick.draft.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created', 'saved', 'submission_started', 'submitted']))
   expect(quick.inquiry.customerPartnerId).toBe(customer.id)
   expect(quick.inquiry.customerVehicleId).toBe(customer.vehicles[0].id)
   expect(quick.inquiry.vehiclePlatformId).toBe(selectedFitment.platformMasterId)
@@ -1004,6 +1058,7 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(quick.inquiry.items[0].skuCodeSnapshot).toBe(selectedSku.identity.skuCode)
   expect(quick.inquiry.items[0].fitmentSnapshot.fitmentId).toBe(selectedFitment.id)
   expect(quick.inquiry.quotes[0].creationMode).toBe('quick')
+  expect(quick.inquiry.quotes[0].sourceDraftId).toBe(initialDraft.id)
   expect(quick.inquiry.quotes[0].totalAmount).toBe(1776)
   expect(quick.inquiry.quotes[0].items[0].catalogSkuVersion).toBe(selectedSku.version)
   expect(quick.inquiry.quotes[0].items[0].fulfillmentSource).toBe('purchase')
@@ -1011,6 +1066,21 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(quick.inquiry.quotes[0].items[0].decisionFingerprint).toBe(currentDecision.decisionFingerprint)
   expect(quick.inquiry.quotes[0].items[0].decisionSnapshot.customer.version).toBeGreaterThan(initialDecision.customer.version)
   expect(quick.inquiry.quotes[0].items[0].decisionSnapshot.selectedFulfillment.supplierPartnerId).toBe(supplier.id)
+
+  const repeatedDraftSubmissionResponse = await page.request.post(`/api/v2/business/quick-quote/drafts/${initialDraft.id}/submit`, { headers: editorHeaders, data: {
+    expectedVersion: savedDraft.version, requestKey: payload.requestKey,
+  } })
+  expect(repeatedDraftSubmissionResponse.status()).toBe(200)
+  const repeatedDraftSubmission = await repeatedDraftSubmissionResponse.json()
+  expect(repeatedDraftSubmission.created).toBe(false)
+  expect(repeatedDraftSubmission.draft.submittedQuoteId).toBe(quick.quoteId)
+  const quoteCustomer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
+  expect(quoteCustomer360Response.ok()).toBeTruthy()
+  const quoteCustomer360 = await quoteCustomer360Response.json()
+  expect(quoteCustomer360.summary.activeQuickQuoteDraftCount).toBe(0)
+  expect(quoteCustomer360.summary.submittedQuickQuoteDraftCount).toBeGreaterThanOrEqual(1)
+  expect(quoteCustomer360.quickQuoteDrafts).toEqual([])
+  expect(quoteCustomer360.timeline.items.map((item) => item.entityType)).toContain('quick_quote_draft')
 
   const repeatedResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, items: [{ ...payload.items[0], saleUnitPrice: 999 }] } })
   expect(repeatedResponse.status()).toBe(200)
