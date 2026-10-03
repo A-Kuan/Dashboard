@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
-const receivableStatuses = new Set(['open', 'partial', 'paid', 'void'])
+const receivableStatuses = new Set(['open', 'partial', 'paid', 'refund_pending', 'void'])
 const paymentMethods = new Set(['bank_transfer', 'cash', 'wechat', 'alipay', 'card', 'other'])
 
 function clean(value) { return String(value ?? '').trim() }
@@ -32,12 +32,16 @@ function paymentDate(value) {
 }
 function mapReceivable(row) {
   const originalAmount = number(row.original_amount); const paidAmount = number(row.paid_amount)
+  const creditedAmount = number(row.credited_amount); const refundedAmount = number(row.refunded_amount)
+  const adjustedAmount = Math.round((originalAmount - creditedAmount) * 100) / 100
+  const netCollectedAmount = Math.round((paidAmount - refundedAmount) * 100) / 100
   return {
     id: row.id, receivableNo: row.receivable_no, salesOrderId: row.sales_order_id, salesOrderNo: row.sales_order_no,
     salesOrderStatus: row.sales_order_status, customerPartnerId: row.customer_partner_id, customerName: row.customer_name,
-    status: row.status, currency: row.currency, originalAmount, paidAmount,
-    outstandingAmount: Math.round((originalAmount - paidAmount) * 100) / 100, paymentTermsDays: row.payment_terms_days,
-    dueAt: row.due_at, overdue: !['paid', 'void'].includes(row.status) && String(row.due_at) < new Date().toISOString().slice(0, 10),
+    status: row.status, currency: row.currency, originalAmount, creditedAmount, adjustedAmount, paidAmount, refundedAmount, netCollectedAmount,
+    outstandingAmount: Math.max(0, Math.round((adjustedAmount - netCollectedAmount) * 100) / 100),
+    refundableAmount: Math.max(0, Math.round((netCollectedAmount - adjustedAmount) * 100) / 100), paymentTermsDays: row.payment_terms_days,
+    dueAt: row.due_at, overdue: ['open', 'partial'].includes(row.status) && String(row.due_at) < new Date().toISOString().slice(0, 10),
     version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
     updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
   }
@@ -89,12 +93,14 @@ export function createBusinessFinanceRepository(pool) {
         FROM business_receivable r JOIN business_sales_order s ON s.id=r.sales_order_id ${clause}
         ORDER BY CASE WHEN r.status IN ('open','partial') AND r.due_at<current_date THEN 0 WHEN r.status IN ('open','partial') THEN 1 ELSE 2 END,r.due_at,r.updated_at DESC
         LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
-      const summaryRows = (await pool.query(`SELECT status,count(*)::int count,COALESCE(sum(original_amount),0) original_amount,COALESCE(sum(paid_amount),0) paid_amount,
-        COALESCE(sum(original_amount-paid_amount),0) outstanding_amount FROM business_receivable GROUP BY status`)).rows
-      const overdue = (await pool.query("SELECT count(*)::int count,COALESCE(sum(original_amount-paid_amount),0) amount FROM business_receivable WHERE status IN ('open','partial') AND due_at<current_date")).rows[0]
+      const summaryRows = (await pool.query(`SELECT status,count(*)::int count,COALESCE(sum(original_amount),0) original_amount,
+        COALESCE(sum(credited_amount),0) credited_amount,COALESCE(sum(paid_amount),0) paid_amount,COALESCE(sum(refunded_amount),0) refunded_amount,
+        COALESCE(sum(GREATEST((original_amount-credited_amount)-(paid_amount-refunded_amount),0)),0) outstanding_amount
+        FROM business_receivable GROUP BY status`)).rows
+      const overdue = (await pool.query("SELECT count(*)::int count,COALESCE(sum(GREATEST((original_amount-credited_amount)-(paid_amount-refunded_amount),0)),0) amount FROM business_receivable WHERE status IN ('open','partial') AND due_at<current_date")).rows[0]
       return {
         items: rows.map(mapReceivable), total, page: currentPage, pageSize: size,
-        summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), originalAmount: number(item.original_amount), paidAmount: number(item.paid_amount), outstandingAmount: number(item.outstanding_amount) }])),
+        summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), originalAmount: number(item.original_amount), creditedAmount: number(item.credited_amount), paidAmount: number(item.paid_amount), refundedAmount: number(item.refunded_amount), outstandingAmount: number(item.outstanding_amount) }])),
         overdue: { count: number(overdue.count), amount: number(overdue.amount) },
       }
     },
@@ -112,16 +118,20 @@ export function createBusinessFinanceRepository(pool) {
           WHERE r.id=$1 OR r.receivable_no=upper(trim($1)) OR s.id=$1 OR s.order_no=upper(trim($1)) LIMIT 1 FOR UPDATE OF r`, [id])).rows[0]
         if (!receivable) throw problem('RECEIVABLE_NOT_FOUND', '应收单不存在', 404)
         if (receivable.status === 'void' || receivable.sales_order_status === 'cancelled') throw problem('RECEIVABLE_VOID', '已作废应收单不能收款', 409)
-        const outstanding = Math.round((number(receivable.original_amount) - number(receivable.paid_amount)) * 100) / 100
+        if (receivable.status === 'refund_pending') throw problem('RECEIVABLE_REFUND_PENDING', '应收单存在待退款，不能继续收款', 409)
+        const adjustedAmount = Math.round((number(receivable.original_amount) - number(receivable.credited_amount)) * 100) / 100
+        const netCollected = Math.round((number(receivable.paid_amount) - number(receivable.refunded_amount)) * 100) / 100
+        const outstanding = Math.round((adjustedAmount - netCollected) * 100) / 100
         if (amount > outstanding) throw problem('PAYMENT_EXCEEDS_OUTSTANDING', '收款金额不能超过未收金额', 409, { outstandingAmount: outstanding })
         const paidAmount = Math.round((number(receivable.paid_amount) + amount) * 100) / 100
-        const nextStatus = paidAmount === number(receivable.original_amount) ? 'paid' : 'partial'
+        const nextNetCollected = Math.round((paidAmount - number(receivable.refunded_amount)) * 100) / 100
+        const nextStatus = nextNetCollected === adjustedAmount ? 'paid' : 'partial'
         const paymentId = randomUUID(); const paymentNo = generatedNumber('PAY')
         await client.query(`INSERT INTO business_payment
           (id,payment_no,source_request_id,receivable_id,amount,payment_method,paid_at,reference_no,note,created_by_id,created_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [paymentId, paymentNo, key, receivable.id, amount, method, paidAt, clean(rawInput.referenceNo), clean(rawInput.note), by.id, by.name])
         await client.query(`UPDATE business_receivable SET paid_amount=$2,status=$3,version=version+1,updated_by_id=$4,updated_by_name=$5,updated_at=now() WHERE id=$1`, [receivable.id, paidAmount, nextStatus, by.id, by.name])
-        await insertEvent(client, receivable.id, 'payment_recorded', actor, { fromStatus: receivable.status, toStatus: nextStatus, note: rawInput.note, snapshot: { paymentId, paymentNo, amount, paymentMethod: method, paidAt, paidAmount, outstandingAmount: Math.round((number(receivable.original_amount) - paidAmount) * 100) / 100 } })
+        await insertEvent(client, receivable.id, 'payment_recorded', actor, { fromStatus: receivable.status, toStatus: nextStatus, note: rawInput.note, snapshot: { paymentId, paymentNo, amount, paymentMethod: method, paidAt, paidAmount, outstandingAmount: Math.round((adjustedAmount - nextNetCollected) * 100) / 100 } })
         return { paymentId, receivableId: receivable.id, created: true }
       })
       const receivable = await getReceivable(result.receivableId)

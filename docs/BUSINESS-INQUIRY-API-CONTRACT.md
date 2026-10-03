@@ -250,7 +250,7 @@
 - `GET /api/v2/business/receivables/:id`
 - `POST /api/v2/business/receivables/:id/payments`
 
-成交询价转换为销售订单时，会在同一事务内按客户账期自动生成一张应收单；销售订单详情同时返回应收编号、原始金额、已收、未收、状态和到期日。应收状态为 `open`、`partial`、`paid` 或 `void`。取消没有收款的销售订单会同步作废应收；一旦已有收款则返回 `409 RECEIVABLE_HAS_PAYMENTS`，必须先走退款或冲销，避免删除财务事实。
+成交询价转换为销售订单时，会在同一事务内按客户账期自动生成一张应收单；销售订单详情同时返回应收编号、原始金额、退货冲减、调整后应收、已收、已退、净收、未收、待退、状态和到期日。应收状态为 `open`、`partial`、`paid`、`refund_pending` 或 `void`。取消没有收款的销售订单会同步作废应收；一旦已有收款则返回 `409 RECEIVABLE_HAS_PAYMENTS`，必须先走退款或冲销，避免删除财务事实。
 
 收款请求提交全局唯一的 `requestKey`、金额和方式：
 
@@ -265,7 +265,38 @@
 }
 ```
 
-收款方式支持 `bank_transfer`、`cash`、`wechat`、`alipay`、`card` 和 `other`。首次成功返回 `201`；相同请求键重试返回原收款与 `200`，并发提交也只入账一次。分次收款会将应收更新为 `partial`，结清后更新为 `paid`；超过未收金额返回 `409 PAYMENT_EXCEEDS_OUTSTANDING`。每次操作保留收款单、操作人和不可覆盖的应收事件，客户 360 同步汇总已收、未收、逾期金额和财务动态。
+收款方式支持 `bank_transfer`、`cash`、`wechat`、`alipay`、`card` 和 `other`。首次成功返回 `201`；相同请求键重试返回原收款与 `200`，并发提交也只入账一次。分次收款会将应收更新为 `partial`，结清后更新为 `paid`；超过调整后未收金额返回 `409 PAYMENT_EXCEEDS_OUTSTANDING`。退货冲减造成多收款时进入 `refund_pending` 并暂停继续收款。每次操作保留收款单、操作人和不可覆盖的应收事件，客户 360 同步汇总净收、未收、逾期、冲减和退款动态。
+
+### 退货、退款与售后
+
+- `GET /api/v2/business/after-sales?q=&status=&customerPartnerId=&salesOrderId=&page=1&pageSize=30`
+- `POST /api/v2/business/after-sales`
+- `GET /api/v2/business/after-sales/:id`
+- `POST /api/v2/business/after-sales/:id/review`
+- `POST /api/v2/business/after-sales/:id/return-receipts`
+- `POST /api/v2/business/after-sales/:id/refunds`
+
+售后申请必须逐条引用真实的销售出库明细，而不是只填 SKU 或文字名称；因此系统可以验证尚可退数量，并保留原销售明细、出库单、库存批次、仓库和售价证据。相同出库批次在未拒绝、未取消的售后单中累计申请数量不得超过实际出库数量。
+
+流程为：
+
+`requested → approved → partially_received / refund_pending / completed`
+
+审核也可以进入 `rejected`。审核时提交 `expectedVersion`，可以逐项核准退货数量和退款单价；退款单价不能超过原销售单价。退货入库使用全局唯一 `requestKey`，可以分批入库，每一批都恢复原出库仓、原库存批次与汇总余额，写入 `return_in` 流水，并按核准金额冲减应收。
+
+应收冲减后，如果客户净付款高于调整后应收，售后单和应收单进入 `refund_pending`。退款接口只能退这部分多收金额，不能超过本售后单的累计冲减额：
+
+```json
+{
+  "requestKey": "refund-20261003-0001",
+  "amount": 780,
+  "refundMethod": "wechat",
+  "referenceNo": "WX-REFUND-001",
+  "note": "原路退回客户"
+}
+```
+
+退货入库要求 `business.inventory`，退款要求 `business.finance`，创建要求 `business.after_sales`，审核要求独立的 `business.after_sales.review`；申请人不能审核自己的售后单。生产匿名身份只有查看权限。创建、入库和退款入口都使用数据库事务和请求键防重，并发重试不会重复建单、重复入库、重复冲减或重复退款。客户 360 和销售订单详情同步返回售后汇总与事件。
 
 ### 采购订单与到货
 

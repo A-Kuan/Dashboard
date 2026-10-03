@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -282,6 +282,46 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.finance')
     if (!actor) return
     const result = await businessFinanceRepository.recordPayment(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/after-sales', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessAfterSalesRepository.listCases({ query: request.query?.q, status: request.query?.status, customerPartnerId: request.query?.customerPartnerId, salesOrderId: request.query?.salesOrderId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/business/after-sales', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.after_sales')
+    if (!actor) return
+    const result = await businessAfterSalesRepository.createCase(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/after-sales/:id', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const afterSalesCase = await businessAfterSalesRepository.getCase(request.params.id)
+    return afterSalesCase || reply.code(404).send({ error: 'AFTER_SALES_NOT_FOUND', message: '售后单不存在' })
+  })
+  app.post('/api/v2/business/after-sales/:id/review', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.after_sales.review')
+    if (!actor) return
+    return businessAfterSalesRepository.reviewCase(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/after-sales/:id/return-receipts', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    const result = await businessAfterSalesRepository.receiveReturn(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.post('/api/v2/business/after-sales/:id/refunds', async (request, reply) => {
+    if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.finance')
+    if (!actor) return
+    const result = await businessAfterSalesRepository.recordRefund(request.params.id, request.body, actor)
     return reply.code(result.created ? 201 : 200).send(result)
   })
   app.get('/api/v2/business/purchase-orders', async (request, reply) => {

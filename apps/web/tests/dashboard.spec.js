@@ -1014,6 +1014,7 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
 
 test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
+  const afterSalesReviewerHeaders = { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': encodeURIComponent('独立售后审核员'), 'x-operator-id': 'after-sales-reviewer-e2e-1' }
   const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
     warehouseCode: 'HZ-MAIN', name: '杭州主仓', address: '杭州市余杭区', isDefault: true,
   } })
@@ -1433,6 +1434,87 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const receivableList = await (await page.request.get(`/api/v2/business/receivables?customerPartnerId=${customer.id}`, { headers: editorHeaders })).json()
   expect(receivableList.items.map((item) => item.id)).toContain(finalReceivable.id)
 
+  const returnedShipmentItem = firstShipment.shipment.items[0]
+  const afterSalesPayload = {
+    requestKey: 'e2e-after-sales-first', salesOrderId: salesOrder.id, reasonCode: 'fitment_issue',
+    description: '装车复核发现版本不适配，客户退回首批刹车片',
+    items: [{ shipmentItemId: returnedShipmentItem.id, quantity: 1 }],
+  }
+  const afterSalesResponse = await page.request.post('/api/v2/business/after-sales', { headers: editorHeaders, data: afterSalesPayload })
+  expect(afterSalesResponse.status()).toBe(201)
+  let afterSales = (await afterSalesResponse.json()).case
+  expect(afterSales.status).toBe('requested')
+  expect(afterSales.items[0].saleUnitPrice).toBe(780)
+  expect(afterSales.requestedRefundAmount).toBe(780)
+  const repeatedAfterSalesResponse = await page.request.post('/api/v2/business/after-sales', { headers: editorHeaders, data: { ...afterSalesPayload, description: '重复请求不应覆盖原单' } })
+  expect(repeatedAfterSalesResponse.status()).toBe(200)
+  expect((await repeatedAfterSalesResponse.json()).case.id).toBe(afterSales.id)
+  const excessiveReturnResponse = await page.request.post('/api/v2/business/after-sales', { headers: editorHeaders, data: {
+    ...afterSalesPayload, requestKey: 'e2e-after-sales-excess',
+  } })
+  expect(excessiveReturnResponse.status()).toBe(409)
+  expect((await excessiveReturnResponse.json()).error).toBe('RETURN_QUANTITY_EXCEEDS_SHIPPED')
+  const selfReviewResponse = await page.request.post(`/api/v2/business/after-sales/${afterSales.id}/review`, { headers: editorHeaders, data: {
+    expectedVersion: afterSales.version, decision: 'approve', note: '申请人不应自行审核',
+  } })
+  expect(selfReviewResponse.status()).toBe(403)
+  const approvedAfterSalesResponse = await page.request.post(`/api/v2/business/after-sales/${afterSales.id}/review`, { headers: afterSalesReviewerHeaders, data: {
+    expectedVersion: afterSales.version, decision: 'approve', note: '核对原出库批次与配件包装无误，同意退货退款',
+  } })
+  expect(approvedAfterSalesResponse.ok()).toBeTruthy()
+  afterSales = await approvedAfterSalesResponse.json()
+  expect(afterSales.status).toBe('approved')
+  expect(afterSales.approvedRefundAmount).toBe(780)
+
+  const returnReceiptPayload = { requestKey: 'e2e-return-receipt-first', expectedVersion: afterSales.version, items: [{ itemId: afterSales.items[0].id, quantity: 1 }], note: '退回原出库仓与原批次' }
+  const concurrentReturnResponses = await Promise.all([
+    page.request.post(`/api/v2/business/after-sales/${afterSales.id}/return-receipts`, { headers: editorHeaders, data: returnReceiptPayload }),
+    page.request.post(`/api/v2/business/after-sales/${afterSales.id}/return-receipts`, { headers: editorHeaders, data: returnReceiptPayload }),
+  ])
+  expect(concurrentReturnResponses.map((response) => response.status()).sort()).toEqual([200, 201])
+  afterSales = await (await page.request.get(`/api/v2/business/after-sales/${afterSales.id}`, { headers: editorHeaders })).json()
+  expect(afterSales.status).toBe('refund_pending')
+  expect(afterSales.creditedAmount).toBe(780)
+  expect(afterSales.items[0].receivedQuantity).toBe(1)
+  expect(afterSales.returnReceipts).toHaveLength(1)
+  const receivableAfterReturn = await (await page.request.get(`/api/v2/business/receivables/${salesOrder.receivable.id}`, { headers: editorHeaders })).json()
+  expect(receivableAfterReturn.status).toBe('refund_pending')
+  expect(receivableAfterReturn.creditedAmount).toBe(780)
+  expect(receivableAfterReturn.adjustedAmount).toBe(2420)
+  expect(receivableAfterReturn.refundableAmount).toBe(780)
+  const collectionWhileRefundPending = await page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: { requestKey: 'e2e-payment-during-refund', amount: 1, paymentMethod: 'cash' } })
+  expect(collectionWhileRefundPending.status()).toBe(409)
+  expect((await collectionWhileRefundPending.json()).error).toBe('RECEIVABLE_REFUND_PENDING')
+  const balancesAfterReturn = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterReturn.items.find((item) => item.stockKey === returnedShipmentItem.stockKey).onHandQuantity).toBe(1)
+  const movementsAfterReturn = await (await page.request.get(`/api/v2/business/inventory-movements?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(movementsAfterReturn.items.map((item) => item.movementType)).toContain('return_in')
+  const returnedStockMovements = movementsAfterReturn.items.filter((movement) => movement.stockKey === returnedShipmentItem.stockKey)
+  expect(returnedStockMovements.reduce((sum, movement) => sum + movement.onHandDelta, 0)).toBe(1)
+
+  const refundPayload = { requestKey: 'e2e-refund-first', amount: 780, refundMethod: 'wechat', referenceNo: 'WX-REFUND-001', note: '原路退回客户' }
+  const concurrentRefundResponses = await Promise.all([
+    page.request.post(`/api/v2/business/after-sales/${afterSales.id}/refunds`, { headers: editorHeaders, data: refundPayload }),
+    page.request.post(`/api/v2/business/after-sales/${afterSales.id}/refunds`, { headers: editorHeaders, data: refundPayload }),
+  ])
+  expect(concurrentRefundResponses.map((response) => response.status()).sort()).toEqual([200, 201])
+  afterSales = await (await page.request.get(`/api/v2/business/after-sales/${afterSales.id}`, { headers: editorHeaders })).json()
+  expect(afterSales.status).toBe('completed')
+  expect(afterSales.refundedAmount).toBe(780)
+  expect(afterSales.refunds).toHaveLength(1)
+  const settledReceivable = await (await page.request.get(`/api/v2/business/receivables/${salesOrder.receivable.id}`, { headers: editorHeaders })).json()
+  expect(settledReceivable.status).toBe('paid')
+  expect(settledReceivable.refundedAmount).toBe(780)
+  expect(settledReceivable.netCollectedAmount).toBe(2420)
+  expect(settledReceivable.outstandingAmount).toBe(0)
+  expect(settledReceivable.refundableAmount).toBe(0)
+  const overRefundResponse = await page.request.post(`/api/v2/business/after-sales/${afterSales.id}/refunds`, { headers: editorHeaders, data: { ...refundPayload, requestKey: 'e2e-refund-over', amount: 1 } })
+  expect(overRefundResponse.status()).toBe(409)
+  expect((await overRefundResponse.json()).error).toBe('AFTER_SALES_REFUND_NOT_PENDING')
+  salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
+  expect(salesOrder.afterSalesCases.map((item) => item.id)).toContain(afterSales.id)
+  expect(salesOrder.receivable.netCollectedAmount).toBe(2420)
+
   const customer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
   expect(customer360Response.ok()).toBeTruthy()
   const customer360 = await customer360Response.json()
@@ -1442,9 +1524,13 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(customer360.summary.completedSalesOrderCount).toBeGreaterThanOrEqual(1)
   expect(customer360.summary.completedSalesAmount).toBeGreaterThanOrEqual(3200)
   expect(customer360.summary.shipmentCount).toBeGreaterThanOrEqual(2)
-  expect(customer360.summary.collectedAmount).toBe(3200)
+  expect(customer360.summary.collectedAmount).toBe(2420)
   expect(customer360.summary.outstandingAmount).toBe(0)
-  expect(customer360.timeline.items.map((item) => item.entityType)).toEqual(expect.arrayContaining(['inquiry', 'sales_order', 'purchase_order', 'goods_receipt', 'shipment', 'receivable']))
+  expect(customer360.summary.afterSalesCount).toBe(1)
+  expect(customer360.summary.openAfterSalesCount).toBe(0)
+  expect(customer360.summary.afterSalesCreditedAmount).toBe(780)
+  expect(customer360.summary.refundedAmount).toBe(780)
+  expect(customer360.timeline.items.map((item) => item.entityType)).toEqual(expect.arrayContaining(['inquiry', 'sales_order', 'purchase_order', 'goods_receipt', 'shipment', 'receivable', 'after_sales']))
   const timelinePageResponse = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=12`, { headers: editorHeaders })
   const timelinePage = await timelinePageResponse.json()
   expect(timelinePage.timeline.items).toHaveLength(12)
