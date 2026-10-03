@@ -20,6 +20,7 @@ test('partner routes keep reads visible and protect master-data writes', async (
   const repository = {
     list: async (input) => { calls.push(['list', input]); return { items: [partner], total: 1, page: 1, pageSize: 30, summary: [] } },
     get: async (id) => { calls.push(['get', id]); return id === partner.id ? partner : null },
+    customer360: async (id, input) => { calls.push(['customer360', id, input]); return id === partner.id ? { customer: partner, summary: { inquiryCount: 1 }, nextActions: [], timeline: { items: [], nextCursor: null } } : null },
     onboardQuickQuoteCustomer: async (input, actor) => { calls.push(['onboardQuickQuoteCustomer', input, actor]); return { created: true, createdPartner: true, createdVehicle: true, matchedBy: 'created', customer: partner, vehicle: { id: 'vehicle-1' } } },
     create: async (input, actor) => { calls.push(['create', input, actor]); return partner },
     update: async (id, input, actor) => { calls.push(['update', id, input, actor]); return { ...partner, ...input, version: 2 } },
@@ -37,6 +38,12 @@ test('partner routes keep reads visible and protect master-data writes', async (
   assert.equal(found.statusCode, 200)
   const missing = await app.inject({ method: 'GET', url: '/api/v2/business/partners/missing', headers: { 'x-operator-role': 'catalog_viewer' } })
   assert.equal(missing.statusCode, 404)
+  const customer360 = await app.inject({ method: 'GET', url: `/api/v2/business/partners/${partner.id}/360?pageSize=15&cursor=next`, headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(customer360.statusCode, 200)
+  assert.equal(customer360.json().summary.inquiryCount, 1)
+  assert.deepEqual(calls.find((entry) => entry[0] === 'customer360').slice(1), [partner.id, { pageSize: '15', cursor: 'next' }])
+  const missing360 = await app.inject({ method: 'GET', url: '/api/v2/business/partners/missing/360', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(missing360.statusCode, 404)
 
   const denied = await app.inject({ method: 'POST', url: '/api/v2/business/partners', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { partnerType: 'customer', name: '无权限' } })
   assert.equal(denied.statusCode, 403)

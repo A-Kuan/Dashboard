@@ -141,6 +141,13 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const partner = await businessPartnerRepository.get(request.params.id)
     return partner || reply.code(404).send({ error: 'PARTNER_NOT_FOUND', message: '客户或供应商不存在' })
   })
+  app.get('/api/v2/business/partners/:id/360', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const result = await businessPartnerRepository.customer360(request.params.id, { pageSize: request.query?.pageSize, cursor: request.query?.cursor })
+    return result || reply.code(404).send({ error: 'PARTNER_NOT_FOUND', message: '客户或供应商不存在' })
+  })
   app.patch('/api/v2/business/partners/:id', async (request, reply) => {
     if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.manage')
