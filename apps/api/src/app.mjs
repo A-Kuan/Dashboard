@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -206,6 +206,57 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.manage')
     if (!actor) return
     return businessInquiryRepository.transition(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/inquiries/:id/convert-order', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.order')
+    if (!actor) return
+    const result = await businessOrderRepository.convertInquiry(request.params.id, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/sales-orders', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessOrderRepository.listSalesOrders({ query: request.query?.q, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/sales-orders/:id', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const order = await businessOrderRepository.getSalesOrder(request.params.id)
+    return order || reply.code(404).send({ error: 'SALES_ORDER_NOT_FOUND', message: '销售订单不存在' })
+  })
+  app.post('/api/v2/business/sales-orders/:id/transition', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.order')
+    if (!actor) return
+    return businessOrderRepository.transitionSalesOrder(request.params.id, request.body, actor)
+  })
+  app.get('/api/v2/business/purchase-orders', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessOrderRepository.listPurchaseOrders({ query: request.query?.q, status: request.query?.status, supplierPartnerId: request.query?.supplierPartnerId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/purchase-orders/:id', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const order = await businessOrderRepository.getPurchaseOrder(request.params.id)
+    return order || reply.code(404).send({ error: 'PURCHASE_ORDER_NOT_FOUND', message: '采购订单不存在' })
+  })
+  app.post('/api/v2/business/purchase-orders/:id/transition', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.order')
+    if (!actor) return
+    return businessOrderRepository.transitionPurchaseOrder(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/purchase-orders/:id/receive', async (request, reply) => {
+    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.order')
+    if (!actor) return
+    return businessOrderRepository.receivePurchaseOrder(request.params.id, request.body, actor)
   })
   app.get('/api/v2/catalog/legacy-migration-preview', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })

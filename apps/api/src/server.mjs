@@ -17,6 +17,7 @@ import { createCatalogEpcAssetStorage } from './catalog-epc-asset-storage.mjs'
 import { createCatalogLegacyMigrationRepository } from './catalog-legacy-migration-repository.mjs'
 import { createBusinessInquiryRepository } from './business-inquiry-repository.mjs'
 import { createBusinessPartnerRepository } from './business-partner-repository.mjs'
+import { createBusinessOrderRepository } from './business-order-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
 import { resolveReleaseRevision } from './release-info.mjs'
 
@@ -44,6 +45,7 @@ const app = buildApp({
   catalogLegacyMigrationRepository: createCatalogLegacyMigrationRepository(pool),
   businessInquiryRepository: createBusinessInquiryRepository(pool),
   businessPartnerRepository: createBusinessPartnerRepository(pool),
+  businessOrderRepository: createBusinessOrderRepository(pool),
   releaseRevision,
   getDatabasePoolStats: () => ({ totalCount: pool.totalCount, idleCount: pool.idleCount, waitingCount: pool.waitingCount }),
   readinessCheck: async () => {

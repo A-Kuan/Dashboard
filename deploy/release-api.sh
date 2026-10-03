@@ -104,7 +104,12 @@ SELECT json_build_object(
   'businessPartner',pg_temp.exact_count('business_partner'),
   'businessPartnerContact',pg_temp.exact_count('business_partner_contact'),
   'businessCustomerVehicle',pg_temp.exact_count('business_customer_vehicle'),
-  'businessPartnerEvent',pg_temp.exact_count('business_partner_event')
+  'businessPartnerEvent',pg_temp.exact_count('business_partner_event'),
+  'businessSalesOrder',pg_temp.exact_count('business_sales_order'),
+  'businessSalesOrderItem',pg_temp.exact_count('business_sales_order_item'),
+  'businessPurchaseOrder',pg_temp.exact_count('business_purchase_order'),
+  'businessPurchaseOrderItem',pg_temp.exact_count('business_purchase_order_item'),
+  'businessOrderEvent',pg_temp.exact_count('business_order_event')
 )::text;
 SQL
 REMOTE

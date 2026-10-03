@@ -74,11 +74,31 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const partnerList = await partnerListResponse.json()
     assert.ok(Array.isArray(partnerList.items))
     assert.ok(Number.isInteger(partnerList.total))
+    const salesOrderListResponse = await page.request.get(new URL('api/v2/business/sales-orders?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(salesOrderListResponse.ok(), true)
+    const salesOrderList = await salesOrderListResponse.json()
+    assert.ok(Array.isArray(salesOrderList.items))
+    assert.ok(Number.isInteger(salesOrderList.total))
+    const purchaseOrderListResponse = await page.request.get(new URL('api/v2/business/purchase-orders?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(purchaseOrderListResponse.ok(), true)
+    const purchaseOrderList = await purchaseOrderListResponse.json()
+    assert.ok(Array.isArray(purchaseOrderList.items))
+    assert.ok(Number.isInteger(purchaseOrderList.total))
     if (!session.capabilities.includes('business.manage')) {
       const denied = await page.request.post(new URL('api/v2/business/inquiries', baseUrl).toString(), { data: { customerName: '只读冒烟', items: [{ requirementText: '不应写入' }] } })
       assert.equal(denied.status(), 403)
       const partnerDenied = await page.request.post(new URL('api/v2/business/partners', baseUrl).toString(), { data: { partnerType: 'customer', name: '不应写入' } })
       assert.equal(partnerDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.order')) {
+      const conversionDenied = await page.request.post(new URL('api/v2/business/inquiries/read-only-smoke/convert-order', baseUrl).toString())
+      assert.equal(conversionDenied.status(), 403)
+      const salesTransitionDenied = await page.request.post(new URL('api/v2/business/sales-orders/read-only-smoke/transition', baseUrl).toString(), { data: { expectedVersion: 1, status: 'confirmed' } })
+      assert.equal(salesTransitionDenied.status(), 403)
+      const purchaseTransitionDenied = await page.request.post(new URL('api/v2/business/purchase-orders/read-only-smoke/transition', baseUrl).toString(), { data: { expectedVersion: 1, status: 'submitted' } })
+      assert.equal(purchaseTransitionDenied.status(), 403)
+      const receiptDenied = await page.request.post(new URL('api/v2/business/purchase-orders/read-only-smoke/receive', baseUrl).toString(), { data: { expectedVersion: 1, items: [{ itemId: 'read-only-smoke', quantity: 1 }] } })
+      assert.equal(receiptDenied.status(), 403)
     }
 
     assert.ok(catalogRequests.length > 0)
