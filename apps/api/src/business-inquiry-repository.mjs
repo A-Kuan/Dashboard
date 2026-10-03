@@ -534,11 +534,11 @@ export function createBusinessInquiryRepository(pool) {
       const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
       const customerTerm = clean(customerQuery); const vehicleTerm = clean(vehicleQuery); const skuTerm = clean(skuQuery)
       const customerValues = []; let customerWhere = "p.status='active' AND p.partner_type IN ('customer','both')"
-      if (customerTerm) { customerValues.push(`%${customerTerm}%`); customerWhere += ` AND (p.name ILIKE $1 OR p.short_name ILIKE $1 OR p.phone ILIKE $1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND (c.name ILIKE $1 OR c.phone ILIKE $1 OR c.wechat ILIKE $1)) OR EXISTS (SELECT 1 FROM business_customer_vehicle v WHERE v.partner_id=p.id AND (v.vin ILIKE $1 OR v.license_plate ILIKE $1 OR v.vehicle_label ILIKE $1)))` }
+      if (customerTerm) { customerValues.push(`%${customerTerm}%`); customerWhere += ` AND (p.name ILIKE $1 OR p.short_name ILIKE $1 OR p.phone ILIKE $1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND (c.name ILIKE $1 OR c.phone ILIKE $1 OR c.wechat ILIKE $1)) OR EXISTS (SELECT 1 FROM business_customer_vehicle v WHERE v.partner_id=p.id AND v.merged_into_vehicle_id IS NULL AND (v.vin ILIKE $1 OR v.license_plate ILIKE $1 OR v.vehicle_label ILIKE $1)))` }
       customerValues.push(size)
       const customers = (await pool.query(`SELECT p.*,
         (SELECT count(*)::int FROM business_partner_contact c WHERE c.partner_id=p.id) contact_count,
-        (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id) vehicle_count
+        (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id AND v.merged_into_vehicle_id IS NULL) vehicle_count
         FROM business_partner p WHERE ${customerWhere} ORDER BY p.updated_at DESC LIMIT $${customerValues.length}`, customerValues)).rows.map(mapInquiryCustomer)
       const suppliers = (await pool.query(`SELECT p.id,p.partner_no,p.name,p.short_name,p.phone,p.status,p.version
         FROM business_partner p WHERE p.status='active' AND p.partner_type IN ('supplier','both')
@@ -551,7 +551,7 @@ export function createBusinessInquiryRepository(pool) {
         if (!partner) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价选择的客户不存在或不可用', 400)
         const [contacts, vehicles] = await Promise.all([
           pool.query('SELECT * FROM business_partner_contact WHERE partner_id=$1 ORDER BY is_primary DESC,created_at,id', [partner.id]),
-          pool.query('SELECT * FROM business_customer_vehicle WHERE partner_id=$1 ORDER BY updated_at DESC,id', [partner.id]),
+          pool.query('SELECT * FROM business_customer_vehicle WHERE partner_id=$1 AND merged_into_vehicle_id IS NULL ORDER BY updated_at DESC,id', [partner.id]),
         ])
         customer = { ...mapInquiryCustomer(partner), contacts: contacts.rows.map((row) => ({ id: row.id, name: row.name, phone: row.phone, wechat: row.wechat, isPrimary: row.is_primary })), vehicles: vehicles.rows.map((row) => ({ id: row.id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, engineCode: row.engine_code, modelYear: row.model_year })) }
         if (clean(customerVehicleId)) {
@@ -616,7 +616,7 @@ export function createBusinessInquiryRepository(pool) {
       if (!fulfillmentSource && (fulfillmentWarehouseId || supplierPartnerId)) throw problem('INVALID_QUOTE_DECISION_FULFILLMENT', '选择仓库或供应商时必须同时指定履约来源')
       const customer = (await queryClient.query("SELECT * FROM business_partner WHERE id=$1 AND status='active' AND partner_type IN ('customer','both')", [partnerId])).rows[0]
       if (!customer) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '报价决策选择的客户不存在或不可用', 400)
-      const vehicle = (await queryClient.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2', [vehicleId, partnerId])).rows[0]
+      const vehicle = (await queryClient.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 AND merged_into_vehicle_id IS NULL', [vehicleId, partnerId])).rows[0]
       if (!vehicle) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '报价决策选择的客户车辆不存在', 400)
       const sku = (await queryClient.query(`SELECT s.*,
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe,
@@ -717,7 +717,7 @@ export function createBusinessInquiryRepository(pool) {
         }
         const customer = (await client.query("SELECT * FROM business_partner WHERE id=$1 AND partner_type IN ('customer','both') FOR SHARE", [customerPartnerId])).rows[0]
         if (!customer || customer.status !== 'active') throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价选择的客户不存在或不可用', 400)
-        const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR SHARE', [customerVehicleId, customer.id])).rows[0]
+        const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 AND merged_into_vehicle_id IS NULL FOR SHARE', [customerVehicleId, customer.id])).rows[0]
         if (!vehicle) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '快速报价选择的客户车辆不存在', 400)
         if (!vehicle.platform_master_id) throw problem('CUSTOMER_VEHICLE_NOT_STANDARDIZED', '客户车辆尚未关联标准车型平台，不能进行 SKU 快速报价', 409)
         const master = (await client.query(`SELECT p.lifecycle_status platform_status,v.lifecycle_status variant_status
@@ -833,7 +833,7 @@ export function createBusinessInquiryRepository(pool) {
             contactPhone ||= contact?.phone || partner.phone
           }
           if (input.customerVehicleId) {
-            const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2', [input.customerVehicleId, partner.id])).rows[0]
+            const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 AND merged_into_vehicle_id IS NULL', [input.customerVehicleId, partner.id])).rows[0]
             if (!vehicle) throw problem('INVALID_CUSTOMER_VEHICLE', '关联的客户车辆不存在', 400)
             vehicleLabel = vehicle.vehicle_label; vin = vehicle.vin; vehiclePlatformId = vehicle.platform_master_id; vehicleVariantId = vehicle.variant_master_id
           }
@@ -974,7 +974,7 @@ export function createBusinessInquiryRepository(pool) {
         if (!sourceItems.length) throw problem('QUOTE_ITEMS_NOT_FOUND', '报价单没有明细，不能修订', 409)
         const requested = Array.isArray(rawInput.items) ? rawInput.items : []
         if (requested.length && requested.length !== sourceItems.length) throw problem('INVALID_QUOTE_REVISION_ITEMS', '报价修订必须保留并覆盖原报价全部明细')
-        const liveVehicle = inquiry.customer_vehicle_id ? (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR SHARE', [inquiry.customer_vehicle_id, inquiry.customer_partner_id])).rows[0] : null
+        const liveVehicle = inquiry.customer_vehicle_id ? (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 AND merged_into_vehicle_id IS NULL FOR SHARE', [inquiry.customer_vehicle_id, inquiry.customer_partner_id])).rows[0] : null
         if (inquiry.customer_vehicle_id && !liveVehicle) throw problem('CUSTOMER_VEHICLE_UNAVAILABLE', '客户车辆已不存在或不再属于当前客户，不能修订报价', 409)
         if (liveVehicle && (liveVehicle.platform_master_id !== inquiry.vehicle_platform_id || liveVehicle.variant_master_id !== inquiry.vehicle_variant_id || clean(liveVehicle.vin) !== clean(inquiry.vin))) {
           await client.query(`UPDATE business_inquiry SET vehicle_label=$2,vin=$3,vehicle_platform_id=$4,vehicle_variant_id=$5,version=version+1,updated_at=now() WHERE id=$1`, [inquiry.id, liveVehicle.vehicle_label, liveVehicle.vin, liveVehicle.platform_master_id, liveVehicle.variant_master_id])

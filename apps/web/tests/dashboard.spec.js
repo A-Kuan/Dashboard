@@ -2065,6 +2065,86 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(salesOrder.profitability.supplierPayableAmount).toBe(1800)
   expect(salesOrder.profitability.supplierPaidAmount).toBe(1800)
 
+  const survivorVehicleId = customer.vehicles[0].id
+  const duplicateVehicleResponse = await page.request.post(`/api/v2/business/partners/${customer.id}/vehicles`, { headers: editorHeaders, data: {
+    expectedPartnerVersion: customer.version, vehicleLabel: '待合并 Cayenne 车辆资料', licensePlate: customer.vehicles[0].licensePlate,
+    platformCode: customer.vehicles[0].platformCode, engineCode: customer.vehicles[0].engineCode, modelYear: customer.vehicles[0].modelYear,
+  } })
+  expect(duplicateVehicleResponse.status()).toBe(201)
+  customer = await duplicateVehicleResponse.json()
+  const duplicateVehicle = customer.vehicles.find((vehicle) => vehicle.id !== survivorVehicleId)
+  const vehicleMergeInquiryResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
+    customerPartnerId: customer.id, customerVehicleId: duplicateVehicle.id, channel: 'phone', nextAction: '验证车辆合并引用迁移',
+    items: [{ requirementText: '重复车辆资料验证', requestedQuantity: 1, unit: '件' }],
+  } })
+  expect(vehicleMergeInquiryResponse.status()).toBe(201)
+  const vehicleMergeInquiry = await vehicleMergeInquiryResponse.json()
+  const vehicleMergeDraftResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
+    autosaveKey: 'vehicle-merge-draft-e2e', customerPartnerId: customer.id, customerVehicleId: duplicateVehicle.id,
+    currency: 'CNY', note: '验证重复车辆合并同步草稿引用', items: [],
+  } })
+  expect(vehicleMergeDraftResponse.status()).toBe(201)
+  const vehicleMergeDraft = (await vehicleMergeDraftResponse.json()).draft
+  const unreviewedVehicleMergePreview = await (await page.request.post('/api/v2/business/customer-vehicles/merge-preview', { headers: editorHeaders, data: {
+    survivorVehicleId, retiredVehicleId: duplicateVehicle.id,
+  } })).json()
+  expect(unreviewedVehicleMergePreview.ready).toBe(false)
+  expect(unreviewedVehicleMergePreview.requiredChoices).toContain('vehicleLabel')
+  expect(unreviewedVehicleMergePreview.impact.inquiries).toBe(1)
+  expect(unreviewedVehicleMergePreview.impact.quickQuoteDrafts).toBe(1)
+  const vehicleMergeInput = { survivorVehicleId, retiredVehicleId: duplicateVehicle.id, fieldChoices: { vehicleLabel: 'survivor' } }
+  const reviewedVehicleMergePreview = await (await page.request.post('/api/v2/business/customer-vehicles/merge-preview', { headers: editorHeaders, data: vehicleMergeInput })).json()
+  expect(reviewedVehicleMergePreview.ready).toBe(true)
+  const editorVehicleMergeDenied = await page.request.post('/api/v2/business/customer-vehicles/merge', { headers: editorHeaders, data: {
+    ...vehicleMergeInput, requestKey: 'customer-vehicle-merge-e2e-1', previewFingerprint: reviewedVehicleMergePreview.fingerprint, reason: '确认同一客户的重复车辆资料',
+  } })
+  expect(editorVehicleMergeDenied.status()).toBe(403)
+  const vehicleBeforeStaleChange = customer.vehicles.find((vehicle) => vehicle.id === survivorVehicleId)
+  const changedVehicleResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}/vehicles/${survivorVehicleId}`, { headers: editorHeaders, data: {
+    expectedPartnerVersion: customer.version, expectedVersion: vehicleBeforeStaleChange.version, vehicleLabel: vehicleBeforeStaleChange.vehicleLabel,
+    vin: vehicleBeforeStaleChange.vin, licensePlate: vehicleBeforeStaleChange.licensePlate, platformCode: vehicleBeforeStaleChange.platformCode,
+    engineCode: vehicleBeforeStaleChange.engineCode, modelYear: vehicleBeforeStaleChange.modelYear, notes: '车辆合并前补充的资料变化',
+  } })
+  expect(changedVehicleResponse.ok()).toBeTruthy()
+  customer = await changedVehicleResponse.json()
+  const staleVehicleMergeResponse = await page.request.post('/api/v2/business/customer-vehicles/merge', { headers: creatorAdminHeaders, data: {
+    ...vehicleMergeInput, requestKey: 'customer-vehicle-merge-e2e-1', previewFingerprint: reviewedVehicleMergePreview.fingerprint, reason: '确认同一客户的重复车辆资料',
+  } })
+  expect(staleVehicleMergeResponse.status()).toBe(409)
+  expect((await staleVehicleMergeResponse.json()).error).toBe('CUSTOMER_VEHICLE_MERGE_PREVIEW_STALE')
+  const currentVehicleMergePreview = await (await page.request.post('/api/v2/business/customer-vehicles/merge-preview', { headers: editorHeaders, data: vehicleMergeInput })).json()
+  expect(currentVehicleMergePreview.ready).toBe(true)
+  const vehicleMergeResponse = await page.request.post('/api/v2/business/customer-vehicles/merge', { headers: creatorAdminHeaders, data: {
+    ...vehicleMergeInput, requestKey: 'customer-vehicle-merge-e2e-1', previewFingerprint: currentVehicleMergePreview.fingerprint, reason: '确认同一客户的重复车辆资料',
+  } })
+  expect(vehicleMergeResponse.status()).toBe(201)
+  const vehicleMerge = await vehicleMergeResponse.json()
+  customer = vehicleMerge.customer
+  expect(vehicleMerge.survivorVehicle.id).toBe(survivorVehicleId)
+  expect(vehicleMerge.retiredVehicle.mergedIntoVehicleId).toBe(survivorVehicleId)
+  expect(vehicleMerge.retiredVehicle.vin).toBe('')
+  expect(vehicleMerge.retiredVehicle.licensePlate).toBe('')
+  const repeatedVehicleMergeResponse = await page.request.post('/api/v2/business/customer-vehicles/merge', { headers: creatorAdminHeaders, data: {
+    ...vehicleMergeInput, requestKey: 'customer-vehicle-merge-e2e-1', reason: '重复请求应返回原车辆合并结果',
+  } })
+  expect(repeatedVehicleMergeResponse.status()).toBe(200)
+  expect((await repeatedVehicleMergeResponse.json()).mergeId).toBe(vehicleMerge.mergeId)
+  const mergedVehicleInquiry = await (await page.request.get(`/api/v2/business/inquiries/${vehicleMergeInquiry.id}`, { headers: editorHeaders })).json()
+  expect(mergedVehicleInquiry.customerVehicleId).toBe(survivorVehicleId)
+  const mergedVehicleDraft = await (await page.request.get(`/api/v2/business/quick-quote/drafts/${vehicleMergeDraft.id}`, { headers: editorHeaders })).json()
+  expect(mergedVehicleDraft.customerVehicleId).toBe(survivorVehicleId)
+  expect(mergedVehicleDraft.payload.customerVehicleId).toBe(survivorVehicleId)
+  expect(mergedVehicleDraft.version).toBe(vehicleMergeDraft.version + 1)
+  expect(mergedVehicleDraft.events.map((item) => item.action)).toContain('vehicle_merged')
+  const vehicleContext = await (await page.request.get(`/api/v2/business/quick-quote/context?customerId=${customer.id}`, { headers: editorHeaders })).json()
+  expect(vehicleContext.customer.vehicles.map((vehicle) => vehicle.id)).toContain(survivorVehicleId)
+  expect(vehicleContext.customer.vehicles.map((vehicle) => vehicle.id)).not.toContain(duplicateVehicle.id)
+  const retiredVehicleUpdateResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}/vehicles/${duplicateVehicle.id}`, { headers: editorHeaders, data: {
+    expectedPartnerVersion: customer.version, expectedVersion: vehicleMerge.retiredVehicle.version, vehicleLabel: '不允许继续修改',
+  } })
+  expect(retiredVehicleUpdateResponse.status()).toBe(409)
+  expect((await retiredVehicleUpdateResponse.json()).error).toBe('CUSTOMER_VEHICLE_ALREADY_MERGED')
+
   const customer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
   expect(customer360Response.ok()).toBeTruthy()
   const customer360 = await customer360Response.json()
@@ -2092,7 +2172,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(new Set([...timelinePage.timeline.items, ...olderTimeline.timeline.items].map((item) => item.id)).size).toBe(timelinePage.timeline.items.length + olderTimeline.timeline.items.length)
 
   const mergeDraftResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
-    autosaveKey: 'customer-merge-draft-e2e', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    autosaveKey: 'customer-merge-draft-e2e', customerPartnerId: customer.id, customerVehicleId: survivorVehicleId,
     currency: 'CNY', note: '验证客户合并同步草稿引用', items: [],
   } })
   expect(mergeDraftResponse.status()).toBe(201)
@@ -2113,7 +2193,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(unreviewedMergePreview.impact.salesOrders).toBeGreaterThanOrEqual(1)
   expect(unreviewedMergePreview.impact.receivables).toBeGreaterThanOrEqual(1)
   expect(unreviewedMergePreview.impact.afterSalesCases).toBe(1)
-  expect(unreviewedMergePreview.impact.quickQuoteDrafts).toBe(1)
+  expect(unreviewedMergePreview.impact.quickQuoteDrafts).toBeGreaterThanOrEqual(2)
   const mergeInput = {
     survivorPartnerId: mergeSurvivor.id, retiredPartnerId: customer.id,
     fieldChoices: { name: 'retired', phone: 'retired', paymentTermsDays: 'retired', creditLimit: 'retired' },
@@ -2147,7 +2227,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(merge.survivor.phone).toBe(currentMergePreview.resolved.phone)
   expect(merge.survivor.paymentTermsDays).toBe(currentMergePreview.resolved.paymentTermsDays)
   expect(merge.survivor.creditLimit).toBe(currentMergePreview.resolved.creditLimit)
-  expect(merge.survivor.vehicles.map((item) => item.id)).toContain(customer.vehicles[0].id)
+  expect(merge.survivor.vehicles.map((item) => item.id)).toContain(survivorVehicleId)
   expect(merge.survivor.contacts.filter((item) => item.isPrimary)).toHaveLength(1)
   expect(merge.retired.mergedIntoPartnerId).toBe(mergeSurvivor.id)
   expect(merge.retired.status).toBe('inactive')

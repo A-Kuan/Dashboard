@@ -25,6 +25,8 @@ test('partner routes keep reads visible and protect master-data writes', async (
     onboardQuickQuoteCustomer: async (input, actor) => { calls.push(['onboardQuickQuoteCustomer', input, actor]); return { created: true, createdPartner: true, createdVehicle: true, matchedBy: 'created', customer: partner, vehicle: { id: 'vehicle-1' } } },
     previewCustomerMerge: async (input) => { calls.push(['previewCustomerMerge', input]); return { ready: true, fingerprint: 'merge-preview-1', survivor: partner, retired: { id: 'partner-2' }, impact: {} } },
     mergeCustomer: async (input, actor) => { calls.push(['mergeCustomer', input, actor]); return { created: true, mergeId: 'merge-1', survivor: partner, retired: { id: 'partner-2', mergedIntoPartnerId: partner.id } } },
+    previewCustomerVehicleMerge: async (input) => { calls.push(['previewCustomerVehicleMerge', input]); return { ready: true, fingerprint: 'vehicle-merge-preview-1', survivor: { id: 'vehicle-1' }, retired: { id: 'vehicle-2' }, impact: {} } },
+    mergeCustomerVehicle: async (input, actor) => { calls.push(['mergeCustomerVehicle', input, actor]); return { created: true, mergeId: 'vehicle-merge-1', customer: partner, survivorVehicle: { id: 'vehicle-1' }, retiredVehicle: { id: 'vehicle-2', mergedIntoVehicleId: 'vehicle-1' } } },
     create: async (input, actor) => { calls.push(['create', input, actor]); return partner },
     update: async (id, input, actor) => { calls.push(['update', id, input, actor]); return { ...partner, ...input, version: 2 } },
     addContact: async (id, input, actor) => { calls.push(['addContact', id, input, actor]); return { ...partner, contacts: [{ id: 'contact-1', name: input.name }] } },
@@ -70,6 +72,13 @@ test('partner routes keep reads visible and protect master-data writes', async (
   assert.equal(mergeDenied.json().details.capability, 'business.customer.merge')
   const admin = { 'x-operator-role': 'catalog_admin', 'x-operator-name': encodeURIComponent('资料管理员'), 'x-operator-id': 'admin-1' }
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/partners/merge', headers: admin, payload: { requestKey: 'merge-1', previewFingerprint: 'merge-preview-1', survivorPartnerId: 'partner-1', retiredPartnerId: 'partner-2', reason: '确认重复客户资料' } })).statusCode, 201)
+  const vehicleMergePreview = await app.inject({ method: 'POST', url: '/api/v2/business/customer-vehicles/merge-preview', headers: editor, payload: { survivorVehicleId: 'vehicle-1', retiredVehicleId: 'vehicle-2' } })
+  assert.equal(vehicleMergePreview.statusCode, 200)
+  assert.equal(vehicleMergePreview.json().fingerprint, 'vehicle-merge-preview-1')
+  const vehicleMergeDenied = await app.inject({ method: 'POST', url: '/api/v2/business/customer-vehicles/merge', headers: editor, payload: { survivorVehicleId: 'vehicle-1', retiredVehicleId: 'vehicle-2' } })
+  assert.equal(vehicleMergeDenied.statusCode, 403)
+  assert.equal(vehicleMergeDenied.json().details.capability, 'business.customer.vehicle.merge')
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/customer-vehicles/merge', headers: admin, payload: { requestKey: 'vehicle-merge-1', previewFingerprint: 'vehicle-merge-preview-1', survivorVehicleId: 'vehicle-1', retiredVehicleId: 'vehicle-2', reason: '确认同一客户的重复车辆资料' } })).statusCode, 201)
 
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/partners', headers: editor, payload: { partnerType: 'customer', name: '王师傅汽修' } })).statusCode, 201)
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding', headers: editor, payload: { requestKey: 'onboard-1', previewFingerprint: 'preview-1', customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })).statusCode, 201)

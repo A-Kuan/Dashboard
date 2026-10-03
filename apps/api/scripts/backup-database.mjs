@@ -39,7 +39,7 @@ try {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
-  for (const table of ['business_payable', 'business_supplier_payment', 'business_payable_event', 'business_supplier_return_case', 'business_supplier_return_item', 'business_supplier_return_shipment', 'business_supplier_return_shipment_item', 'business_supplier_refund', 'business_supplier_return_event', 'business_quote_approval_event', 'business_quote_revision_event', 'business_quote_integrity_event', 'business_control_event', 'business_quick_quote_draft', 'business_quick_quote_draft_event', 'business_partner_merge']) {
+  for (const table of ['business_payable', 'business_supplier_payment', 'business_payable_event', 'business_supplier_return_case', 'business_supplier_return_item', 'business_supplier_return_shipment', 'business_supplier_return_shipment_item', 'business_supplier_refund', 'business_supplier_return_event', 'business_quote_approval_event', 'business_quote_revision_event', 'business_quote_integrity_event', 'business_control_event', 'business_quick_quote_draft', 'business_quick_quote_draft_event', 'business_partner_merge', 'business_customer_vehicle_merge']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
