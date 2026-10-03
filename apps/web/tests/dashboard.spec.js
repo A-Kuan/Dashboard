@@ -865,6 +865,69 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
   await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
 })
 
+test('connects customer vehicle, verified SKU and an idempotent quick quote', async ({ page }) => {
+  const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('快速报价员'), 'x-operator-id': 'quick-quote-e2e-1' }
+  const verifiedList = await (await page.request.get('/api/v2/catalog/skus?status=verified&pageSize=20', { headers: editorHeaders })).json()
+  let selectedSku = null
+  for (const item of verifiedList.items) {
+    const detail = await (await page.request.get(`/api/v2/catalog/skus/${item.id}`, { headers: editorHeaders })).json()
+    if (detail.fitments.some((fitment) => fitment.verificationStatus === 'verified' && fitment.platformMasterId)) { selectedSku = detail; break }
+  }
+  expect(selectedSku).toBeTruthy()
+  const selectedFitment = selectedSku.fitments.find((fitment) => fitment.verificationStatus === 'verified' && fitment.platformMasterId)
+  const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'customer', name: '快速报价闭环客户', phone: '13800000118',
+    contacts: [{ name: '陈师傅', phone: '13800000118', isPrimary: true }],
+    vehicles: [{ platformMasterId: selectedFitment.platformMasterId, vehicleLabel: selectedFitment.vehicleLabel, modelYear: selectedFitment.yearFrom || 2020, vin: 'WP1ZZZ95ZMLB11888' }],
+  } })
+  expect(customerResponse.status()).toBe(201)
+  const customer = await customerResponse.json()
+  expect(customer.vehicles[0].platformMasterId).toBe(selectedFitment.platformMasterId)
+
+  const contextResponse = await page.request.get(`/api/v2/business/quick-quote/context?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&skuQuery=${encodeURIComponent(selectedSku.identity.skuCode)}`, { headers: editorHeaders })
+  expect(contextResponse.ok()).toBeTruthy()
+  const context = await contextResponse.json()
+  expect(context.customer.id).toBe(customer.id)
+  expect(context.selectedVehicle.platformMasterId).toBe(selectedFitment.platformMasterId)
+  expect(context.skus[0].id).toBe(selectedSku.id)
+  expect(context.skus[0].fitmentStatus).toBe('matched')
+
+  const payload = {
+    requestKey: 'quick-quote-e2e-0001', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    validUntil: '2026-10-31', note: '车型、OE 与 SKU 已复核',
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600 }],
+  }
+  const quickResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: payload })
+  expect(quickResponse.status()).toBe(201)
+  const quick = await quickResponse.json()
+  expect(quick.created).toBe(true)
+  expect(quick.inquiry.customerPartnerId).toBe(customer.id)
+  expect(quick.inquiry.customerVehicleId).toBe(customer.vehicles[0].id)
+  expect(quick.inquiry.vehiclePlatformId).toBe(selectedFitment.platformMasterId)
+  expect(quick.inquiry.items[0].catalogSkuId).toBe(selectedSku.id)
+  expect(quick.inquiry.items[0].skuCodeSnapshot).toBe(selectedSku.identity.skuCode)
+  expect(quick.inquiry.items[0].fitmentSnapshot.fitmentId).toBe(selectedFitment.id)
+  expect(quick.inquiry.quotes[0].creationMode).toBe('quick')
+  expect(quick.inquiry.quotes[0].totalAmount).toBe(1776)
+  expect(quick.inquiry.quotes[0].items[0].catalogSkuVersion).toBe(selectedSku.version)
+
+  const repeatedResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, items: [{ ...payload.items[0], saleUnitPrice: 999 }] } })
+  expect(repeatedResponse.status()).toBe(200)
+  const repeated = await repeatedResponse.json()
+  expect(repeated.created).toBe(false)
+  expect(repeated.quoteId).toBe(quick.quoteId)
+  expect(repeated.inquiry.quotes[0].totalAmount).toBe(1776)
+
+  const concurrentPayload = { ...payload, requestKey: 'quick-quote-e2e-0002' }
+  const concurrentResponses = await Promise.all([
+    page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: concurrentPayload }),
+    page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: concurrentPayload }),
+  ])
+  expect(concurrentResponses.map((response) => response.status()).sort()).toEqual([200, 201])
+  const concurrentResults = await Promise.all(concurrentResponses.map((response) => response.json()))
+  expect(new Set(concurrentResults.map((result) => result.quoteId)).size).toBe(1)
+})
+
 test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
   const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {

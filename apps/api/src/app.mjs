@@ -164,6 +164,23 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return businessPartnerRepository.updateVehicle(request.params.id, request.params.vehicleId, request.body, actor)
   })
+  app.get('/api/v2/business/quick-quote/context', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInquiryRepository.quoteContext({
+      customerQuery: request.query?.customerQuery, vehicleQuery: request.query?.vehicleQuery, skuQuery: request.query?.skuQuery,
+      customerId: request.query?.customerId, customerVehicleId: request.query?.customerVehicleId,
+      platformId: request.query?.platformId, variantId: request.query?.variantId, pageSize: request.query?.pageSize,
+    })
+  })
+  app.post('/api/v2/business/quick-quotes', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    const result = await businessInquiryRepository.createQuickQuote(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
   app.get('/api/v2/business/inquiries', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.read')

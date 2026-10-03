@@ -5,6 +5,8 @@
 ## 核心原则
 
 - 询价单保存客户、车型/VIN、需求明细、负责人和下一步动作。
+- 客户车辆可以绑定已启用的车型平台和车型版本；快速报价不会只依赖自由文本车型。
+- 快速报价只接受已审核 SKU，并固化 SKU 版本、主编号和当时已核验的适配范围。
 - 每个需求明细可以保存多条供应商报价，并明确被选中的报价。
 - 对客报价必须覆盖询价单的全部需求明细，避免漏项。
 - 发送报价和状态流转使用版本号防止多人操作互相覆盖。
@@ -49,7 +51,46 @@
 - `POST /api/v2/business/partners/:id/vehicles`
 - `PATCH /api/v2/business/partners/:id/vehicles/:vehicleId`
 
-联系人和车辆写入同时校验合作方版本与子记录版本；VIN 在客户车辆中全局唯一。合作方不提供物理删除接口，停止合作使用 `inactive` 或 `blocked`，避免历史询价和报价失去来源。
+车辆可以提交 `platformMasterId` 和 `variantMasterId` 关联车型库；服务端会校验车型状态、平台归属和年款边界，并保存标准平台编码。联系人和车辆写入同时校验合作方版本与子记录版本；VIN 在客户车辆中全局唯一。合作方不提供物理删除接口，停止合作使用 `inactive` 或 `blocked`，避免历史询价和报价失去来源。
+
+### 快速报价上下文
+
+`GET /api/v2/business/quick-quote/context`
+
+查询参数支持 `customerQuery`、`vehicleQuery`、`skuQuery`、`customerId`、`customerVehicleId`、`platformId` 和 `variantId`。返回：
+
+- 可选客户及客户车辆；
+- 已启用的车型版本；
+- 已完成独立审核的 SKU；
+- SKU 对当前客户车辆的适配结果；
+- 当前库存、锁定库存和可用库存数量。
+
+未审核 SKU 不进入快速报价候选，避免把草稿资料直接用于对客承诺。
+
+### 一步生成快速报价
+
+`POST /api/v2/business/quick-quotes`
+
+```json
+{
+  "requestKey": "quick-quote-20261003-0001",
+  "customerPartnerId": "客户 ID",
+  "customerVehicleId": "客户车辆 ID",
+  "validUntil": "2026-10-31",
+  "items": [
+    {
+      "catalogSkuId": "已审核 SKU ID",
+      "quantity": 2,
+      "saleUnitPrice": 888,
+      "costUnitPrice": 600
+    }
+  ]
+}
+```
+
+服务端在同一个事务中生成询价、询价明细、报价和报价明细，并计算小计、优惠、运费、总额与毛利。每个明细都会保存 SKU 编码、名称、品牌、版本及适配快照。SKU 与客户车辆没有已核验适配时默认阻断；确需人工放行时必须填写明确的 `fitmentOverrideReason`，原因随报价永久保存。
+
+`requestKey` 用于防止网络重试产生重复报价。首次成功返回 `201` 和 `created: true`；重复请求返回原报价、`200` 和 `created: false`，不会采用重试请求中变化的价格。
 
 ### 查询询价列表
 
@@ -207,6 +248,6 @@
 
 ## 后续接入
 
-- 客户、供应商和客户车辆已经支持主数据关联，同时保留业务发生时的名称和车辆快照。
-- 询价需求可以关联现有 `catalog_sku`，但不会因 SKU 资料变化而改写已发送报价。
+- 客户、供应商和客户车辆已经支持主数据关联，客户车辆可以进一步关联标准车型平台和版本，同时保留业务发生时的名称和车辆快照。
+- 询价需求和报价明细都保存 `catalog_sku` 及版本快照，不会因后续 SKU 资料变化而改写历史报价。
 - 服务端已经覆盖销售/采购订单、仓库、采购收货、库存预留、销售出库及流水；前端视觉仍需先确认后接入。

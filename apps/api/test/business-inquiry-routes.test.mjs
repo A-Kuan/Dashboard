@@ -30,6 +30,8 @@ test('business inquiry routes expose reads while protecting operational writes',
   const calls = []
   const inquiry = { id: 'inquiry-1', inquiryNo: 'INQ-20261002-ABC123', status: 'new', version: 1, items: [{ id: 'item-1' }], quotes: [] }
   const repository = {
+    quoteContext: async (input) => { calls.push(['quoteContext', input]); return { customers: [], vehicles: [], skus: [] } },
+    createQuickQuote: async (input, actor) => { calls.push(['createQuickQuote', input, actor]); return { created: true, quoteId: 'quote-quick-1', inquiry } },
     list: async (input) => { calls.push(['list', input]); return { items: [inquiry], total: 1, page: 1, pageSize: 30, summary: { new: { count: 1, amount: 0 } } } },
     get: async (id) => { calls.push(['get', id]); return id === inquiry.id ? inquiry : null },
     create: async (input, actor) => { calls.push(['create', input, actor]); return inquiry },
@@ -49,6 +51,9 @@ test('business inquiry routes expose reads while protecting operational writes',
   assert.equal(found.statusCode, 200)
   const missing = await app.inject({ method: 'GET', url: '/api/v2/business/inquiries/missing', headers: { 'x-operator-role': 'catalog_viewer' } })
   assert.equal(missing.statusCode, 404)
+  const context = await app.inject({ method: 'GET', url: '/api/v2/business/quick-quote/context?customerQuery=%E7%8E%8B%E5%B8%88%E5%82%85&skuQuery=95B', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(context.statusCode, 200)
+  assert.equal(calls.find((entry) => entry[0] === 'quoteContext')[1].skuQuery, '95B')
 
   const denied = await app.inject({ method: 'POST', url: '/api/v2/business/inquiries', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { customerName: '无权限客户' } })
   assert.equal(denied.statusCode, 403)
@@ -56,10 +61,15 @@ test('business inquiry routes expose reads while protecting operational writes',
   const reviewerDenied = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/quotes`, headers: { 'x-operator-role': 'catalog_reviewer' }, payload: { items: [] } })
   assert.equal(reviewerDenied.statusCode, 403)
   assert.equal(reviewerDenied.json().details.capability, 'business.quote')
+  const quickDenied = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quotes', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { requestKey: 'quick-denied-1' } })
+  assert.equal(quickDenied.statusCode, 403)
 
   const editor = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-1' }
   const created = await app.inject({ method: 'POST', url: '/api/v2/business/inquiries', headers: editor, payload: { customerName: '王师傅汽修', items: [{ requirementText: '前刹车片' }] } })
   assert.equal(created.statusCode, 201)
+  const quick = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quotes', headers: editor, payload: { requestKey: 'quick-route-001', customerPartnerId: 'partner-1', customerVehicleId: 'vehicle-1', items: [{ catalogSkuId: 'sku-1', quantity: 1, saleUnitPrice: 850 }] } })
+  assert.equal(quick.statusCode, 201)
+  assert.equal(calls.find((entry) => entry[0] === 'createQuickQuote')[2].name, '业务员甲')
   const offered = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/items/item-1/offers`, headers: editor, payload: { supplierName: '华东供应商', unitPrice: 680 } })
   assert.equal(offered.statusCode, 201)
   const quoted = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/quotes`, headers: editor, payload: { items: [{ inquiryItemId: 'item-1', saleUnitPrice: 850 }] } })
