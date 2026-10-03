@@ -89,6 +89,11 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const salesOrderList = await salesOrderListResponse.json()
     assert.ok(Array.isArray(salesOrderList.items))
     assert.ok(Number.isInteger(salesOrderList.total))
+    const receivableListResponse = await page.request.get(new URL('api/v2/business/receivables?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(receivableListResponse.ok(), true)
+    const receivableList = await receivableListResponse.json()
+    assert.ok(Array.isArray(receivableList.items))
+    assert.ok(Number.isInteger(receivableList.total))
     const purchaseOrderListResponse = await page.request.get(new URL('api/v2/business/purchase-orders?page=1&pageSize=5', baseUrl).toString())
     assert.equal(purchaseOrderListResponse.ok(), true)
     const purchaseOrderList = await purchaseOrderListResponse.json()
@@ -122,6 +127,10 @@ test('production workbench uses its real API without writing data', { skip: !bas
       assert.equal(purchaseTransitionDenied.status(), 403)
       const receiptDenied = await page.request.post(new URL('api/v2/business/purchase-orders/read-only-smoke/receive', baseUrl).toString(), { data: { expectedVersion: 1, items: [{ itemId: 'read-only-smoke', quantity: 1 }] } })
       assert.equal(receiptDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.finance')) {
+      const paymentDenied = await page.request.post(new URL('api/v2/business/receivables/read-only-smoke/payments', baseUrl).toString(), { data: { requestKey: 'read-only-payment', amount: 1, paymentMethod: 'cash' } })
+      assert.equal(paymentDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.inventory')) {
       const warehouseDenied = await page.request.post(new URL('api/v2/business/warehouses', baseUrl).toString(), { data: { warehouseCode: 'SMOKE', name: '不应写入' } })

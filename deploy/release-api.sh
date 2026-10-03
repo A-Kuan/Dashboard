@@ -121,7 +121,10 @@ SELECT json_build_object(
   'businessStockReservationAllocation',pg_temp.exact_count('business_stock_reservation_allocation'),
   'businessShipment',pg_temp.exact_count('business_shipment'),
   'businessShipmentItem',pg_temp.exact_count('business_shipment_item'),
-  'businessInventoryMovement',pg_temp.exact_count('business_inventory_movement')
+  'businessInventoryMovement',pg_temp.exact_count('business_inventory_movement'),
+  'businessReceivable',pg_temp.exact_count('business_receivable'),
+  'businessPayment',pg_temp.exact_count('business_payment'),
+  'businessReceivableEvent',pg_temp.exact_count('business_receivable_event')
 )::text;
 SQL
 REMOTE

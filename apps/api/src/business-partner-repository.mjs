@@ -172,7 +172,12 @@ export function createBusinessPartnerRepository(pool) {
         (SELECT count(*)::int FROM business_sales_order s WHERE s.customer_partner_id=$1 AND s.status='completed') completed_sales_order_count,
         (SELECT COALESCE(sum(s.total_amount),0) FROM business_sales_order s WHERE s.customer_partner_id=$1 AND s.status='completed') completed_sales_amount,
         (SELECT count(*)::int FROM business_purchase_order p JOIN business_sales_order s ON s.id=p.sales_order_id WHERE s.customer_partner_id=$1 AND p.status NOT IN ('received','cancelled')) open_purchase_order_count,
-        (SELECT count(*)::int FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1) shipment_count`, [customer.id]),
+        (SELECT count(*)::int FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1) shipment_count,
+        (SELECT count(*)::int FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status<>'void') receivable_count,
+        (SELECT COALESCE(sum(r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status<>'void') collected_amount,
+        (SELECT COALESCE(sum(r.original_amount-r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial')) outstanding_amount,
+        (SELECT count(*)::int FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial') AND r.due_at<current_date) overdue_receivable_count,
+        (SELECT COALESCE(sum(r.original_amount-r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial') AND r.due_at<current_date) overdue_amount`, [customer.id]),
       pool.query(`SELECT id,inquiry_no,status,priority,next_action,next_action_at,vehicle_label,customer_vehicle_id,quote_amount,currency,updated_at
         FROM business_inquiry WHERE customer_partner_id=$1 AND next_action<>'' AND status NOT IN ('won','lost','cancelled')
         ORDER BY next_action_at ASC NULLS LAST,updated_at DESC,id LIMIT 10`, [customer.id]),
@@ -209,6 +214,11 @@ export function createBusinessPartnerRepository(pool) {
         SELECT 'shipment:'||sh.id,'shipment',sh.id,sh.sales_order_id,'shipped',sh.status,sh.shipment_no,NULL::numeric,s.currency,
           sh.created_by_id,sh.created_by_name,sh.note,jsonb_build_object('warehouseId',sh.warehouse_id,'reservationId',sh.reservation_id),sh.created_at
         FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1
+        UNION ALL
+        SELECT 'receivable:'||e.id,'receivable',r.id,r.sales_order_id,e.action,COALESCE(NULLIF(e.to_status,''),r.status),r.receivable_no,
+          CASE WHEN e.action='payment_recorded' THEN NULLIF(e.snapshot->>'amount','')::numeric ELSE r.original_amount END,r.currency,
+          e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
+        FROM business_receivable_event e JOIN business_receivable r ON r.id=e.receivable_id WHERE r.customer_partner_id=$1
       ) SELECT * FROM timeline
         WHERE ($2::timestamptz IS NULL OR (occurred_at,timeline_id)<($2::timestamptz,$3::text))
         ORDER BY occurred_at DESC,timeline_id DESC LIMIT $4`, [customer.id, position.occurredAt, position.id, size + 1]),
@@ -227,6 +237,8 @@ export function createBusinessPartnerRepository(pool) {
         salesOrderCount: summaryRow.sales_order_count, openSalesOrderCount: summaryRow.open_sales_order_count,
         completedSalesOrderCount: summaryRow.completed_sales_order_count, completedSalesAmount: Number(summaryRow.completed_sales_amount),
         openPurchaseOrderCount: summaryRow.open_purchase_order_count, shipmentCount: summaryRow.shipment_count,
+        receivableCount: summaryRow.receivable_count, collectedAmount: Number(summaryRow.collected_amount), outstandingAmount: Number(summaryRow.outstanding_amount),
+        overdueReceivableCount: summaryRow.overdue_receivable_count, overdueAmount: Number(summaryRow.overdue_amount),
       },
       nextActions: nextActionsResult.rows.map((row) => ({ id: row.id, inquiryNo: row.inquiry_no, status: row.status, priority: row.priority, nextAction: row.next_action, nextActionAt: row.next_action_at, vehicleLabel: row.vehicle_label, customerVehicleId: row.customer_vehicle_id, quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), currency: row.currency, updatedAt: row.updated_at })),
       timeline: { items: timelineRows, nextCursor: timelineResult.rows.length > size && timelineRows.length ? encodeTimelineCursor(timelineRows.at(-1)) : null },

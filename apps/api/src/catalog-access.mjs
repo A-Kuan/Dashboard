@@ -7,7 +7,7 @@ const roleDefinitions = {
   },
   catalog_editor: {
     label: '资料录入',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance'],
   },
   catalog_reviewer: {
     label: '资料审核',
@@ -15,7 +15,7 @@ const roleDefinitions = {
   },
   catalog_admin: {
     label: '资料管理员',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance'],
   },
 }
 

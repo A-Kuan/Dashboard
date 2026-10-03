@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -263,6 +263,26 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.order')
     if (!actor) return
     return businessOrderRepository.transitionSalesOrder(request.params.id, request.body, actor)
+  })
+  app.get('/api/v2/business/receivables', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应收与收款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessFinanceRepository.listReceivables({ query: request.query?.q, status: request.query?.status, customerPartnerId: request.query?.customerPartnerId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/receivables/:id', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应收与收款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const receivable = await businessFinanceRepository.getReceivable(request.params.id)
+    return receivable || reply.code(404).send({ error: 'RECEIVABLE_NOT_FOUND', message: '应收单不存在' })
+  })
+  app.post('/api/v2/business/receivables/:id/payments', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应收与收款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.finance')
+    if (!actor) return
+    const result = await businessFinanceRepository.recordPayment(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
   })
   app.get('/api/v2/business/purchase-orders', async (request, reply) => {
     if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
