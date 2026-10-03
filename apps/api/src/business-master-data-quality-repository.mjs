@@ -243,7 +243,11 @@ export function createBusinessMasterDataQualityRepository(pool) {
     if (clean(assignedTo)) items = items.filter((item) => [item.assignedTo?.id, item.assignedTo?.name].includes(clean(assignedTo)))
     if (normalizedSlaStatus) items = items.filter((item) => item.slaStatus === normalizedSlaStatus)
     if (term) items = items.filter((item) => JSON.stringify(item).toLocaleLowerCase('zh-CN').includes(term))
-    items.sort((a, b) => b.score - a.score || a.issueKey.localeCompare(b.issueKey))
+    const slaPriority = { overdue: 0, unassigned: 1, due_soon: 2, on_track: 3 }
+    items.sort((a, b) => (slaPriority[a.slaStatus] ?? 4) - (slaPriority[b.slaStatus] ?? 4)
+      || Number(b.escalationLevel || 0) - Number(a.escalationLevel || 0)
+      || b.score - a.score
+      || a.issueKey.localeCompare(b.issueKey))
     return items
   }
 
@@ -259,15 +263,18 @@ export function createBusinessMasterDataQualityRepository(pool) {
       const normalizedPage = boundedPage(page, 1, 100000)
       const normalizedPageSize = boundedPage(pageSize, 30, 100)
       const total = items.length
+      const openSummaryItems = summaryItems.filter((item) => item.status === 'open')
       const summary = {
         open: summaryItems.filter((item) => item.status === 'open').length,
         suppressed: summaryItems.filter((item) => item.status === 'suppressed').length,
         high: summaryItems.filter((item) => item.severity === 'high').length,
         medium: summaryItems.filter((item) => item.severity === 'medium').length,
-        assigned: summaryItems.filter((item) => item.assignmentStatus === 'assigned').length,
-        unassigned: summaryItems.filter((item) => item.assignmentStatus === 'unassigned').length,
-        overdue: summaryItems.filter((item) => item.slaStatus === 'overdue').length,
-        escalated: summaryItems.filter((item) => item.escalationLevel > 0).length,
+        assigned: openSummaryItems.filter((item) => item.assignmentStatus === 'assigned').length,
+        unassigned: openSummaryItems.filter((item) => item.assignmentStatus === 'unassigned').length,
+        onTrack: openSummaryItems.filter((item) => item.slaStatus === 'on_track').length,
+        dueSoon: openSummaryItems.filter((item) => item.slaStatus === 'due_soon').length,
+        overdue: openSummaryItems.filter((item) => item.slaStatus === 'overdue').length,
+        escalated: openSummaryItems.filter((item) => item.escalationLevel > 0).length,
         byKind: Object.fromEntries([...issueKinds].map((value) => [value, summaryItems.filter((item) => item.kind === value).length])),
       }
       return { asOf: asOf.toISOString(), items: items.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize), total, page: normalizedPage, pageSize: normalizedPageSize, summary }

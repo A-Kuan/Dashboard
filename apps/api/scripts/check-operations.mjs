@@ -1,4 +1,5 @@
 import { checkApiOperations } from '../src/operations-check.mjs'
+import { clearOperationalAlertState, deliverOperationalAlert } from '../src/alert-delivery.mjs'
 
 const enabled = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())
 
@@ -11,4 +12,14 @@ const result = await checkApiOperations({
   maxDatabaseWaitingRequests: Number(process.env.API_MAX_DB_WAITING_REQUESTS || 5),
   requireOffsiteBackup: enabled(process.env.OFFSITE_BACKUP_REQUIRED),
 })
+const alertSource = 'business-master-data-quality'
+const notification = result.businessQuality.alertRequired
+  ? await deliverOperationalAlert({
+      source: alertSource,
+      message: result.businessQuality.message,
+      dedupeKey: result.businessQuality.dedupeKey,
+      cooldownSeconds: Number(process.env.BUSINESS_QUALITY_ALERT_REPEAT_SECONDS || 86400),
+    })
+  : await clearOperationalAlertState({ source: alertSource })
+result.businessQuality.notification = notification
 process.stdout.write(`${JSON.stringify(result)}\n`)

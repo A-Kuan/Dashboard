@@ -24,6 +24,7 @@ test('stays disabled without a webhook and signs DingTalk notifications without 
   const expectedSignature = createHmac('sha256', 'secret-value').update(`${now.getTime()}\nsecret-value`).digest('base64')
   assert.equal(requestUrl.searchParams.get('sign'), expectedSignature)
   const body = JSON.parse(requests[0].options.body)
+  assert.match(body.text.content, /虎山行工作台告警/)
   assert.match(body.text.content, /backup failed/)
   assert.doesNotMatch(requests[0].options.body, /secret-value/)
 })

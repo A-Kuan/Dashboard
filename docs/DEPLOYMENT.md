@@ -199,7 +199,7 @@ sudo systemctl start dashboard-sku-alert@manual-test.service
 journalctl -u dashboard-sku-backup.service -u dashboard-sku-alert@manual-test.service --since '-10 minutes' --no-pager
 ```
 
-备份或五分钟巡检失败时，systemd 会调用统一通知单元。通知支持钉钉签名机器人、企业微信机器人和普通 JSON webhook；内容只包含来源、主机、时间和故障提示，不包含密钥、数据库内容或请求头。同一来源默认 30 分钟只通知一次，防止持续故障造成消息风暴；通知发送失败不会递归触发自身。
+备份或五分钟巡检失败时，systemd 会调用统一通知单元。巡检还会主动检查客户与车型主数据质量待办：未分配、临期或超期时通知，处理状态发生有意义变化时立即再通知，未变化时默认每日提醒一次，队列清空后重置提醒状态。通知支持钉钉签名机器人、企业微信机器人和普通 JSON webhook；内容只包含来源、主机、时间和故障或待办摘要，不包含密钥、数据库内容或请求头。同一故障来源默认 30 分钟只通知一次，防止持续故障造成消息风暴；通知发送失败不会递归触发自身。
 
 恢复不能直接覆盖生产库。仓库内的恢复演练工具默认只接受 `/opt/dashboard-sku-api/backups` 根目录中的清单，自动创建名称受限的一次性数据库，依次校验归档、恢复前后关键表数量、迁移账本、EPC 资源解压和隔离 API 冒烟，并在退出时删除验证库与临时资源。它不会连接或覆盖 `dashboard_sku`：
 
@@ -251,7 +251,7 @@ curl https://121.41.24.42/sku-preview/api/v1/skus
 每个响应都带 `X-Request-Id`。调用方提供的编号仅在字符集和长度校验通过时沿用，否则服务端生成 UUID；错误响应同时返回 `requestId`，便于与 systemd JSON 日志关联。日志会隐藏授权、Cookie 和可信身份头。
 `GET /api/metrics` 提供 Prometheus 文本格式的请求量、状态码、耗时、进程内存、版本和数据库连接池指标。该入口默认只允许 API 主机本机访问；远程运维采集必须配置 `API_OPERATIONS_TOKEN` 并使用 Bearer 令牌，不能通过 Nginx 公开匿名访问。
 
-仓库中的 `dashboard-sku-operations-check.service` 与 `.timer` 每五分钟核对 readiness 与 release、指标、数据库连接池排队、最近备份完整性、备份年龄和磁盘余量。默认要求备份不超过 26 小时、可用空间不少于 1 GiB；失败会让 oneshot 单元进入失败状态并写入 journal。安装后验证：
+仓库中的 `dashboard-sku-operations-check.service` 与 `.timer` 每五分钟核对 readiness 与 release、指标、数据库连接池排队、最近备份完整性、备份年龄、磁盘余量和业务主数据质量队列。默认要求备份不超过 26 小时、可用空间不少于 1 GiB；失败会让 oneshot 单元进入失败状态并写入 journal。安装后验证：
 
 ```bash
 sudo install -m 0644 deploy/dashboard-sku-operations-check.service /etc/systemd/system/
@@ -262,7 +262,7 @@ sudo systemctl start dashboard-sku-operations-check.service
 systemctl status dashboard-sku-operations-check.service dashboard-sku-operations-check.timer
 ```
 
-该定时检查同时核对可选的异地备份凭据；失败会通过 `dashboard-sku-alert@.service` 发送站外通知。真实 webhook 与签名密钥只能保存在 `/etc/dashboard-sku/notifications.env`，不能写入仓库。
+该定时检查同时核对可选的异地备份凭据；失败会通过 `dashboard-sku-alert@.service` 发送站外通知，业务质量待办则由巡检进程使用同一 webhook 主动发送。真实 webhook 与签名密钥只能保存在 `/etc/dashboard-sku/notifications.env`，不能写入仓库。
 
 完整浏览器回归会建立和修改验收数据，只能用于本地或一次性数据库，不得直接指向生产。生产环境使用只读冒烟脚本：
 
