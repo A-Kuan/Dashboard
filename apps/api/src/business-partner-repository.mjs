@@ -91,6 +91,7 @@ function mapPartner(row) {
     taxId: row.tax_id, phone: row.phone, email: row.email, address: row.address, status: row.status,
     paymentTermsDays: row.payment_terms_days, creditLimit: Number(row.credit_limit), notes: row.notes, version: row.version,
     createdById: row.created_by_id, createdByName: row.created_by_name, updatedById: row.updated_by_id, updatedByName: row.updated_by_name,
+    mergedIntoPartnerId: row.merged_into_partner_id || null, mergedAt: row.merged_at || null,
     createdAt: row.created_at, updatedAt: row.updated_at, contactCount: Number(row.contact_count || 0), vehicleCount: Number(row.vehicle_count || 0),
   }
 }
@@ -108,6 +109,7 @@ async function insertEvent(client, partnerId, action, actor, snapshot = {}, note
 async function lockPartner(client, id, expectedVersion) {
   const row = (await client.query('SELECT * FROM business_partner WHERE id=$1 OR partner_no=upper(trim($1)) LIMIT 1 FOR UPDATE', [id])).rows[0]
   if (!row) throw problem('PARTNER_NOT_FOUND', '客户或供应商不存在', 404)
+  if (row.merged_into_partner_id) throw problem('PARTNER_ALREADY_MERGED', '该客户已合并，不能继续修改', 409, { mergedIntoPartnerId: row.merged_into_partner_id })
   if (!Number.isInteger(Number(expectedVersion)) || Number(expectedVersion) !== row.version) throw problem('PARTNER_VERSION_CONFLICT', '客户或供应商资料已变化，请刷新后重试', 409, { currentVersion: row.version })
   return row
 }
@@ -162,7 +164,7 @@ function normalizedOnboardingInput(rawInput = {}) {
 
 function onboardingPartner(row) {
   if (!row) return null
-  return { id: row.id, partnerNo: row.partner_no, name: row.name, shortName: row.short_name, phone: row.phone, taxId: row.tax_id, status: row.status, version: row.version }
+  return { id: row.id, partnerNo: row.partner_no, partnerType: row.partner_type, name: row.name, shortName: row.short_name, phone: row.phone, taxId: row.tax_id, status: row.status, version: row.version, mergedIntoPartnerId: row.merged_into_partner_id || null }
 }
 
 function onboardingVehicle(row) {
@@ -255,6 +257,132 @@ async function buildOnboardingPreflight(client, rawInput = {}, { lock = false } 
     warnings,
   }
   return { ready: conflicts.length === 0 && !pendingNameReview, action, matchedBy, targetCustomer: snapshot.targetPartner, targetVehicle: snapshot.targetVehicle, candidates: snapshot.candidates, conflicts, warnings, normalized: snapshot.input, fingerprint: onboardingFingerprint(snapshot), _snapshot: snapshot }
+}
+
+const customerMergeFields = [
+  { key: 'name', column: 'name', label: '客户名称', requiredChoice: true },
+  { key: 'shortName', column: 'short_name', label: '客户简称' },
+  { key: 'taxId', column: 'tax_id', label: '税号', requiredChoice: true },
+  { key: 'phone', column: 'phone', label: '联系电话', requiredChoice: true },
+  { key: 'email', column: 'email', label: '邮箱' },
+  { key: 'address', column: 'address', label: '地址' },
+  { key: 'paymentTermsDays', column: 'payment_terms_days', label: '账期天数', requiredChoice: true },
+  { key: 'creditLimit', column: 'credit_limit', label: '信用额度', requiredChoice: true },
+  { key: 'notes', column: 'notes', label: '备注' },
+]
+
+function mergeFieldValue(row, field) {
+  const value = row[field.column]
+  return field.key === 'creditLimit' ? Number(value) : value
+}
+
+function normalizeMergeChoices(raw = {}) {
+  const choices = {}
+  for (const field of customerMergeFields) {
+    const value = clean(raw[field.key])
+    if (value && !['survivor', 'retired'].includes(value)) throw problem('INVALID_CUSTOMER_MERGE_FIELD_CHOICE', `${field.label}的保留来源无效`)
+    if (value) choices[field.key] = value
+  }
+  return choices
+}
+
+async function countWhere(client, table, column, id) {
+  return Number((await client.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [id])).rows[0].count)
+}
+
+async function buildCustomerMergePreview(client, rawInput = {}, { lock = false } = {}) {
+  const survivorId = clean(rawInput.survivorPartnerId)
+  const retiredId = clean(rawInput.retiredPartnerId)
+  if (!survivorId || !retiredId || survivorId === retiredId) throw problem('INVALID_CUSTOMER_MERGE_PAIR', '必须选择两个不同的客户，并明确保留客户与退役客户')
+  const choices = normalizeMergeChoices(rawInput.fieldChoices)
+  const ids = [survivorId, retiredId].sort()
+  const rows = (await client.query(`SELECT * FROM business_partner WHERE id=ANY($1::text[]) ORDER BY id${lock ? ' FOR UPDATE' : ''}`, [ids])).rows
+  const survivor = rows.find((row) => row.id === survivorId || row.partner_no === survivorId.toUpperCase()) || rows.find((row) => row.id === survivorId)
+  const retired = rows.find((row) => row.id === retiredId || row.partner_no === retiredId.toUpperCase()) || rows.find((row) => row.id === retiredId)
+  if (!survivor || !retired) throw problem('CUSTOMER_MERGE_PARTNER_NOT_FOUND', '待合并客户不存在', 404, { survivorFound: Boolean(survivor), retiredFound: Boolean(retired) })
+
+  const conflicts = []
+  if (!['customer', 'both'].includes(survivor.partner_type) || survivor.status !== 'active' || survivor.merged_into_partner_id) conflicts.push({ code: 'survivor_unavailable', message: '保留客户必须是未合并的启用客户', partnerId: survivor.id })
+  if (retired.partner_type !== 'customer') conflicts.push({ code: 'retired_not_customer_only', message: '退役记录必须是纯客户；兼具供应商身份的合作方不能通过客户合并处理', partnerId: retired.id, partnerType: retired.partner_type })
+  if (retired.merged_into_partner_id) conflicts.push({ code: 'retired_already_merged', message: '退役客户已经合并到其他客户', partnerId: retired.id, mergedIntoPartnerId: retired.merged_into_partner_id })
+
+  const contactsResult = await client.query('SELECT * FROM business_partner_contact WHERE partner_id=ANY($1::text[]) ORDER BY partner_id,id', [[survivor.id, retired.id]])
+  const vehiclesResult = await client.query('SELECT * FROM business_customer_vehicle WHERE partner_id=ANY($1::text[]) ORDER BY partner_id,id', [[survivor.id, retired.id]])
+  const duplicatePlateResult = await client.query(`SELECT rv.id retired_vehicle_id,sv.id survivor_vehicle_id,rv.license_plate
+    FROM business_customer_vehicle rv JOIN business_customer_vehicle sv ON sv.partner_id=$1
+      AND rv.partner_id=$2 AND rv.license_plate<>'' AND upper(rv.license_plate)=upper(sv.license_plate)
+    ORDER BY rv.id,sv.id`, [survivor.id, retired.id])
+  if (duplicatePlateResult.rows.length) conflicts.push({ code: 'duplicate_vehicle_plate', message: '两个客户存在相同车牌的车辆，需先复核车辆资料', vehicles: duplicatePlateResult.rows.map((row) => ({ retiredVehicleId: row.retired_vehicle_id, survivorVehicleId: row.survivor_vehicle_id, licensePlate: row.license_plate })) })
+
+  const directImpactDefinitions = [
+    ['contacts', 'business_partner_contact', 'partner_id'],
+    ['vehicles', 'business_customer_vehicle', 'partner_id'],
+    ['partnerEvents', 'business_partner_event', 'partner_id'],
+    ['inquiries', 'business_inquiry', 'customer_partner_id'],
+    ['salesOrders', 'business_sales_order', 'customer_partner_id'],
+    ['receivables', 'business_receivable', 'customer_partner_id'],
+    ['afterSalesCases', 'business_after_sales_case', 'customer_partner_id'],
+    ['quickQuoteDrafts', 'business_quick_quote_draft', 'customer_partner_id'],
+    ['onboardingRequests', 'business_customer_onboarding_request', 'partner_id'],
+  ]
+  const impact = {}
+  for (const [key, table, column] of directImpactDefinitions) impact[key] = await countWhere(client, table, column, retired.id)
+  impact.mergedAliases = await countWhere(client, 'business_partner', 'merged_into_partner_id', retired.id)
+  impact.quotes = Number((await client.query('SELECT count(*) FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_partner_id=$1', [retired.id])).rows[0].count)
+  impact.purchaseOrders = Number((await client.query('SELECT count(*) FROM business_purchase_order p JOIN business_sales_order s ON s.id=p.sales_order_id WHERE s.customer_partner_id=$1', [retired.id])).rows[0].count)
+  const supplierImpact = {
+    supplierOffers: await countWhere(client, 'business_supplier_offer', 'supplier_partner_id', retired.id),
+    purchaseOrders: await countWhere(client, 'business_purchase_order', 'supplier_partner_id', retired.id),
+    payables: await countWhere(client, 'business_payable', 'supplier_partner_id', retired.id),
+    supplierReturns: await countWhere(client, 'business_supplier_return_case', 'supplier_partner_id', retired.id),
+  }
+  if (Object.values(supplierImpact).some(Boolean)) conflicts.push({ code: 'retired_has_supplier_history', message: '退役客户仍有供应商业务引用，不能按客户资料合并', supplierImpact })
+
+  const differences = []
+  const requiredChoices = []
+  const resolved = {}
+  for (const field of customerMergeFields) {
+    const survivorValue = mergeFieldValue(survivor, field)
+    const retiredValue = mergeFieldValue(retired, field)
+    const differs = String(survivorValue ?? '') !== String(retiredValue ?? '')
+    let source = choices[field.key]
+    if (!source) {
+      if ((survivorValue === '' || survivorValue == null) && retiredValue !== '' && retiredValue != null) source = 'retired'
+      else source = 'survivor'
+    }
+    if (differs) differences.push({ field: field.key, label: field.label, survivorValue, retiredValue, selectedSource: source })
+    if (differs && field.requiredChoice && survivorValue !== '' && survivorValue != null && retiredValue !== '' && retiredValue != null && !choices[field.key]) requiredChoices.push(field.key)
+    resolved[field.key] = source === 'retired' ? retiredValue : survivorValue
+  }
+
+  const snapshot = {
+    survivor: onboardingPartner(survivor),
+    retired: onboardingPartner(retired),
+    fieldChoices: choices,
+    resolved,
+    differences,
+    requiredChoices,
+    impact,
+    supplierImpact,
+    contacts: contactsResult.rows.map((row) => ({ id: row.id, partnerId: row.partner_id, name: row.name, phone: row.phone, wechat: row.wechat, email: row.email, isPrimary: row.is_primary, version: row.version })),
+    vehicles: vehiclesResult.rows.map(onboardingVehicle),
+    conflicts,
+  }
+  return {
+    ready: conflicts.length === 0 && requiredChoices.length === 0,
+    survivor: snapshot.survivor,
+    retired: snapshot.retired,
+    differences,
+    requiredChoices,
+    resolved,
+    impact,
+    supplierImpact,
+    conflicts,
+    fingerprint: onboardingFingerprint(snapshot),
+    _snapshot: snapshot,
+    _survivor: survivor,
+    _retired: retired,
+  }
 }
 
 export function createBusinessPartnerRepository(pool) {
@@ -475,6 +603,69 @@ export function createBusinessPartnerRepository(pool) {
       })
       const partner = await get(result.partnerId)
       return { ...result, customer: partner, vehicle: partner.vehicles.find((item) => item.id === result.vehicleId) }
+    },
+
+    async previewCustomerMerge(rawInput = {}) {
+      const preview = await buildCustomerMergePreview(pool, rawInput)
+      const { _snapshot, _survivor, _retired, ...result } = preview
+      return result
+    },
+
+    async mergeCustomer(rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey)
+      const reason = clean(rawInput.reason)
+      if (reason.length < 8 || reason.length > 500) throw problem('INVALID_CUSTOMER_MERGE_REASON', '客户合并原因必须为 8 至 500 个字符')
+      const result = await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-merge-request:${key}`])
+        const existing = (await client.query('SELECT * FROM business_partner_merge WHERE request_key=$1', [key])).rows[0]
+        if (existing) return { created: false, mergeId: existing.id, survivorPartnerId: existing.survivor_partner_id, retiredPartnerId: existing.retired_partner_id, decisionFingerprint: existing.decision_fingerprint }
+        const survivorId = clean(rawInput.survivorPartnerId); const retiredId = clean(rawInput.retiredPartnerId)
+        for (const id of [survivorId, retiredId].sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-merge-partner:${id}`])
+        const preview = await buildCustomerMergePreview(client, rawInput, { lock: true })
+        const publicPreview = Object.fromEntries(Object.entries(preview).filter(([name]) => !name.startsWith('_')))
+        const submittedFingerprint = clean(rawInput.previewFingerprint)
+        if (!submittedFingerprint) throw problem('CUSTOMER_MERGE_PREVIEW_REQUIRED', '客户合并必须先完成影响预览', 409, { preview: publicPreview })
+        if (submittedFingerprint !== preview.fingerprint) throw problem('CUSTOMER_MERGE_PREVIEW_STALE', '客户或关联业务数据已变化，请刷新合并预览', 409, { preview: publicPreview })
+        if (!preview.ready) throw problem('CUSTOMER_MERGE_REVIEW_REQUIRED', '客户合并仍有字段选择或资料冲突未处理', 409, { preview: publicPreview })
+
+        const survivor = preview._survivor; const retired = preview._retired; const mergeId = randomUUID(); const by = actorDetails(actor)
+        const survivorHasPrimary = Boolean((await client.query('SELECT 1 FROM business_partner_contact WHERE partner_id=$1 AND is_primary LIMIT 1', [survivor.id])).rows[0])
+        if (survivorHasPrimary) await client.query('UPDATE business_partner_contact SET is_primary=false WHERE partner_id=$1 AND is_primary', [retired.id])
+        await client.query('UPDATE business_partner_contact SET partner_id=$1,version=version+1,updated_at=now() WHERE partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_customer_vehicle SET partner_id=$1,version=version+1,updated_at=now() WHERE partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_partner_event SET partner_id=$1 WHERE partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_inquiry SET customer_partner_id=$1,updated_at=now() WHERE customer_partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_sales_order SET customer_partner_id=$1,updated_at=now() WHERE customer_partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_receivable SET customer_partner_id=$1,updated_at=now() WHERE customer_partner_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_after_sales_case SET customer_partner_id=$1,updated_at=now() WHERE customer_partner_id=$2', [survivor.id, retired.id])
+        const draftRows = (await client.query('SELECT id,version FROM business_quick_quote_draft WHERE customer_partner_id=$1 ORDER BY id FOR UPDATE', [retired.id])).rows
+        for (const draft of draftRows) {
+          await client.query(`UPDATE business_quick_quote_draft SET customer_partner_id=$2,
+            payload=jsonb_set(payload,'{customerPartnerId}',to_jsonb($2::text),true),version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [draft.id, survivor.id, by.id, by.name])
+          await client.query(`INSERT INTO business_quick_quote_draft_event
+            (id,draft_id,action,from_version,to_version,actor_id,actor_name,snapshot) VALUES ($1,$2,'customer_merged',$3,$4,$5,$6,$7::jsonb)`,
+          [randomUUID(), draft.id, draft.version, draft.version + 1, by.id, by.name, JSON.stringify({ mergeId, fromPartnerId: retired.id, toPartnerId: survivor.id })])
+        }
+        await client.query('UPDATE business_customer_onboarding_request SET partner_id=$1 WHERE partner_id=$2', [survivor.id, retired.id])
+        await client.query(`UPDATE business_partner SET merged_into_partner_id=$1,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now()
+          WHERE merged_into_partner_id=$2`, [survivor.id, retired.id, by.id, by.name])
+
+        await client.query(`UPDATE business_partner SET status='inactive',merged_into_partner_id=$2,merged_at=now(),
+          name=$3,short_name='',tax_id='',phone='',email='',address='',version=version+1,updated_by_id=$4,updated_by_name=$5,updated_at=now() WHERE id=$1`,
+        [retired.id, survivor.id, `[已合并] ${retired.name}`, by.id, by.name])
+        const resolved = preview.resolved
+        await client.query(`UPDATE business_partner SET name=$2,short_name=$3,tax_id=$4,phone=$5,email=$6,address=$7,
+          payment_terms_days=$8,credit_limit=$9,notes=$10,version=version+1,updated_by_id=$11,updated_by_name=$12,updated_at=now() WHERE id=$1`,
+        [survivor.id, resolved.name, resolved.shortName, resolved.taxId, resolved.phone, resolved.email, resolved.address, resolved.paymentTermsDays, resolved.creditLimit, resolved.notes, by.id, by.name])
+        await client.query(`INSERT INTO business_partner_merge
+          (id,request_key,survivor_partner_id,retired_partner_id,reason,decision_fingerprint,decision_snapshot,impact_snapshot,actor_id,actor_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10)`,
+        [mergeId, key, survivor.id, retired.id, reason, preview.fingerprint, JSON.stringify(preview._snapshot), JSON.stringify(preview.impact), by.id, by.name])
+        await insertEvent(client, survivor.id, 'customer_merged', actor, { mergeId, retiredPartnerId: retired.id, decisionFingerprint: preview.fingerprint, impact: preview.impact, resolved }, reason)
+        await insertEvent(client, retired.id, 'merged_into_customer', actor, { mergeId, survivorPartnerId: survivor.id, decisionFingerprint: preview.fingerprint }, reason)
+        return { created: true, mergeId, survivorPartnerId: survivor.id, retiredPartnerId: retired.id, decisionFingerprint: preview.fingerprint }
+      })
+      return { ...result, survivor: await get(result.survivorPartnerId), retired: await get(result.retiredPartnerId) }
     },
 
     async create(rawInput = {}, actor) {

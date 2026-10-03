@@ -23,6 +23,8 @@ test('partner routes keep reads visible and protect master-data writes', async (
     customer360: async (id, input) => { calls.push(['customer360', id, input]); return id === partner.id ? { customer: partner, summary: { inquiryCount: 1 }, nextActions: [], timeline: { items: [], nextCursor: null } } : null },
     previewQuickQuoteCustomerOnboarding: async (input) => { calls.push(['previewQuickQuoteCustomerOnboarding', input]); return { ready: true, action: 'create_customer', fingerprint: 'preview-1', conflicts: [], warnings: [] } },
     onboardQuickQuoteCustomer: async (input, actor) => { calls.push(['onboardQuickQuoteCustomer', input, actor]); return { created: true, createdPartner: true, createdVehicle: true, matchedBy: 'created', customer: partner, vehicle: { id: 'vehicle-1' } } },
+    previewCustomerMerge: async (input) => { calls.push(['previewCustomerMerge', input]); return { ready: true, fingerprint: 'merge-preview-1', survivor: partner, retired: { id: 'partner-2' }, impact: {} } },
+    mergeCustomer: async (input, actor) => { calls.push(['mergeCustomer', input, actor]); return { created: true, mergeId: 'merge-1', survivor: partner, retired: { id: 'partner-2', mergedIntoPartnerId: partner.id } } },
     create: async (input, actor) => { calls.push(['create', input, actor]); return partner },
     update: async (id, input, actor) => { calls.push(['update', id, input, actor]); return { ...partner, ...input, version: 2 } },
     addContact: async (id, input, actor) => { calls.push(['addContact', id, input, actor]); return { ...partner, contacts: [{ id: 'contact-1', name: input.name }] } },
@@ -60,6 +62,14 @@ test('partner routes keep reads visible and protect master-data writes', async (
   const preview = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding/preview', headers: editor, payload: { customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })
   assert.equal(preview.statusCode, 200)
   assert.equal(preview.json().fingerprint, 'preview-1')
+  const mergePreview = await app.inject({ method: 'POST', url: '/api/v2/business/partners/merge-preview', headers: editor, payload: { survivorPartnerId: 'partner-1', retiredPartnerId: 'partner-2' } })
+  assert.equal(mergePreview.statusCode, 200)
+  assert.equal(mergePreview.json().fingerprint, 'merge-preview-1')
+  const mergeDenied = await app.inject({ method: 'POST', url: '/api/v2/business/partners/merge', headers: editor, payload: { survivorPartnerId: 'partner-1', retiredPartnerId: 'partner-2' } })
+  assert.equal(mergeDenied.statusCode, 403)
+  assert.equal(mergeDenied.json().details.capability, 'business.customer.merge')
+  const admin = { 'x-operator-role': 'catalog_admin', 'x-operator-name': encodeURIComponent('资料管理员'), 'x-operator-id': 'admin-1' }
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/partners/merge', headers: admin, payload: { requestKey: 'merge-1', previewFingerprint: 'merge-preview-1', survivorPartnerId: 'partner-1', retiredPartnerId: 'partner-2', reason: '确认重复客户资料' } })).statusCode, 201)
 
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/partners', headers: editor, payload: { partnerType: 'customer', name: '王师傅汽修' } })).statusCode, 201)
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding', headers: editor, payload: { requestKey: 'onboard-1', previewFingerprint: 'preview-1', customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })).statusCode, 201)
