@@ -60,7 +60,7 @@ function mapSalesOrder(row) {
 function mapSalesItem(row) {
   return {
     id: row.id, salesOrderId: row.sales_order_id, quoteItemId: row.quote_item_id, inquiryItemId: row.inquiry_item_id,
-    catalogSkuId: row.catalog_sku_id, lineNo: row.line_no, description: row.description, oeNumber: row.oe_number,
+    catalogSkuId: row.catalog_sku_id, fulfillmentSource: row.fulfillment_source, lineNo: row.line_no, description: row.description, oeNumber: row.oe_number,
     quantity: number(row.quantity), unit: row.unit, saleUnitPrice: number(row.sale_unit_price), lineTotal: number(row.line_total),
   }
 }
@@ -193,7 +193,7 @@ export function createBusinessOrderRepository(pool) {
         LEFT JOIN business_supplier_offer offer ON offer.id=qi.supplier_offer_id
         WHERE qi.quote_id=$1 ORDER BY qi.line_no`, [quote.id])).rows
       if (!quoteItems.length) throw problem('QUOTE_ITEMS_NOT_FOUND', '成交报价单没有明细，无法生成订单', 409)
-      const missingSource = quoteItems.find((item) => !item.supplier_offer_id || !item.supplier_name)
+      const missingSource = quoteItems.find((item) => item.fulfillment_source === 'purchase' && (!item.supplier_offer_id || !item.supplier_name))
       if (missingSource) throw problem('ORDER_SUPPLIER_SOURCE_REQUIRED', `报价第 ${missingSource.line_no} 项未关联有效供应商报价，无法生成采购单`, 409, { lineNo: missingSource.line_no })
 
       const salesOrderId = randomUUID(); const salesOrderNo = generatedNumber('SO')
@@ -205,14 +205,14 @@ export function createBusinessOrderRepository(pool) {
         quote.discount_amount, quote.freight_amount, quote.total_amount, quote.note, by.id, by.name,
       ])
       for (const item of quoteItems) await client.query(`INSERT INTO business_sales_order_item
-        (id,sales_order_id,quote_item_id,inquiry_item_id,catalog_sku_id,line_no,description,oe_number,quantity,unit,sale_unit_price,line_total)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [
-        randomUUID(), salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.line_no, item.description,
+        (id,sales_order_id,quote_item_id,inquiry_item_id,catalog_sku_id,fulfillment_source,line_no,description,oe_number,quantity,unit,sale_unit_price,line_total)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [
+        randomUUID(), salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.fulfillment_source, item.line_no, item.description,
         item.oe_number, item.quantity, item.unit, item.sale_unit_price, item.line_total,
       ])
 
       const groups = new Map()
-      for (const item of quoteItems) {
+      for (const item of quoteItems.filter((entry) => entry.fulfillment_source === 'purchase')) {
         const key = item.supplier_partner_id || `name:${item.supplier_name}`
         if (!groups.has(key)) groups.set(key, { supplierPartnerId: item.supplier_partner_id, supplierName: item.supplier_name, items: [] })
         groups.get(key).items.push(item)
@@ -240,7 +240,7 @@ export function createBusinessOrderRepository(pool) {
         await insertEvent(client, 'purchase', purchaseOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, salesOrderId, supplierName: group.supplierName, itemCount: group.items.length, totalAmount: subtotal + freightAmount } })
         purchaseOrderIds.push(purchaseOrderId)
       }
-      await insertEvent(client, 'sales', salesOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, quoteId: quote.id, quoteNo: quote.quote_no, purchaseOrderCount: purchaseOrderIds.length, totalAmount: number(quote.total_amount) } })
+      await insertEvent(client, 'sales', salesOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, quoteId: quote.id, quoteNo: quote.quote_no, stockItemCount: quoteItems.filter((item) => item.fulfillment_source === 'stock').length, purchaseItemCount: quoteItems.filter((item) => item.fulfillment_source === 'purchase').length, purchaseOrderCount: purchaseOrderIds.length, totalAmount: number(quote.total_amount) } })
       await client.query(`INSERT INTO business_inquiry_event (id,inquiry_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
         VALUES ($1,$2,'converted_to_order',$3,$3,$4,$5,$6,$7::jsonb)`, [randomUUID(), inquiry.id, inquiry.status, by.id, by.name, salesOrderNo, JSON.stringify({ salesOrderId, salesOrderNo, purchaseOrderIds })])
       return { salesOrderId, purchaseOrderIds, created: true }

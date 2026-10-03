@@ -60,6 +60,7 @@
 查询参数支持 `customerQuery`、`vehicleQuery`、`skuQuery`、`customerId`、`customerVehicleId`、`platformId` 和 `variantId`。返回：
 
 - 可选客户及客户车辆；
+- 可用供应商；
 - 已启用的车型版本；
 - 已完成独立审核的 SKU；
 - SKU 对当前客户车辆的适配结果；
@@ -82,15 +83,20 @@
       "catalogSkuId": "已审核 SKU ID",
       "quantity": 2,
       "saleUnitPrice": 888,
-      "costUnitPrice": 600
+      "costUnitPrice": 600,
+      "fulfillmentSource": "purchase",
+      "supplierPartnerId": "供应商 ID",
+      "leadTimeDays": 2
     }
   ]
 }
 ```
 
-服务端在同一个事务中生成询价、询价明细、报价和报价明细，并计算小计、优惠、运费、总额与毛利。每个明细都会保存 SKU 编码、名称、品牌、版本及适配快照。SKU 与客户车辆没有已核验适配时默认阻断；确需人工放行时必须填写明确的 `fitmentOverrideReason`，原因随报价永久保存。
+服务端在同一个事务中生成询价、询价明细、报价和报价明细，并计算小计、优惠、运费、总额与毛利。每个明细都会保存 SKU 编码、名称、品牌、版本、适配快照和履约来源。`fulfillmentSource` 必须明确为 `stock`（现货）或 `purchase`（采购）：现货会检查当前可用库存，采购必须选择有效供应商并在同一事务中固化供应商报价来源。SKU 与客户车辆没有已核验适配时默认阻断；确需人工放行时必须填写明确的 `fitmentOverrideReason`，原因随报价永久保存。
 
 `requestKey` 用于防止网络重试产生重复报价。首次成功返回 `201` 和 `created: true`；重复请求返回原报价、`200` 和 `created: false`，不会采用重试请求中变化的价格。
+
+报价成交转订单时，销售订单明细继续保留 `fulfillmentSource`；只有 `purchase` 明细会按供应商拆分采购单，`stock` 明细不会产生无意义的采购单，后续直接进入库存预留和出库流程。
 
 ### 查询询价列表
 
