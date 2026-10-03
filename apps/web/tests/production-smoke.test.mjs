@@ -74,6 +74,13 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const partnerList = await partnerListResponse.json()
     assert.ok(Array.isArray(partnerList.items))
     assert.ok(Number.isInteger(partnerList.total))
+    const quickQuoteContextResponse = await page.request.get(new URL('api/v2/business/quick-quote/context?pageSize=5', baseUrl).toString())
+    assert.equal(quickQuoteContextResponse.ok(), true)
+    const quickQuoteContext = await quickQuoteContextResponse.json()
+    assert.ok(Array.isArray(quickQuoteContext.customers))
+    assert.ok(Array.isArray(quickQuoteContext.platforms))
+    assert.ok(Array.isArray(quickQuoteContext.vehicles))
+    assert.ok(Array.isArray(quickQuoteContext.skus))
     const salesOrderListResponse = await page.request.get(new URL('api/v2/business/sales-orders?page=1&pageSize=5', baseUrl).toString())
     assert.equal(salesOrderListResponse.ok(), true)
     const salesOrderList = await salesOrderListResponse.json()
@@ -98,6 +105,10 @@ test('production workbench uses its real API without writing data', { skip: !bas
       assert.equal(denied.status(), 403)
       const partnerDenied = await page.request.post(new URL('api/v2/business/partners', baseUrl).toString(), { data: { partnerType: 'customer', name: '不应写入' } })
       assert.equal(partnerDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.quote')) {
+      const quickQuoteDenied = await page.request.post(new URL('api/v2/business/quick-quotes', baseUrl).toString(), { data: { requestKey: 'read-only-quick-quote', customerPartnerId: 'none', customerVehicleId: 'none', items: [] } })
+      assert.equal(quickQuoteDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.order')) {
       const conversionDenied = await page.request.post(new URL('api/v2/business/inquiries/read-only-smoke/convert-order', baseUrl).toString())

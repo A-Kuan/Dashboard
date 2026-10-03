@@ -34,10 +34,12 @@ function normalizeContact(input = {}) {
   return { name: clean(input.name), roleTitle: clean(input.roleTitle), phone: clean(input.phone), wechat: clean(input.wechat), email: normalizeEmail(input.email), isPrimary: Boolean(input.isPrimary), notes: clean(input.notes) }
 }
 function normalizeVehicle(input = {}) {
-  if (!clean(input.vehicleLabel)) throw problem('INVALID_CUSTOMER_VEHICLE', '车辆名称为必填项')
+  const platformMasterId = clean(input.platformMasterId) || null
+  const variantMasterId = clean(input.variantMasterId) || null
+  if (!clean(input.vehicleLabel) && !platformMasterId && !variantMasterId) throw problem('INVALID_CUSTOMER_VEHICLE', '车辆名称或标准车型为必填项')
   const modelYear = input.modelYear === '' || input.modelYear == null ? null : Number(input.modelYear)
   if (modelYear != null && (!Number.isInteger(modelYear) || modelYear < 1950 || modelYear > 2200)) throw problem('INVALID_CUSTOMER_VEHICLE', '车辆年款无效')
-  return { vehicleLabel: clean(input.vehicleLabel), vin: normalizeVin(input.vin), licensePlate: clean(input.licensePlate).toUpperCase(), platformCode: clean(input.platformCode).toUpperCase(), engineCode: clean(input.engineCode).toUpperCase(), modelYear, notes: clean(input.notes) }
+  return { vehicleLabel: clean(input.vehicleLabel), vin: normalizeVin(input.vin), licensePlate: clean(input.licensePlate).toUpperCase(), platformCode: clean(input.platformCode).toUpperCase(), platformMasterId, variantMasterId, engineCode: clean(input.engineCode).toUpperCase(), modelYear, notes: clean(input.notes) }
 }
 export function normalizeBusinessPartnerInput(input = {}, { partial = false } = {}) {
   const result = {}
@@ -76,7 +78,7 @@ function mapContact(row) {
   return { id: row.id, partnerId: row.partner_id, name: row.name, roleTitle: row.role_title, phone: row.phone, wechat: row.wechat, email: row.email, isPrimary: row.is_primary, notes: row.notes, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 function mapVehicle(row) {
-  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, engineCode: row.engine_code, modelYear: row.model_year, notes: row.notes, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, engineCode: row.engine_code, modelYear: row.model_year, notes: row.notes, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 async function insertEvent(client, partnerId, action, actor, snapshot = {}, note = '') {
   const by = actorDetails(actor)
@@ -88,6 +90,32 @@ async function lockPartner(client, id, expectedVersion) {
   if (!row) throw problem('PARTNER_NOT_FOUND', '客户或供应商不存在', 404)
   if (!Number.isInteger(Number(expectedVersion)) || Number(expectedVersion) !== row.version) throw problem('PARTNER_VERSION_CONFLICT', '客户或供应商资料已变化，请刷新后重试', 409, { currentVersion: row.version })
   return row
+}
+
+async function resolveVehicleMaster(client, vehicle) {
+  if (vehicle.variantMasterId) {
+    const variant = (await client.query(`SELECT v.*,p.platform_code,p.brand_label,p.series_label,p.year_from AS platform_year_from,p.year_to AS platform_year_to,p.lifecycle_status AS platform_status
+      FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id WHERE v.id=$1`, [vehicle.variantMasterId])).rows[0]
+    if (!variant) throw problem('CUSTOMER_VEHICLE_VARIANT_NOT_FOUND', '关联的标准车型版本不存在', 400)
+    if (variant.lifecycle_status !== 'active' || variant.platform_status !== 'active') throw problem('CUSTOMER_VEHICLE_VARIANT_UNAVAILABLE', '关联的标准车型版本当前不可用', 409)
+    if (vehicle.platformMasterId && vehicle.platformMasterId !== variant.platform_id) throw problem('CUSTOMER_VEHICLE_MASTER_MISMATCH', '车型版本不属于所选车型平台', 409)
+    if (vehicle.modelYear != null && ((variant.year_from && vehicle.modelYear < variant.year_from) || (variant.year_to && vehicle.modelYear > variant.year_to))) throw problem('CUSTOMER_VEHICLE_YEAR_MISMATCH', '车辆年款超出标准车型版本范围', 409)
+    return {
+      ...vehicle,
+      platformMasterId: variant.platform_id,
+      platformCode: variant.platform_code,
+      vehicleLabel: vehicle.vehicleLabel || [variant.brand_label, variant.series_label, variant.variant_label].filter(Boolean).join(' '),
+      engineCode: vehicle.engineCode || (variant.engine_codes?.length === 1 ? variant.engine_codes[0] : ''),
+    }
+  }
+  if (vehicle.platformMasterId) {
+    const platform = (await client.query('SELECT * FROM catalog_vehicle_platform WHERE id=$1', [vehicle.platformMasterId])).rows[0]
+    if (!platform) throw problem('CUSTOMER_VEHICLE_PLATFORM_NOT_FOUND', '关联的标准车型平台不存在', 400)
+    if (platform.lifecycle_status !== 'active') throw problem('CUSTOMER_VEHICLE_PLATFORM_UNAVAILABLE', '关联的标准车型平台当前不可用', 409)
+    if (vehicle.modelYear != null && ((platform.year_from && vehicle.modelYear < platform.year_from) || (platform.year_to && vehicle.modelYear > platform.year_to))) throw problem('CUSTOMER_VEHICLE_YEAR_MISMATCH', '车辆年款超出标准车型平台范围', 409)
+    return { ...vehicle, platformCode: platform.platform_code, vehicleLabel: vehicle.vehicleLabel || [platform.brand_label, platform.series_label].filter(Boolean).join(' ') }
+  }
+  return vehicle
 }
 
 export function createBusinessPartnerRepository(pool) {
@@ -137,7 +165,10 @@ export function createBusinessPartnerRepository(pool) {
         await client.query(`INSERT INTO business_partner (id,partner_no,partner_type,name,short_name,tax_id,phone,email,address,status,payment_terms_days,credit_limit,notes,created_by_id,created_by_name,updated_by_id,updated_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$14,$15)`, [id, partnerNo, input.partnerType, input.name, input.shortName, input.taxId, input.phone, input.email, input.address, input.status, input.paymentTermsDays, input.creditLimit, input.notes, by.id, by.name])
         for (const contact of contacts) await client.query(`INSERT INTO business_partner_contact (id,partner_id,name,role_title,phone,wechat,email,is_primary,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [randomUUID(), id, contact.name, contact.roleTitle, contact.phone, contact.wechat, contact.email, contact.isPrimary, contact.notes])
-        for (const vehicle of vehicles) await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,engine_code,model_year,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [randomUUID(), id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
+        for (const draft of vehicles) {
+          const vehicle = await resolveVehicleMaster(client, draft)
+          await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,platform_master_id,variant_master_id,engine_code,model_year,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [randomUUID(), id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.platformMasterId, vehicle.variantMasterId, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
+        }
         await insertEvent(client, id, 'created', actor, { partnerNo, partnerType: input.partnerType, contactCount: contacts.length, vehicleCount: vehicles.length }, input.notes)
       })
       return get(id)
@@ -189,28 +220,34 @@ export function createBusinessPartnerRepository(pool) {
     },
 
     async addVehicle(partnerId, rawInput = {}, actor) {
-      const vehicle = normalizeVehicle(rawInput); const vehicleId = randomUUID()
+      const draft = normalizeVehicle(rawInput); const vehicleId = randomUUID()
       await withTransaction(pool, async (client) => {
         const partner = await lockPartner(client, partnerId, rawInput.expectedPartnerVersion)
         if (partner.partner_type === 'supplier') throw problem('INVALID_CUSTOMER_VEHICLE', '纯供应商不能登记客户车辆', 409)
-        await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,engine_code,model_year,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [vehicleId, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
+        const vehicle = await resolveVehicleMaster(client, draft)
+        await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,platform_master_id,variant_master_id,engine_code,model_year,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [vehicleId, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.platformMasterId, vehicle.variantMasterId, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
         const by = actorDetails(actor); await client.query('UPDATE business_partner SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1', [partner.id, by.id, by.name])
-        await insertEvent(client, partner.id, 'vehicle_added', actor, { vehicleId, vehicleLabel: vehicle.vehicleLabel, vin: vehicle.vin })
+        await insertEvent(client, partner.id, 'vehicle_added', actor, { vehicleId, vehicleLabel: vehicle.vehicleLabel, vin: vehicle.vin, platformMasterId: vehicle.platformMasterId, variantMasterId: vehicle.variantMasterId })
       })
       return get(partnerId)
     },
 
     async updateVehicle(partnerId, vehicleId, rawInput = {}, actor) {
-      const vehicle = normalizeVehicle(rawInput)
+      const draft = normalizeVehicle(rawInput)
       await withTransaction(pool, async (client) => {
         const partner = await lockPartner(client, partnerId, rawInput.expectedPartnerVersion)
         if (partner.partner_type === 'supplier') throw problem('INVALID_CUSTOMER_VEHICLE', '纯供应商不能登记客户车辆', 409)
         const current = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR UPDATE', [vehicleId, partner.id])).rows[0]
         if (!current) throw problem('CUSTOMER_VEHICLE_NOT_FOUND', '客户车辆不存在', 404)
         if (Number(rawInput.expectedVersion) !== current.version) throw problem('CUSTOMER_VEHICLE_VERSION_CONFLICT', '车辆资料已变化，请刷新后重试', 409, { currentVersion: current.version })
-        await client.query(`UPDATE business_customer_vehicle SET vehicle_label=$3,vin=$4,license_plate=$5,platform_code=$6,engine_code=$7,model_year=$8,notes=$9,version=version+1,updated_at=now() WHERE id=$1 AND partner_id=$2`, [vehicleId, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
+        const vehicle = await resolveVehicleMaster(client, {
+          ...draft,
+          platformMasterId: rawInput.platformMasterId === undefined ? current.platform_master_id : draft.platformMasterId,
+          variantMasterId: rawInput.variantMasterId === undefined ? current.variant_master_id : draft.variantMasterId,
+        })
+        await client.query(`UPDATE business_customer_vehicle SET vehicle_label=$3,vin=$4,license_plate=$5,platform_code=$6,platform_master_id=$7,variant_master_id=$8,engine_code=$9,model_year=$10,notes=$11,version=version+1,updated_at=now() WHERE id=$1 AND partner_id=$2`, [vehicleId, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.platformMasterId, vehicle.variantMasterId, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
         const by = actorDetails(actor); await client.query('UPDATE business_partner SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1', [partner.id, by.id, by.name])
-        await insertEvent(client, partner.id, 'vehicle_updated', actor, { vehicleId, fromVersion: current.version, toVersion: current.version + 1 })
+        await insertEvent(client, partner.id, 'vehicle_updated', actor, { vehicleId, fromVersion: current.version, toVersion: current.version + 1, platformMasterId: vehicle.platformMasterId, variantMasterId: vehicle.variantMasterId })
       })
       return get(partnerId)
     },

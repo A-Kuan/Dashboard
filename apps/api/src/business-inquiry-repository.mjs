@@ -46,6 +46,11 @@ function generatedNumber(prefix) {
   return `${prefix}-${date}-${randomUUID().slice(0, 6).toUpperCase()}`
 }
 function actorDetails(actor) { return { id: clean(actor?.id), name: clean(actor?.name) || '系统操作员' } }
+function requestKey(value) {
+  const normalized = clean(value)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(normalized)) throw problem('INVALID_QUICK_QUOTE_REQUEST_KEY', '快速报价请求编号必须为 8 至 128 位安全字符')
+  return normalized
+}
 
 export function normalizeBusinessInquiryInput(input = {}) {
   const items = Array.isArray(input.items) ? input.items : []
@@ -57,6 +62,7 @@ export function normalizeBusinessInquiryInput(input = {}) {
   if (!['normal', 'high', 'urgent'].includes(priority)) throw problem('INVALID_INQUIRY_INPUT', '询价优先级无效')
   return {
     customerName: clean(input.customerName), customerPartnerId: clean(input.customerPartnerId) || null, customerVehicleId: clean(input.customerVehicleId) || null,
+    vehiclePlatformId: clean(input.vehiclePlatformId) || null, vehicleVariantId: clean(input.vehicleVariantId) || null,
     contactName: clean(input.contactName), contactPhone: clean(input.contactPhone),
     channel: clean(input.channel) || 'manual', vehicleLabel: clean(input.vehicleLabel), vin, priority,
     assignedTo: clean(input.assignedTo), nextAction: clean(input.nextAction) || '核对需求并开始询价',
@@ -76,6 +82,7 @@ function mapInquiry(row) {
   return {
     id: row.id, inquiryNo: row.inquiry_no, customerName: row.customer_name, customerPartnerId: row.customer_partner_id, customerVehicleId: row.customer_vehicle_id, contactName: row.contact_name,
     contactPhone: row.contact_phone, channel: row.channel, vehicleLabel: row.vehicle_label, vin: row.vin,
+    vehiclePlatformId: row.vehicle_platform_id, vehicleVariantId: row.vehicle_variant_id,
     status: row.status, priority: row.priority, assignedTo: row.assigned_to, nextAction: row.next_action,
     nextActionAt: row.next_action_at, notes: row.notes, currency: row.currency,
     quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), version: row.version,
@@ -84,14 +91,34 @@ function mapInquiry(row) {
     itemCount: Number(row.item_count || 0), offerCount: Number(row.offer_count || 0), quoteCount: Number(row.quote_count || 0),
   }
 }
+function mapInquiryCustomer(row) {
+  return { id: row.id, partnerNo: row.partner_no, name: row.name, shortName: row.short_name, phone: row.phone, status: row.status, version: row.version, contactCount: Number(row.contact_count || 0), vehicleCount: Number(row.vehicle_count || 0) }
+}
 function mapItem(row) {
-  return { id: row.id, inquiryId: row.inquiry_id, lineNo: row.line_no, requirementText: row.requirement_text, oeNumber: row.oe_number, requestedQuantity: Number(row.requested_quantity), unit: row.unit, targetBrand: row.target_brand, catalogSkuId: row.catalog_sku_id, notes: row.notes }
+  return { id: row.id, inquiryId: row.inquiry_id, lineNo: row.line_no, requirementText: row.requirement_text, oeNumber: row.oe_number, requestedQuantity: Number(row.requested_quantity), unit: row.unit, targetBrand: row.target_brand, catalogSkuId: row.catalog_sku_id, catalogSkuVersion: row.catalog_sku_version, skuCodeSnapshot: row.sku_code_snapshot, skuNameSnapshot: row.sku_name_snapshot, brandSnapshot: row.brand_snapshot, fitmentSnapshot: row.fitment_snapshot || {}, notes: row.notes }
 }
 function mapOffer(row) {
   return { id: row.id, inquiryId: row.inquiry_id, inquiryItemId: row.inquiry_item_id, supplierName: row.supplier_name, supplierPartnerId: row.supplier_partner_id, brandLabel: row.brand_label, unitPrice: Number(row.unit_price), freightAmount: Number(row.freight_amount), availability: row.availability, leadTimeDays: row.lead_time_days, validUntil: row.valid_until, sourceNote: row.source_note, selected: row.selected, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
 }
 function mapQuote(row) {
-  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, state: row.state, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), note: row.note, sentAt: row.sent_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, state: row.state, creationMode: row.creation_mode, requestKey: row.request_key, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), note: row.note, sentAt: row.sent_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
+}
+
+function fitmentSnapshot(fitment, { overridden = false, overrideReason = '' } = {}) {
+  return fitment ? {
+    fitmentId: fitment.id, platformMasterId: fitment.platform_master_id, variantMasterId: fitment.variant_master_id,
+    vehicleLabel: fitment.vehicle_label, years: fitment.years, yearFrom: fitment.year_from, yearTo: fitment.year_to,
+    engineCodes: fitment.engine_codes || [], verificationStatus: fitment.verification_status, overridden, overrideReason,
+  } : { fitmentId: '', overridden, overrideReason }
+}
+
+function fitmentMatchesVehicle(fitment, vehicle) {
+  if (fitment.verification_status !== 'verified') return false
+  if (vehicle.variant_master_id && fitment.variant_master_id && fitment.variant_master_id !== vehicle.variant_master_id) return false
+  if (vehicle.platform_master_id && fitment.platform_master_id !== vehicle.platform_master_id) return false
+  if (vehicle.model_year != null && ((fitment.year_from && vehicle.model_year < fitment.year_from) || (fitment.year_to && vehicle.model_year > fitment.year_to))) return false
+  if (vehicle.engine_code && fitment.engine_codes?.length && !fitment.engine_codes.includes(vehicle.engine_code)) return false
+  return Boolean(fitment.platform_master_id || fitment.variant_master_id)
 }
 
 async function insertEvent(client, inquiryId, action, actor, { fromStatus = '', toStatus = '', note = '', snapshot = {} } = {}) {
@@ -120,7 +147,7 @@ export function createBusinessInquiryRepository(pool) {
     return {
       ...inquiry,
       items: items.rows.map((row) => ({ ...mapItem(row), offers: offers.rows.filter((offer) => offer.inquiry_item_id === row.id).map(mapOffer) })),
-      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
+      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
       events: events.rows.map((row) => ({ id: row.id, action: row.action, fromStatus: row.from_status, toStatus: row.to_status, actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, createdAt: row.created_at })),
     }
   }
@@ -148,10 +175,127 @@ export function createBusinessInquiryRepository(pool) {
 
     get,
 
+    async quoteContext({ customerQuery = '', vehicleQuery = '', skuQuery = '', customerId = '', customerVehicleId = '', platformId = '', variantId = '', pageSize = 20 } = {}) {
+      const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
+      const customerTerm = clean(customerQuery); const vehicleTerm = clean(vehicleQuery); const skuTerm = clean(skuQuery)
+      const customerValues = []; let customerWhere = "p.status='active' AND p.partner_type IN ('customer','both')"
+      if (customerTerm) { customerValues.push(`%${customerTerm}%`); customerWhere += ` AND (p.name ILIKE $1 OR p.short_name ILIKE $1 OR p.phone ILIKE $1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND (c.name ILIKE $1 OR c.phone ILIKE $1 OR c.wechat ILIKE $1)) OR EXISTS (SELECT 1 FROM business_customer_vehicle v WHERE v.partner_id=p.id AND (v.vin ILIKE $1 OR v.license_plate ILIKE $1 OR v.vehicle_label ILIKE $1)))` }
+      customerValues.push(size)
+      const customers = (await pool.query(`SELECT p.*,
+        (SELECT count(*)::int FROM business_partner_contact c WHERE c.partner_id=p.id) contact_count,
+        (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id) vehicle_count
+        FROM business_partner p WHERE ${customerWhere} ORDER BY p.updated_at DESC LIMIT $${customerValues.length}`, customerValues)).rows.map(mapInquiryCustomer)
+
+      let customer = null; let selectedVehicle = null
+      if (clean(customerId)) {
+        const partner = (await pool.query("SELECT * FROM business_partner WHERE id=$1 AND status='active' AND partner_type IN ('customer','both')", [clean(customerId)])).rows[0]
+        if (!partner) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价选择的客户不存在或不可用', 400)
+        const [contacts, vehicles] = await Promise.all([
+          pool.query('SELECT * FROM business_partner_contact WHERE partner_id=$1 ORDER BY is_primary DESC,created_at,id', [partner.id]),
+          pool.query('SELECT * FROM business_customer_vehicle WHERE partner_id=$1 ORDER BY updated_at DESC,id', [partner.id]),
+        ])
+        customer = { ...mapInquiryCustomer(partner), contacts: contacts.rows.map((row) => ({ id: row.id, name: row.name, phone: row.phone, wechat: row.wechat, isPrimary: row.is_primary })), vehicles: vehicles.rows.map((row) => ({ id: row.id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, engineCode: row.engine_code, modelYear: row.model_year })) }
+        if (clean(customerVehicleId)) {
+          selectedVehicle = vehicles.rows.find((row) => row.id === clean(customerVehicleId)) || null
+          if (!selectedVehicle) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '快速报价选择的客户车辆不存在', 400)
+        }
+      }
+
+      const vehicleValues = []; const vehicleClauses = ["p.lifecycle_status='active'", "v.lifecycle_status='active'"]
+      if (vehicleTerm) { vehicleValues.push(`%${vehicleTerm}%`); vehicleClauses.push(`(p.platform_code ILIKE $${vehicleValues.length} OR p.brand_label ILIKE $${vehicleValues.length} OR p.series_label ILIKE $${vehicleValues.length} OR v.variant_code ILIKE $${vehicleValues.length} OR v.variant_label ILIKE $${vehicleValues.length})`) }
+      vehicleValues.push(size)
+      const vehicles = (await pool.query(`SELECT v.id,v.variant_code,v.variant_label,v.year_from,v.year_to,v.engine_codes,v.transmission_codes,v.market_codes,v.body_styles,v.drive_types,v.pr_codes,p.id platform_id,p.platform_code,p.brand_label,p.series_label
+        FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id WHERE ${vehicleClauses.join(' AND ')} ORDER BY p.brand_label,p.series_label,v.variant_label LIMIT $${vehicleValues.length}`, vehicleValues)).rows.map((row) => ({ id: row.id, variantCode: row.variant_code, variantLabel: row.variant_label, yearFrom: row.year_from, yearTo: row.year_to, engineCodes: row.engine_codes, transmissionCodes: row.transmission_codes, marketCodes: row.market_codes, bodyStyles: row.body_styles, driveTypes: row.drive_types, prCodes: row.pr_codes, platformId: row.platform_id, platformCode: row.platform_code, brandLabel: row.brand_label, seriesLabel: row.series_label }))
+      const platformValues = []; const platformClauses = ["p.lifecycle_status='active'"]
+      if (vehicleTerm) { platformValues.push(`%${vehicleTerm}%`); platformClauses.push(`(p.platform_code ILIKE $${platformValues.length} OR p.brand_label ILIKE $${platformValues.length} OR p.series_label ILIKE $${platformValues.length} OR p.generation_label ILIKE $${platformValues.length})`) }
+      platformValues.push(size)
+      const platforms = (await pool.query(`SELECT p.* FROM catalog_vehicle_platform p WHERE ${platformClauses.join(' AND ')} ORDER BY p.brand_label,p.series_label,p.generation_label LIMIT $${platformValues.length}`, platformValues)).rows.map((row) => ({ id: row.id, platformCode: row.platform_code, brandLabel: row.brand_label, seriesLabel: row.series_label, generationLabel: row.generation_label, yearFrom: row.year_from, yearTo: row.year_to, marketCodes: row.market_codes, bodyStyles: row.body_styles }))
+
+      let vehicleContext = selectedVehicle
+      if (!vehicleContext && clean(variantId)) vehicleContext = (await pool.query('SELECT v.id variant_master_id,v.platform_id platform_master_id,v.engine_codes,p.platform_code FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id WHERE v.id=$1', [clean(variantId)])).rows[0] || null
+      if (!vehicleContext && clean(platformId)) vehicleContext = { platform_master_id: clean(platformId), variant_master_id: null, model_year: null, engine_code: '' }
+      const normalizedSku = skuTerm.toUpperCase().replace(/[\s._/#+()\-]/g, '')
+      const skuValues = []; const skuClauses = ["s.lifecycle_status='verified'", "s.verification_level='verified'"]
+      if (skuTerm) {
+        skuValues.push(`%${skuTerm}%`, `%${normalizedSku}%`)
+        skuClauses.push(`(s.sku_code ILIKE $1 OR s.canonical_name_zh ILIKE $1 OR s.canonical_name_en ILIKE $1 OR s.brand_label ILIKE $1 OR EXISTS (SELECT 1 FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.normalized_value LIKE $2))`)
+      }
+      skuValues.push(size)
+      const skuRows = (await pool.query(`SELECT s.*,
+        (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe,
+        COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.sort_order,f.created_at) FROM catalog_fitment f WHERE f.sku_id=s.id AND f.verification_status='verified'),'[]'::jsonb) fitments,
+        COALESCE((SELECT sum(b.on_hand_quantity) FROM business_inventory_balance b WHERE b.catalog_sku_id=s.id),0)::numeric on_hand_quantity,
+        COALESCE((SELECT sum(b.reserved_quantity) FROM business_inventory_balance b WHERE b.catalog_sku_id=s.id),0)::numeric reserved_quantity
+        FROM catalog_sku s WHERE ${skuClauses.join(' AND ')} ORDER BY s.updated_at DESC LIMIT $${skuValues.length}`, skuValues)).rows
+      const skus = skuRows.map((row) => {
+        const fitment = vehicleContext ? row.fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicleContext)) : null
+        return { id: row.id, skuCode: row.sku_code, name: row.canonical_name_zh || row.canonical_name_en, brandLabel: row.brand_label || row.brand_code, categoryLabel: row.category_label || row.category_code, unit: row.unit_label, primaryOe: row.primary_oe || '', version: row.version, onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity), fitmentStatus: vehicleContext ? fitment ? 'matched' : 'not_matched' : 'vehicle_required', fitment: fitmentSnapshot(fitment) }
+      })
+      return { customers, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
+    },
+
+    async createQuickQuote(rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey); const customerPartnerId = clean(rawInput.customerPartnerId); const customerVehicleId = clean(rawInput.customerVehicleId)
+      const requested = Array.isArray(rawInput.items) ? rawInput.items : []
+      if (!customerPartnerId) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价必须选择客户或门店')
+      if (!customerVehicleId) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '快速报价必须选择客户车辆')
+      if (!requested.length || requested.length > 50) throw problem('INVALID_QUICK_QUOTE_ITEMS', '快速报价必须包含 1 至 50 个 SKU')
+      const discountAmount = money(rawInput.discountAmount, '优惠金额', { optional: true }); const freightAmount = money(rawInput.freightAmount, '报价运费', { optional: true })
+      const by = actorDetails(actor)
+      const result = await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-quick-quote:${key}`])
+        const existing = (await client.query('SELECT inquiry_id,id FROM business_quote WHERE request_key=$1', [key])).rows[0]
+        if (existing) return { created: false, inquiryId: existing.inquiry_id, quoteId: existing.id }
+        const customer = (await client.query("SELECT * FROM business_partner WHERE id=$1 AND partner_type IN ('customer','both') FOR SHARE", [customerPartnerId])).rows[0]
+        if (!customer || customer.status !== 'active') throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '快速报价选择的客户不存在或不可用', 400)
+        const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR SHARE', [customerVehicleId, customer.id])).rows[0]
+        if (!vehicle) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '快速报价选择的客户车辆不存在', 400)
+        if (!vehicle.platform_master_id) throw problem('CUSTOMER_VEHICLE_NOT_STANDARDIZED', '客户车辆尚未关联标准车型平台，不能进行 SKU 快速报价', 409)
+        const master = (await client.query(`SELECT p.lifecycle_status platform_status,v.lifecycle_status variant_status
+          FROM catalog_vehicle_platform p LEFT JOIN catalog_vehicle_variant v ON v.id=$2 AND v.platform_id=p.id WHERE p.id=$1`, [vehicle.platform_master_id, vehicle.variant_master_id])).rows[0]
+        if (!master || master.platform_status !== 'active' || (vehicle.variant_master_id && master.variant_status !== 'active')) throw problem('CUSTOMER_VEHICLE_MASTER_UNAVAILABLE', '客户车辆关联的标准车型当前不可用', 409)
+        const contact = (await client.query('SELECT * FROM business_partner_contact WHERE partner_id=$1 ORDER BY is_primary DESC,created_at,id LIMIT 1', [customer.id])).rows[0]
+        const inquiryId = randomUUID(); const inquiryNo = generatedNumber('INQ'); const quoteId = randomUUID(); const quoteNo = generatedNumber('QT')
+        const normalized = []
+        for (const [index, draft] of requested.entries()) {
+          const skuId = clean(draft.catalogSkuId)
+          if (!skuId) throw problem('INVALID_QUICK_QUOTE_ITEMS', `第 ${index + 1} 项必须选择 SKU`)
+          const sku = (await client.query(`SELECT s.*,(SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe
+            FROM catalog_sku s WHERE s.id=$1 FOR SHARE`, [skuId])).rows[0]
+          if (!sku || sku.lifecycle_status !== 'verified' || sku.verification_level !== 'verified') throw problem('QUICK_QUOTE_SKU_UNAVAILABLE', `第 ${index + 1} 项 SKU 不存在或尚未通过审核`, 409, { catalogSkuId: skuId })
+          const fitments = (await client.query("SELECT * FROM catalog_fitment WHERE sku_id=$1 AND verification_status='verified' ORDER BY sort_order,created_at", [sku.id])).rows
+          const fitment = fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicle)) || null
+          const overrideReason = clean(draft.fitmentOverrideReason)
+          if (!fitment && overrideReason.length < 8) throw problem('QUICK_QUOTE_FITMENT_NOT_CONFIRMED', `第 ${index + 1} 项 SKU 与客户车辆没有已核验适配，需停止或填写明确的人工复核原因`, 409, { catalogSkuId: sku.id, customerVehicleId: vehicle.id })
+          const requestedQuantity = quantity(draft.quantity); const saleUnitPrice = money(draft.saleUnitPrice, `第 ${index + 1} 项销售单价`); const costUnitPrice = money(draft.costUnitPrice, `第 ${index + 1} 项成本价`, { optional: true })
+          normalized.push({ id: randomUUID(), sku, fitment: fitmentSnapshot(fitment, { overridden: !fitment, overrideReason }), quantity: requestedQuantity, saleUnitPrice, costUnitPrice, description: clean(draft.description) || sku.canonical_name_zh || sku.canonical_name_en, unit: clean(draft.unit) || sku.unit_label || '件', lineTotal: Math.round(requestedQuantity * saleUnitPrice * 100) / 100 })
+        }
+        const subtotal = Math.round(normalized.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100
+        if (discountAmount > subtotal + freightAmount) throw problem('INVALID_BUSINESS_AMOUNT', '优惠金额不能大于报价金额')
+        const totalAmount = Math.round((subtotal + freightAmount - discountAmount) * 100) / 100
+        const marginAmount = Math.round((subtotal - normalized.reduce((sum, item) => sum + item.quantity * item.costUnitPrice, 0) - discountAmount) * 100) / 100
+        await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,customer_partner_id,customer_vehicle_id,contact_name,contact_phone,channel,vehicle_label,vin,vehicle_platform_id,vehicle_variant_id,status,priority,assigned_to,next_action,next_action_at,notes,currency,quote_amount,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,'quick_quote',$8,$9,$10,$11,'quoting',$12,$13,$14,$15,$16,$17,$18,$19,$20,$19,$20)`, [inquiryId, inquiryNo, customer.name, customer.id, vehicle.id, contact?.name || '', contact?.phone || customer.phone, vehicle.vehicle_label, vehicle.vin, vehicle.platform_master_id, vehicle.variant_master_id, clean(rawInput.priority) || 'normal', clean(rawInput.assignedTo), clean(rawInput.nextAction) || '复核并发送报价', optionalTimestamp(rawInput.nextActionAt, '下一步时间'), clean(rawInput.note), clean(rawInput.currency).toUpperCase() || 'CNY', totalAmount, by.id, by.name])
+        await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,creation_mode,request_key,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,note,created_by_id,created_by_name)
+          VALUES ($1,$2,$3,'quick',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [quoteId, inquiryId, quoteNo, key, clean(rawInput.currency).toUpperCase() || 'CNY', optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, clean(rawInput.note), by.id, by.name])
+        for (const [index, item] of normalized.entries()) {
+          const inquiryItemId = randomUUID()
+          await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,notes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15)`, [inquiryItemId, inquiryId, index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.sku.brand_label || item.sku.brand_code, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), clean(requested[index].notes)])
+          await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17)`, [randomUUID(), quoteId, inquiryItemId, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
+        }
+        await insertEvent(client, inquiryId, 'quick_quote_created', actor, { toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, requestKey: key, customerPartnerId: customer.id, customerVehicleId: vehicle.id, vehiclePlatformId: vehicle.platform_master_id, vehicleVariantId: vehicle.variant_master_id, itemCount: normalized.length, totalAmount } })
+        return { created: true, inquiryId, quoteId }
+      })
+      return { ...result, inquiry: await get(result.inquiryId) }
+    },
+
     async create(rawInput, actor) {
       const input = normalizeBusinessInquiryInput(rawInput); const by = actorDetails(actor); const id = randomUUID(); const inquiryNo = generatedNumber('INQ')
       await withTransaction(pool, async (client) => {
         let customerName = input.customerName; let vehicleLabel = input.vehicleLabel; let vin = input.vin; let contactName = input.contactName; let contactPhone = input.contactPhone
+        let vehiclePlatformId = input.vehiclePlatformId; let vehicleVariantId = input.vehicleVariantId
         if (input.customerPartnerId) {
           const partner = (await client.query('SELECT * FROM business_partner WHERE id=$1', [input.customerPartnerId])).rows[0]
           if (!partner || !['customer', 'both'].includes(partner.partner_type)) throw problem('INVALID_CUSTOMER_PARTNER', '关联的客户或门店不存在', 400)
@@ -165,13 +309,36 @@ export function createBusinessInquiryRepository(pool) {
           if (input.customerVehicleId) {
             const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2', [input.customerVehicleId, partner.id])).rows[0]
             if (!vehicle) throw problem('INVALID_CUSTOMER_VEHICLE', '关联的客户车辆不存在', 400)
-            vehicleLabel = vehicle.vehicle_label; vin = vehicle.vin
+            vehicleLabel = vehicle.vehicle_label; vin = vehicle.vin; vehiclePlatformId = vehicle.platform_master_id; vehicleVariantId = vehicle.variant_master_id
           }
         } else if (input.customerVehicleId) throw problem('INVALID_CUSTOMER_VEHICLE', '关联客户车辆时必须同时选择客户或门店', 400)
-        await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,customer_partner_id,customer_vehicle_id,contact_name,contact_phone,channel,vehicle_label,vin,priority,assigned_to,next_action,next_action_at,notes,currency,created_by_id,created_by_name,updated_by_id,updated_by_name)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$17,$18)`, [id, inquiryNo, customerName, input.customerPartnerId, input.customerVehicleId, contactName, contactPhone, input.channel, vehicleLabel, vin, input.priority, input.assignedTo, input.nextAction, input.nextActionAt, input.notes, input.currency, by.id, by.name])
-        for (const item of input.items) await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,notes)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [item.id, id, item.lineNo, item.requirementText, item.oeNumber, item.requestedQuantity, item.unit, item.targetBrand, item.catalogSkuId, item.notes])
+        if (vehicleVariantId) {
+          const variant = (await client.query(`SELECT v.*,p.id platform_master_id,p.platform_code,p.brand_label,p.series_label,p.lifecycle_status platform_status
+            FROM catalog_vehicle_variant v JOIN catalog_vehicle_platform p ON p.id=v.platform_id WHERE v.id=$1`, [vehicleVariantId])).rows[0]
+          if (!variant || variant.lifecycle_status !== 'active' || variant.platform_status !== 'active') throw problem('INVALID_INQUIRY_VEHICLE', '关联的标准车型版本不存在或不可用', 409)
+          if (vehiclePlatformId && vehiclePlatformId !== variant.platform_master_id) throw problem('INVALID_INQUIRY_VEHICLE', '车型版本不属于所选车型平台', 409)
+          vehiclePlatformId = variant.platform_master_id
+          vehicleLabel ||= [variant.brand_label, variant.series_label, variant.variant_label].filter(Boolean).join(' ')
+        } else if (vehiclePlatformId) {
+          const platform = (await client.query('SELECT * FROM catalog_vehicle_platform WHERE id=$1', [vehiclePlatformId])).rows[0]
+          if (!platform || platform.lifecycle_status !== 'active') throw problem('INVALID_INQUIRY_VEHICLE', '关联的标准车型平台不存在或不可用', 409)
+          vehicleLabel ||= [platform.brand_label, platform.series_label].filter(Boolean).join(' ')
+        }
+        await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,customer_partner_id,customer_vehicle_id,contact_name,contact_phone,channel,vehicle_label,vin,vehicle_platform_id,vehicle_variant_id,priority,assigned_to,next_action,next_action_at,notes,currency,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$19,$20)`, [id, inquiryNo, customerName, input.customerPartnerId, input.customerVehicleId, contactName, contactPhone, input.channel, vehicleLabel, vin, vehiclePlatformId, vehicleVariantId, input.priority, input.assignedTo, input.nextAction, input.nextActionAt, input.notes, input.currency, by.id, by.name])
+        for (const item of input.items) {
+          let sku = null; let fitment = null
+          if (item.catalogSkuId) {
+            sku = (await client.query(`SELECT s.*,(SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe
+              FROM catalog_sku s WHERE s.id=$1`, [item.catalogSkuId])).rows[0]
+            if (!sku) throw problem('CATALOG_SKU_NOT_FOUND', `第 ${item.lineNo} 项关联的 SKU 不存在`, 400)
+            const fitments = (await client.query('SELECT * FROM catalog_fitment WHERE sku_id=$1 ORDER BY verification_status=\'verified\' DESC,sort_order,created_at', [sku.id])).rows
+            fitment = fitments.find((candidate) => fitmentMatchesVehicle(candidate, { platform_master_id: vehiclePlatformId, variant_master_id: vehicleVariantId })) || null
+          }
+          const snapshot = fitmentSnapshot(fitment)
+          await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,notes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15)`, [item.id, id, item.lineNo, item.requirementText, item.oeNumber || sku?.primary_oe || '', item.requestedQuantity, item.unit, item.targetBrand, item.catalogSkuId, sku?.version || null, sku?.sku_code || '', sku?.canonical_name_zh || '', sku?.brand_label || sku?.brand_code || '', JSON.stringify(snapshot), item.notes])
+        }
         await insertEvent(client, id, 'created', actor, { toStatus: 'new', note: input.notes, snapshot: { inquiryNo, itemCount: input.items.length } })
       })
       return get(id)
@@ -237,8 +404,8 @@ export function createBusinessInquiryRepository(pool) {
         const marginAmount = Math.round((subtotal - normalized.reduce((sum, item) => sum + Number(item.item.requested_quantity) * item.costUnitPrice, 0) - discountAmount) * 100) / 100
         await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,note,created_by_id,created_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [quoteId, inquiryId, quoteNo, inquiry.currency, optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, clean(rawInput.note), by.id, by.name])
-        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
+        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
         await client.query(`UPDATE business_inquiry SET status='quoting',quote_amount=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [inquiryId, totalAmount, by.id, by.name])
         await insertEvent(client, inquiryId, 'quote_created', actor, { fromStatus: inquiry.status, toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, subtotal, totalAmount, marginAmount } })
       })
