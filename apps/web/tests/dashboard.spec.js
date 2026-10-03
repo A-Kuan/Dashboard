@@ -2090,6 +2090,94 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const olderTimeline = await olderTimelineResponse.json()
   expect(olderTimeline.timeline.items.length).toBeGreaterThan(0)
   expect(new Set([...timelinePage.timeline.items, ...olderTimeline.timeline.items].map((item) => item.id)).size).toBe(timelinePage.timeline.items.length + olderTimeline.timeline.items.length)
+
+  const mergeDraftResponse = await page.request.post('/api/v2/business/quick-quote/drafts', { headers: editorHeaders, data: {
+    autosaveKey: 'customer-merge-draft-e2e', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    currency: 'CNY', note: '验证客户合并同步草稿引用', items: [],
+  } })
+  expect(mergeDraftResponse.status()).toBe(201)
+  const mergeDraft = (await mergeDraftResponse.json()).draft
+
+  const mergeSurvivorResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'customer', name: '合并后客户主档', phone: '13800000999', paymentTermsDays: 30, creditLimit: 9999,
+    contacts: [{ name: '合并主联系人', phone: '13800000999', isPrimary: true }],
+  } })
+  expect(mergeSurvivorResponse.status()).toBe(201)
+  let mergeSurvivor = await mergeSurvivorResponse.json()
+  const unreviewedMergePreview = await (await page.request.post('/api/v2/business/partners/merge-preview', { headers: editorHeaders, data: {
+    survivorPartnerId: mergeSurvivor.id, retiredPartnerId: customer.id,
+  } })).json()
+  expect(unreviewedMergePreview.ready).toBe(false)
+  expect(unreviewedMergePreview.requiredChoices).toEqual(expect.arrayContaining(['name', 'phone', 'paymentTermsDays', 'creditLimit']))
+  expect(unreviewedMergePreview.impact.inquiries).toBeGreaterThanOrEqual(2)
+  expect(unreviewedMergePreview.impact.salesOrders).toBeGreaterThanOrEqual(1)
+  expect(unreviewedMergePreview.impact.receivables).toBeGreaterThanOrEqual(1)
+  expect(unreviewedMergePreview.impact.afterSalesCases).toBe(1)
+  expect(unreviewedMergePreview.impact.quickQuoteDrafts).toBe(1)
+  const mergeInput = {
+    survivorPartnerId: mergeSurvivor.id, retiredPartnerId: customer.id,
+    fieldChoices: { name: 'retired', phone: 'retired', paymentTermsDays: 'retired', creditLimit: 'retired' },
+  }
+  const reviewedMergePreview = await (await page.request.post('/api/v2/business/partners/merge-preview', { headers: editorHeaders, data: mergeInput })).json()
+  expect(reviewedMergePreview.ready).toBe(true)
+  expect(reviewedMergePreview.resolved.name).toBe('业务闭环测试汽修')
+  const editorMergeDenied = await page.request.post('/api/v2/business/partners/merge', { headers: editorHeaders, data: {
+    ...mergeInput, requestKey: 'customer-merge-e2e-1', previewFingerprint: reviewedMergePreview.fingerprint, reason: '确认两条资料属于同一客户',
+  } })
+  expect(editorMergeDenied.status()).toBe(403)
+  const changedSurvivorResponse = await page.request.patch(`/api/v2/business/partners/${mergeSurvivor.id}`, { headers: editorHeaders, data: {
+    expectedVersion: mergeSurvivor.version, notes: '合并前补充的资料变化',
+  } })
+  expect(changedSurvivorResponse.ok()).toBeTruthy()
+  mergeSurvivor = await changedSurvivorResponse.json()
+  const staleMergeResponse = await page.request.post('/api/v2/business/partners/merge', { headers: creatorAdminHeaders, data: {
+    ...mergeInput, requestKey: 'customer-merge-e2e-1', previewFingerprint: reviewedMergePreview.fingerprint, reason: '确认两条资料属于同一客户',
+  } })
+  expect(staleMergeResponse.status()).toBe(409)
+  expect((await staleMergeResponse.json()).error).toBe('CUSTOMER_MERGE_PREVIEW_STALE')
+  const currentMergePreview = await (await page.request.post('/api/v2/business/partners/merge-preview', { headers: editorHeaders, data: mergeInput })).json()
+  expect(currentMergePreview.ready).toBe(true)
+  const mergeResponse = await page.request.post('/api/v2/business/partners/merge', { headers: creatorAdminHeaders, data: {
+    ...mergeInput, requestKey: 'customer-merge-e2e-1', previewFingerprint: currentMergePreview.fingerprint, reason: '确认两条资料属于同一客户',
+  } })
+  expect(mergeResponse.status()).toBe(201)
+  const merge = await mergeResponse.json()
+  expect(merge.survivor.id).toBe(mergeSurvivor.id)
+  expect(merge.survivor.name).toBe(currentMergePreview.resolved.name)
+  expect(merge.survivor.phone).toBe(currentMergePreview.resolved.phone)
+  expect(merge.survivor.paymentTermsDays).toBe(currentMergePreview.resolved.paymentTermsDays)
+  expect(merge.survivor.creditLimit).toBe(currentMergePreview.resolved.creditLimit)
+  expect(merge.survivor.vehicles.map((item) => item.id)).toContain(customer.vehicles[0].id)
+  expect(merge.survivor.contacts.filter((item) => item.isPrimary)).toHaveLength(1)
+  expect(merge.retired.mergedIntoPartnerId).toBe(mergeSurvivor.id)
+  expect(merge.retired.status).toBe('inactive')
+  expect(merge.retired.phone).toBe('')
+  const repeatedMergeResponse = await page.request.post('/api/v2/business/partners/merge', { headers: creatorAdminHeaders, data: {
+    ...mergeInput, requestKey: 'customer-merge-e2e-1', reason: '重复请求应返回原合并结果',
+  } })
+  expect(repeatedMergeResponse.status()).toBe(200)
+  expect((await repeatedMergeResponse.json()).mergeId).toBe(merge.mergeId)
+  const mergedCustomer360 = await (await page.request.get(`/api/v2/business/partners/${mergeSurvivor.id}/360?pageSize=100`, { headers: editorHeaders })).json()
+  expect(mergedCustomer360.summary.inquiryCount).toBe(customer360.summary.inquiryCount)
+  expect(mergedCustomer360.summary.completedSalesAmount).toBe(customer360.summary.completedSalesAmount)
+  expect(mergedCustomer360.summary.collectedAmount).toBe(customer360.summary.collectedAmount)
+  expect(mergedCustomer360.summary.afterSalesCount).toBe(customer360.summary.afterSalesCount)
+  const mergedInquiry = await (await page.request.get(`/api/v2/business/inquiries/${inquiry.id}`, { headers: editorHeaders })).json()
+  expect(mergedInquiry.customerPartnerId).toBe(mergeSurvivor.id)
+  const mergedSalesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
+  expect(mergedSalesOrder.customerPartnerId).toBe(mergeSurvivor.id)
+  const mergedReceivable = await (await page.request.get(`/api/v2/business/receivables/${mergedSalesOrder.receivable.id}`, { headers: editorHeaders })).json()
+  expect(mergedReceivable.customerPartnerId).toBe(mergeSurvivor.id)
+  const mergedDraft = await (await page.request.get(`/api/v2/business/quick-quote/drafts/${mergeDraft.id}`, { headers: editorHeaders })).json()
+  expect(mergedDraft.customerPartnerId).toBe(mergeSurvivor.id)
+  expect(mergedDraft.payload.customerPartnerId).toBe(mergeSurvivor.id)
+  expect(mergedDraft.version).toBe(mergeDraft.version + 1)
+  expect(mergedDraft.events.map((item) => item.action)).toContain('customer_merged')
+  const retiredUpdateResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: {
+    expectedVersion: merge.retired.version, notes: '不允许继续修改',
+  } })
+  expect(retiredUpdateResponse.status()).toBe(409)
+  expect((await retiredUpdateResponse.json()).error).toBe('PARTNER_ALREADY_MERGED')
 })
 
 test('does not expose retired frontend business routes', async ({ page }) => {
