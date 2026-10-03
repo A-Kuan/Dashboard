@@ -1216,17 +1216,25 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
 
   const reservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
     warehouseId: warehouse.id,
-    items: salesOrder.items.map((item) => ({ itemId: item.id, quantity: item.quantity })),
-    note: '为客户订单锁定全部库存',
+    items: [{ itemId: salesOrder.items[0].id, quantity: salesOrder.items[0].quantity }],
+    note: '先锁定第一项库存',
   } })
   expect(reservationResponse.status()).toBe(201)
   let reservation = (await reservationResponse.json()).reservation
   expect(reservation.status).toBe('active')
-  expect(reservation.items).toHaveLength(2)
+  expect(reservation.items).toHaveLength(1)
   expect(reservation.items.every((item) => item.shortageQuantity === 0)).toBeTruthy()
+  const extendedReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
+    warehouseId: warehouse.id, items: [{ itemId: salesOrder.items[1].id, quantity: salesOrder.items[1].quantity }], note: '补充锁定第二项库存',
+  } })
+  expect(extendedReservationResponse.status()).toBe(200)
+  const extendedReservationResult = await extendedReservationResponse.json()
+  expect(extendedReservationResult.extended).toBe(true)
+  reservation = extendedReservationResult.reservation
+  expect(reservation.items).toHaveLength(2)
   expect(reservation.items.reduce((sum, item) => sum + item.reservedQuantity, 0)).toBe(3)
   const repeatedReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
-    warehouseId: warehouse.id, items: [{ itemId: salesOrder.items[0].id, quantity: 1 }],
+    warehouseId: warehouse.id, items: [{ itemId: salesOrder.items[0].id, quantity: salesOrder.items[0].quantity }],
   } })
   expect(repeatedReservationResponse.status()).toBe(200)
   expect((await repeatedReservationResponse.json()).reservation.id).toBe(reservation.id)
@@ -1250,7 +1258,22 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(stockConversion.salesOrder.items[0].fulfillmentSource).toBe('stock')
   expect(stockConversion.salesOrder.items[0].fulfillmentWarehouseId).toBe(warehouse.id)
   expect(stockConversion.purchaseOrders).toHaveLength(0)
+  expect(stockConversion.stockReservationIds).toHaveLength(1)
+  expect(stockConversion.salesOrder.stockReservations).toHaveLength(1)
+  expect(stockConversion.salesOrder.stockReservations[0].status).toBe('active')
   expect(stockConversion.salesOrder.events[0].snapshot.stockItemCount).toBe(1)
+  const balancesAfterAtomicReservation = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterAtomicReservation.items.find((item) => item.oeNumber === '95B 698 151 H').reservedQuantity).toBe(1)
+  const cancelledStockOrderResponse = await page.request.post(`/api/v2/business/sales-orders/${stockConversion.salesOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: stockConversion.salesOrder.version, status: 'cancelled', note: '验证取消订单自动释放锁定',
+  } })
+  expect(cancelledStockOrderResponse.ok()).toBeTruthy()
+  const cancelledStockOrder = await cancelledStockOrderResponse.json()
+  expect(cancelledStockOrder.status).toBe('cancelled')
+  expect(cancelledStockOrder.stockReservations[0].status).toBe('released')
+  expect(cancelledStockOrder.events.map((event) => event.action)).toContain('stock_reservations_released')
+  const balancesAfterAutomaticRelease = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterAutomaticRelease.items.every((item) => item.reservedQuantity === 0)).toBeTruthy()
   const replacementReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
     warehouseId: warehouse.id,
     items: salesOrder.items.map((item) => ({ itemId: item.id, quantity: item.quantity })),
