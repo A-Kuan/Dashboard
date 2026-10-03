@@ -49,14 +49,15 @@ function actorDetails(actor) { return { id: clean(actor?.id), name: clean(actor?
 
 export function normalizeBusinessInquiryInput(input = {}) {
   const items = Array.isArray(input.items) ? input.items : []
-  if (!clean(input.customerName)) throw problem('INVALID_INQUIRY_INPUT', '客户或门店名称为必填项')
+  if (!clean(input.customerName) && !clean(input.customerPartnerId)) throw problem('INVALID_INQUIRY_INPUT', '客户或门店名称为必填项')
   if (!items.length || items.length > 50) throw problem('INVALID_INQUIRY_INPUT', '每条询价必须包含 1 至 50 项需求')
   const vin = clean(input.vin).toUpperCase()
   if (vin && !/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) throw problem('INVALID_INQUIRY_VIN', 'VIN 必须是 17 位有效字符')
   const priority = clean(input.priority) || 'normal'
   if (!['normal', 'high', 'urgent'].includes(priority)) throw problem('INVALID_INQUIRY_INPUT', '询价优先级无效')
   return {
-    customerName: clean(input.customerName), contactName: clean(input.contactName), contactPhone: clean(input.contactPhone),
+    customerName: clean(input.customerName), customerPartnerId: clean(input.customerPartnerId) || null, customerVehicleId: clean(input.customerVehicleId) || null,
+    contactName: clean(input.contactName), contactPhone: clean(input.contactPhone),
     channel: clean(input.channel) || 'manual', vehicleLabel: clean(input.vehicleLabel), vin, priority,
     assignedTo: clean(input.assignedTo), nextAction: clean(input.nextAction) || '核对需求并开始询价',
     nextActionAt: optionalTimestamp(input.nextActionAt, '下一步时间'), notes: clean(input.notes), currency: clean(input.currency).toUpperCase() || 'CNY',
@@ -73,7 +74,7 @@ export function normalizeBusinessInquiryInput(input = {}) {
 
 function mapInquiry(row) {
   return {
-    id: row.id, inquiryNo: row.inquiry_no, customerName: row.customer_name, contactName: row.contact_name,
+    id: row.id, inquiryNo: row.inquiry_no, customerName: row.customer_name, customerPartnerId: row.customer_partner_id, customerVehicleId: row.customer_vehicle_id, contactName: row.contact_name,
     contactPhone: row.contact_phone, channel: row.channel, vehicleLabel: row.vehicle_label, vin: row.vin,
     status: row.status, priority: row.priority, assignedTo: row.assigned_to, nextAction: row.next_action,
     nextActionAt: row.next_action_at, notes: row.notes, currency: row.currency,
@@ -87,7 +88,7 @@ function mapItem(row) {
   return { id: row.id, inquiryId: row.inquiry_id, lineNo: row.line_no, requirementText: row.requirement_text, oeNumber: row.oe_number, requestedQuantity: Number(row.requested_quantity), unit: row.unit, targetBrand: row.target_brand, catalogSkuId: row.catalog_sku_id, notes: row.notes }
 }
 function mapOffer(row) {
-  return { id: row.id, inquiryId: row.inquiry_id, inquiryItemId: row.inquiry_item_id, supplierName: row.supplier_name, brandLabel: row.brand_label, unitPrice: Number(row.unit_price), freightAmount: Number(row.freight_amount), availability: row.availability, leadTimeDays: row.lead_time_days, validUntil: row.valid_until, sourceNote: row.source_note, selected: row.selected, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
+  return { id: row.id, inquiryId: row.inquiry_id, inquiryItemId: row.inquiry_item_id, supplierName: row.supplier_name, supplierPartnerId: row.supplier_partner_id, brandLabel: row.brand_label, unitPrice: Number(row.unit_price), freightAmount: Number(row.freight_amount), availability: row.availability, leadTimeDays: row.lead_time_days, validUntil: row.valid_until, sourceNote: row.source_note, selected: row.selected, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
 }
 function mapQuote(row) {
   return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, state: row.state, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), note: row.note, sentAt: row.sent_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
@@ -150,8 +151,25 @@ export function createBusinessInquiryRepository(pool) {
     async create(rawInput, actor) {
       const input = normalizeBusinessInquiryInput(rawInput); const by = actorDetails(actor); const id = randomUUID(); const inquiryNo = generatedNumber('INQ')
       await withTransaction(pool, async (client) => {
-        await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,contact_name,contact_phone,channel,vehicle_label,vin,priority,assigned_to,next_action,next_action_at,notes,currency,created_by_id,created_by_name,updated_by_id,updated_by_name)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$15,$16)`, [id, inquiryNo, input.customerName, input.contactName, input.contactPhone, input.channel, input.vehicleLabel, input.vin, input.priority, input.assignedTo, input.nextAction, input.nextActionAt, input.notes, input.currency, by.id, by.name])
+        let customerName = input.customerName; let vehicleLabel = input.vehicleLabel; let vin = input.vin; let contactName = input.contactName; let contactPhone = input.contactPhone
+        if (input.customerPartnerId) {
+          const partner = (await client.query('SELECT * FROM business_partner WHERE id=$1', [input.customerPartnerId])).rows[0]
+          if (!partner || !['customer', 'both'].includes(partner.partner_type)) throw problem('INVALID_CUSTOMER_PARTNER', '关联的客户或门店不存在', 400)
+          if (partner.status !== 'active') throw problem('CUSTOMER_PARTNER_UNAVAILABLE', '关联的客户或门店当前不可用', 409)
+          customerName = partner.name
+          if (!contactName || !contactPhone) {
+            const contact = (await client.query('SELECT * FROM business_partner_contact WHERE partner_id=$1 ORDER BY is_primary DESC,created_at,id LIMIT 1', [partner.id])).rows[0]
+            contactName ||= contact?.name || ''
+            contactPhone ||= contact?.phone || partner.phone
+          }
+          if (input.customerVehicleId) {
+            const vehicle = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2', [input.customerVehicleId, partner.id])).rows[0]
+            if (!vehicle) throw problem('INVALID_CUSTOMER_VEHICLE', '关联的客户车辆不存在', 400)
+            vehicleLabel = vehicle.vehicle_label; vin = vehicle.vin
+          }
+        } else if (input.customerVehicleId) throw problem('INVALID_CUSTOMER_VEHICLE', '关联客户车辆时必须同时选择客户或门店', 400)
+        await client.query(`INSERT INTO business_inquiry (id,inquiry_no,customer_name,customer_partner_id,customer_vehicle_id,contact_name,contact_phone,channel,vehicle_label,vin,priority,assigned_to,next_action,next_action_at,notes,currency,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$17,$18)`, [id, inquiryNo, customerName, input.customerPartnerId, input.customerVehicleId, contactName, contactPhone, input.channel, vehicleLabel, vin, input.priority, input.assignedTo, input.nextAction, input.nextActionAt, input.notes, input.currency, by.id, by.name])
         for (const item of input.items) await client.query(`INSERT INTO business_inquiry_item (id,inquiry_id,line_no,requirement_text,oe_number,requested_quantity,unit,target_brand,catalog_sku_id,notes)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [item.id, id, item.lineNo, item.requirementText, item.oeNumber, item.requestedQuantity, item.unit, item.targetBrand, item.catalogSkuId, item.notes])
         await insertEvent(client, id, 'created', actor, { toStatus: 'new', note: input.notes, snapshot: { inquiryNo, itemCount: input.items.length } })
@@ -160,7 +178,8 @@ export function createBusinessInquiryRepository(pool) {
     },
 
     async addOffer(inquiryId, inquiryItemId, rawInput = {}, actor) {
-      const supplierName = clean(rawInput?.supplierName); if (!supplierName) throw problem('INVALID_SUPPLIER_OFFER', '供应商名称为必填项')
+      let supplierName = clean(rawInput?.supplierName); const supplierPartnerId = clean(rawInput?.supplierPartnerId) || null
+      if (!supplierName && !supplierPartnerId) throw problem('INVALID_SUPPLIER_OFFER', '供应商名称为必填项')
       const availability = clean(rawInput?.availability) || 'unknown'
       if (!['in_stock', 'ordered', 'backorder', 'unknown'].includes(availability)) throw problem('INVALID_SUPPLIER_OFFER', '供货状态无效')
       const unitPrice = money(rawInput?.unitPrice, '供应商单价'); const freightAmount = money(rawInput?.freightAmount, '运费', { optional: true })
@@ -173,9 +192,15 @@ export function createBusinessInquiryRepository(pool) {
         if (terminalStatuses.has(inquiry.status)) throw problem('INQUIRY_CLOSED', '已结束的询价不能继续录入供应商报价', 409)
         const item = (await client.query('SELECT id FROM business_inquiry_item WHERE id=$1 AND inquiry_id=$2', [inquiryItemId, inquiryId])).rows[0]
         if (!item) throw problem('INQUIRY_ITEM_NOT_FOUND', '询价需求项不存在', 404)
+        if (supplierPartnerId) {
+          const partner = (await client.query('SELECT * FROM business_partner WHERE id=$1', [supplierPartnerId])).rows[0]
+          if (!partner || !['supplier', 'both'].includes(partner.partner_type)) throw problem('INVALID_SUPPLIER_PARTNER', '关联的供应商不存在', 400)
+          if (partner.status !== 'active') throw problem('SUPPLIER_PARTNER_UNAVAILABLE', '关联的供应商当前不可用', 409)
+          supplierName = partner.name
+        }
         if (rawInput?.selected) await client.query('UPDATE business_supplier_offer SET selected=false WHERE inquiry_item_id=$1', [inquiryItemId])
-        await client.query(`INSERT INTO business_supplier_offer (id,inquiry_id,inquiry_item_id,supplier_name,brand_label,unit_price,freight_amount,availability,lead_time_days,valid_until,source_note,selected,created_by_id,created_by_name)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [offerId, inquiryId, inquiryItemId, supplierName, clean(rawInput.brandLabel), unitPrice, freightAmount, availability, leadTimeDays, optionalDate(rawInput.validUntil, '供应商报价有效期'), clean(rawInput.sourceNote), Boolean(rawInput.selected), by.id, by.name])
+        await client.query(`INSERT INTO business_supplier_offer (id,inquiry_id,inquiry_item_id,supplier_name,supplier_partner_id,brand_label,unit_price,freight_amount,availability,lead_time_days,valid_until,source_note,selected,created_by_id,created_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, [offerId, inquiryId, inquiryItemId, supplierName, supplierPartnerId, clean(rawInput.brandLabel), unitPrice, freightAmount, availability, leadTimeDays, optionalDate(rawInput.validUntil, '供应商报价有效期'), clean(rawInput.sourceNote), Boolean(rawInput.selected), by.id, by.name])
         const nextStatus = inquiry.status === 'new' ? 'sourcing' : inquiry.status
         await client.query('UPDATE business_inquiry SET status=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [inquiryId, nextStatus, by.id, by.name])
         await insertEvent(client, inquiryId, 'supplier_offer_added', actor, { fromStatus: inquiry.status, toStatus: nextStatus, note: supplierName, snapshot: { offerId, inquiryItemId, unitPrice, availability } })

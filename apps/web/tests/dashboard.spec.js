@@ -867,9 +867,47 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
 
 test('runs an inquiry through supplier comparison, quote and follow-up', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
+  const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'customer', name: '业务闭环测试汽修', shortName: '闭环汽修', phone: '13800000001', paymentTermsDays: 15, creditLimit: 20000,
+    contacts: [{ name: '王师傅', roleTitle: '店长', phone: '13800000001', wechat: 'wang-master', isPrimary: true }],
+    vehicles: [{ vehicleLabel: 'Porsche Cayenne (95B)', vin: 'WP1AA29P39LA12345', licensePlate: '浙A12345', platformCode: '95B', engineCode: 'CGEA', modelYear: 2019 }],
+  } })
+  expect(customerResponse.status()).toBe(201)
+  let customer = await customerResponse.json()
+  expect(customer.contacts[0].isPrimary).toBe(true)
+  expect(customer.vehicles[0].vin).toBe('WP1AA29P39LA12345')
+
+  const addedContactResponse = await page.request.post(`/api/v2/business/partners/${customer.id}/contacts`, { headers: editorHeaders, data: {
+    expectedPartnerVersion: customer.version, name: '小王', roleTitle: '采购', phone: '13800000002', isPrimary: false,
+  } })
+  expect(addedContactResponse.status()).toBe(201)
+  customer = await addedContactResponse.json()
+  const updatedVehicleResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}/vehicles/${customer.vehicles[0].id}`, { headers: editorHeaders, data: {
+    expectedPartnerVersion: customer.version, expectedVersion: customer.vehicles[0].version, vehicleLabel: customer.vehicles[0].vehicleLabel,
+    vin: customer.vehicles[0].vin, licensePlate: '浙A54321', platformCode: '95B', engineCode: 'CGEA', modelYear: 2019,
+  } })
+  expect(updatedVehicleResponse.ok()).toBeTruthy()
+  customer = await updatedVehicleResponse.json()
+  const updatedCustomerResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: { expectedVersion: customer.version, address: '杭州市西湖区' } })
+  expect(updatedCustomerResponse.ok()).toBeTruthy()
+  customer = await updatedCustomerResponse.json()
+  const staleCustomerResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: { expectedVersion: 1, address: '不应覆盖' } })
+  expect(staleCustomerResponse.status()).toBe(409)
+  expect((await staleCustomerResponse.json()).error).toBe('PARTNER_VERSION_CONFLICT')
+
+  const supplierResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'supplier', name: '华东供应商', phone: '057188888888', paymentTermsDays: 30,
+    contacts: [{ name: '李经理', roleTitle: '销售', phone: '13900000001', isPrimary: true }],
+  } })
+  expect(supplierResponse.status()).toBe(201)
+  const supplier = await supplierResponse.json()
+  const customerSearchResponse = await page.request.get('/api/v2/business/partners?q=WP1AA29P39LA12345&type=customer', { headers: editorHeaders })
+  expect(customerSearchResponse.ok()).toBeTruthy()
+  expect((await customerSearchResponse.json()).items[0].id).toBe(customer.id)
+
   const createdResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
-    customerName: '业务闭环测试汽修', contactName: '王师傅', channel: 'phone', vehicleLabel: 'Porsche Cayenne (95B)',
-    vin: 'WP1AA29P39LA12345', priority: 'high', nextAction: '核对 OE 并向供应商询价',
+    customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id, channel: 'phone',
+    priority: 'high', nextAction: '核对 OE 并向供应商询价',
     items: [
       { requirementText: '前刹车片', oeNumber: '95B 698 151 H', requestedQuantity: 2, unit: '套', targetBrand: 'Porsche' },
       { requirementText: '前制动盘', oeNumber: '95B 615 301 G', requestedQuantity: 1, unit: '对', targetBrand: 'Porsche' },
@@ -879,15 +917,23 @@ test('runs an inquiry through supplier comparison, quote and follow-up', async (
   let inquiry = await createdResponse.json()
   expect(inquiry.status).toBe('new')
   expect(inquiry.items).toHaveLength(2)
+  expect(inquiry.customerPartnerId).toBe(customer.id)
+  expect(inquiry.customerVehicleId).toBe(customer.vehicles[0].id)
+  expect(inquiry.customerName).toBe('业务闭环测试汽修')
+  expect(inquiry.contactName).toBe('王师傅')
+  expect(inquiry.contactPhone).toBe('13800000001')
+  expect(inquiry.vin).toBe('WP1AA29P39LA12345')
 
   const firstOfferResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/items/${inquiry.items[0].id}/offers`, { headers: editorHeaders, data: {
-    supplierName: '华东供应商', brandLabel: 'Porsche', unitPrice: 600, availability: 'in_stock', leadTimeDays: 1, selected: true,
+    supplierPartnerId: supplier.id, brandLabel: 'Porsche', unitPrice: 600, availability: 'in_stock', leadTimeDays: 1, selected: true,
   } })
   expect(firstOfferResponse.status()).toBe(201)
   inquiry = await firstOfferResponse.json()
   expect(inquiry.status).toBe('sourcing')
+  expect(inquiry.items[0].offers[0].supplierPartnerId).toBe(supplier.id)
+  expect(inquiry.items[0].offers[0].supplierName).toBe('华东供应商')
   const secondOfferResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/items/${inquiry.items[1].id}/offers`, { headers: editorHeaders, data: {
-    supplierName: '华东供应商', brandLabel: 'Porsche', unitPrice: 1200, availability: 'ordered', leadTimeDays: 2, selected: true,
+    supplierPartnerId: supplier.id, brandLabel: 'Porsche', unitPrice: 1200, availability: 'ordered', leadTimeDays: 2, selected: true,
   } })
   expect(secondOfferResponse.status()).toBe(201)
   inquiry = await secondOfferResponse.json()

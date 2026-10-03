@@ -24,6 +24,30 @@
 
 ## 接口
 
+### 客户与供应商主数据
+
+`GET /api/v2/business/partners?q=&type=&status=&page=1&pageSize=30`
+
+合作方类型支持 `customer`、`supplier`、`both`。搜索覆盖编号、名称、简称、电话、税号、联系人、VIN、车牌和车辆名称。
+
+`POST /api/v2/business/partners` 新建客户、门店或供应商，可以同时提交联系人和客户车辆；纯供应商不能登记客户车辆。
+
+`GET /api/v2/business/partners/:id` 返回主信息、联系人、客户车辆和审计事件。
+
+`PATCH /api/v2/business/partners/:id` 更新名称、联系方式、状态、账期、信用额度等主信息，必须提交 `expectedVersion`。
+
+联系人接口：
+
+- `POST /api/v2/business/partners/:id/contacts`
+- `PATCH /api/v2/business/partners/:id/contacts/:contactId`
+
+客户车辆接口：
+
+- `POST /api/v2/business/partners/:id/vehicles`
+- `PATCH /api/v2/business/partners/:id/vehicles/:vehicleId`
+
+联系人和车辆写入同时校验合作方版本与子记录版本；VIN 在客户车辆中全局唯一。合作方不提供物理删除接口，停止合作使用 `inactive` 或 `blocked`，避免历史询价和报价失去来源。
+
 ### 查询询价列表
 
 `GET /api/v2/business/inquiries?q=&status=&page=1&pageSize=30`
@@ -38,9 +62,8 @@
 
 ```json
 {
-  "customerName": "王师傅汽修",
-  "vehicleLabel": "Porsche Cayenne (95B)",
-  "vin": "WP1AA29P39LA12345",
+  "customerPartnerId": "客户主数据 ID",
+  "customerVehicleId": "客户车辆 ID",
   "items": [
     {
       "requirementText": "前刹车片",
@@ -51,6 +74,8 @@
   ]
 }
 ```
+
+也可以仅传 `customerName`、`vehicleLabel` 和 `vin` 处理尚未建档的临时询价。关联主数据时，服务端会保存当时的客户名称、主联系人和车辆快照；后续主数据改名不会改写历史报价。
 
 ### 查看询价详情
 
@@ -64,7 +89,7 @@
 
 ```json
 {
-  "supplierName": "华东供应商",
+  "supplierPartnerId": "供应商主数据 ID",
   "brandLabel": "Porsche",
   "unitPrice": 600,
   "freightAmount": 0,
@@ -75,6 +100,7 @@
 ```
 
 `selected: true` 会把同一需求项的其他供应商报价取消选中，但不会删除历史报价。
+尚未建档的临时供应商仍可只传 `supplierName`；关联供应商主数据时保存当时的供应商名称快照。
 
 ### 生成对客报价
 
@@ -118,6 +144,6 @@
 
 ## 后续接入
 
-- 客户和供应商目前以业务快照名称保存，后续主数据模块上线后再增加可选关联 ID，不覆盖历史文本。
+- 客户、供应商和客户车辆已经支持主数据关联，同时保留业务发生时的名称和车辆快照。
 - 询价需求可以关联现有 `catalog_sku`，但不会因 SKU 资料变化而改写已发送报价。
 - 下一阶段前端优先实现业务列表、需求/比价主区、客户/车型/下一步侧栏，不在 v0 内生成采购单或订单。
