@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -114,6 +114,55 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
   app.get('/api/v2/catalog/session', async (request) => {
     const actor = resolveCatalogActor(request)
     return { ...actor, availableRoles: actor.development ? Object.values(catalogRoles) : [] }
+  })
+  app.get('/api/v2/business/partners', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessPartnerRepository.list({ query: request.query?.q, partnerType: request.query?.type, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/business/partners', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return reply.code(201).send(await businessPartnerRepository.create(request.body, actor))
+  })
+  app.get('/api/v2/business/partners/:id', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const partner = await businessPartnerRepository.get(request.params.id)
+    return partner || reply.code(404).send({ error: 'PARTNER_NOT_FOUND', message: '客户或供应商不存在' })
+  })
+  app.patch('/api/v2/business/partners/:id', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return businessPartnerRepository.update(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/partners/:id/contacts', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return reply.code(201).send(await businessPartnerRepository.addContact(request.params.id, request.body, actor))
+  })
+  app.patch('/api/v2/business/partners/:id/contacts/:contactId', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return businessPartnerRepository.updateContact(request.params.id, request.params.contactId, request.body, actor)
+  })
+  app.post('/api/v2/business/partners/:id/vehicles', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return reply.code(201).send(await businessPartnerRepository.addVehicle(request.params.id, request.body, actor))
+  })
+  app.patch('/api/v2/business/partners/:id/vehicles/:vehicleId', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return businessPartnerRepository.updateVehicle(request.params.id, request.params.vehicleId, request.body, actor)
   })
   app.get('/api/v2/business/inquiries', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })

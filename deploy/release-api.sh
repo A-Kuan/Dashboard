@@ -100,7 +100,11 @@ SELECT json_build_object(
   'businessSupplierOffer',pg_temp.exact_count('business_supplier_offer'),
   'businessQuote',pg_temp.exact_count('business_quote'),
   'businessQuoteItem',pg_temp.exact_count('business_quote_item'),
-  'businessInquiryEvent',pg_temp.exact_count('business_inquiry_event')
+  'businessInquiryEvent',pg_temp.exact_count('business_inquiry_event'),
+  'businessPartner',pg_temp.exact_count('business_partner'),
+  'businessPartnerContact',pg_temp.exact_count('business_partner_contact'),
+  'businessCustomerVehicle',pg_temp.exact_count('business_customer_vehicle'),
+  'businessPartnerEvent',pg_temp.exact_count('business_partner_event')
 )::text;
 SQL
 REMOTE
@@ -208,11 +212,11 @@ if [[ "$after_counts" != "$baseline_counts" && "$allow_data_change" != "1" ]]; t
   exit 1
 fi
 after_business_counts="$(production_business_counts)"
-initial_business_schema=0
-if BASELINE_COUNTS="$baseline_business_counts" AFTER_COUNTS="$after_business_counts" node -e "const before=JSON.parse(process.env.BASELINE_COUNTS);const after=JSON.parse(process.env.AFTER_COUNTS);if(Object.values(before).every((value)=>value===null)&&Object.values(after).every((value)=>value===0))process.exit(0);process.exit(1)"; then
-  initial_business_schema=1
+safe_business_schema_change=0
+if BASELINE_COUNTS="$baseline_business_counts" AFTER_COUNTS="$after_business_counts" node -e "const before=JSON.parse(process.env.BASELINE_COUNTS);const after=JSON.parse(process.env.AFTER_COUNTS);if(Object.keys(after).every((key)=>before[key]===after[key]||(before[key]===null&&after[key]===0)))process.exit(0);process.exit(1)"; then
+  safe_business_schema_change=1
 fi
-if [[ "$after_business_counts" != "$baseline_business_counts" && "$initial_business_schema" != "1" && "$allow_data_change" != "1" ]]; then
+if [[ "$after_business_counts" != "$baseline_business_counts" && "$safe_business_schema_change" != "1" && "$allow_data_change" != "1" ]]; then
   echo "Production business data fingerprint changed unexpectedly" >&2
   echo "before=$baseline_business_counts" >&2
   echo "after=$after_business_counts" >&2
