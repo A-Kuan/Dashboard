@@ -174,10 +174,14 @@ export function createBusinessPartnerRepository(pool) {
         (SELECT count(*)::int FROM business_purchase_order p JOIN business_sales_order s ON s.id=p.sales_order_id WHERE s.customer_partner_id=$1 AND p.status NOT IN ('received','cancelled')) open_purchase_order_count,
         (SELECT count(*)::int FROM business_shipment sh JOIN business_sales_order s ON s.id=sh.sales_order_id WHERE s.customer_partner_id=$1) shipment_count,
         (SELECT count(*)::int FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status<>'void') receivable_count,
-        (SELECT COALESCE(sum(r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status<>'void') collected_amount,
-        (SELECT COALESCE(sum(r.original_amount-r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial')) outstanding_amount,
+        (SELECT COALESCE(sum(r.paid_amount-r.refunded_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status<>'void') collected_amount,
+        (SELECT COALESCE(sum(GREATEST((r.original_amount-r.credited_amount)-(r.paid_amount-r.refunded_amount),0)),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial')) outstanding_amount,
         (SELECT count(*)::int FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial') AND r.due_at<current_date) overdue_receivable_count,
-        (SELECT COALESCE(sum(r.original_amount-r.paid_amount),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial') AND r.due_at<current_date) overdue_amount`, [customer.id]),
+        (SELECT COALESCE(sum(GREATEST((r.original_amount-r.credited_amount)-(r.paid_amount-r.refunded_amount),0)),0) FROM business_receivable r WHERE r.customer_partner_id=$1 AND r.status IN ('open','partial') AND r.due_at<current_date) overdue_amount,
+        (SELECT count(*)::int FROM business_after_sales_case a WHERE a.customer_partner_id=$1) after_sales_count,
+        (SELECT count(*)::int FROM business_after_sales_case a WHERE a.customer_partner_id=$1 AND a.status NOT IN ('completed','rejected','cancelled')) open_after_sales_count,
+        (SELECT COALESCE(sum(a.credited_amount),0) FROM business_after_sales_case a WHERE a.customer_partner_id=$1) after_sales_credited_amount,
+        (SELECT COALESCE(sum(a.refunded_amount),0) FROM business_after_sales_case a WHERE a.customer_partner_id=$1) refunded_amount`, [customer.id]),
       pool.query(`SELECT id,inquiry_no,status,priority,next_action,next_action_at,vehicle_label,customer_vehicle_id,quote_amount,currency,updated_at
         FROM business_inquiry WHERE customer_partner_id=$1 AND next_action<>'' AND status NOT IN ('won','lost','cancelled')
         ORDER BY next_action_at ASC NULLS LAST,updated_at DESC,id LIMIT 10`, [customer.id]),
@@ -219,6 +223,14 @@ export function createBusinessPartnerRepository(pool) {
           CASE WHEN e.action='payment_recorded' THEN NULLIF(e.snapshot->>'amount','')::numeric ELSE r.original_amount END,r.currency,
           e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
         FROM business_receivable_event e JOIN business_receivable r ON r.id=e.receivable_id WHERE r.customer_partner_id=$1
+        UNION ALL
+        SELECT 'after-sales:'||e.id,'after_sales',a.id,a.sales_order_id,e.action,COALESCE(NULLIF(e.to_status,''),a.status),a.case_no,
+          CASE WHEN e.action='refund_recorded' THEN NULLIF(e.snapshot->>'amount','')::numeric
+            WHEN e.action IN ('return_received','return_partially_received') THEN NULLIF(e.snapshot->>'creditAmount','')::numeric
+            ELSE a.requested_refund_amount END,s.currency,
+          e.actor_id,e.actor_name,e.note,e.snapshot,e.created_at
+        FROM business_after_sales_event e JOIN business_after_sales_case a ON a.id=e.case_id
+        JOIN business_sales_order s ON s.id=a.sales_order_id WHERE a.customer_partner_id=$1
       ) SELECT * FROM timeline
         WHERE ($2::timestamptz IS NULL OR (occurred_at,timeline_id)<($2::timestamptz,$3::text))
         ORDER BY occurred_at DESC,timeline_id DESC LIMIT $4`, [customer.id, position.occurredAt, position.id, size + 1]),
@@ -239,6 +251,8 @@ export function createBusinessPartnerRepository(pool) {
         openPurchaseOrderCount: summaryRow.open_purchase_order_count, shipmentCount: summaryRow.shipment_count,
         receivableCount: summaryRow.receivable_count, collectedAmount: Number(summaryRow.collected_amount), outstandingAmount: Number(summaryRow.outstanding_amount),
         overdueReceivableCount: summaryRow.overdue_receivable_count, overdueAmount: Number(summaryRow.overdue_amount),
+        afterSalesCount: summaryRow.after_sales_count, openAfterSalesCount: summaryRow.open_after_sales_count,
+        afterSalesCreditedAmount: Number(summaryRow.after_sales_credited_amount), refundedAmount: Number(summaryRow.refunded_amount),
       },
       nextActions: nextActionsResult.rows.map((row) => ({ id: row.id, inquiryNo: row.inquiry_no, status: row.status, priority: row.priority, nextAction: row.next_action, nextActionAt: row.next_action_at, vehicleLabel: row.vehicle_label, customerVehicleId: row.customer_vehicle_id, quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), currency: row.currency, updatedAt: row.updated_at })),
       timeline: { items: timelineRows, nextCursor: timelineResult.rows.length > size && timelineRows.length ? encodeTimelineCursor(timelineRows.at(-1)) : null },

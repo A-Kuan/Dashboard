@@ -94,6 +94,11 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const receivableList = await receivableListResponse.json()
     assert.ok(Array.isArray(receivableList.items))
     assert.ok(Number.isInteger(receivableList.total))
+    const afterSalesListResponse = await page.request.get(new URL('api/v2/business/after-sales?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(afterSalesListResponse.ok(), true)
+    const afterSalesList = await afterSalesListResponse.json()
+    assert.ok(Array.isArray(afterSalesList.items))
+    assert.ok(Number.isInteger(afterSalesList.total))
     const purchaseOrderListResponse = await page.request.get(new URL('api/v2/business/purchase-orders?page=1&pageSize=5', baseUrl).toString())
     assert.equal(purchaseOrderListResponse.ok(), true)
     const purchaseOrderList = await purchaseOrderListResponse.json()
@@ -131,6 +136,12 @@ test('production workbench uses its real API without writing data', { skip: !bas
     if (!session.capabilities.includes('business.finance')) {
       const paymentDenied = await page.request.post(new URL('api/v2/business/receivables/read-only-smoke/payments', baseUrl).toString(), { data: { requestKey: 'read-only-payment', amount: 1, paymentMethod: 'cash' } })
       assert.equal(paymentDenied.status(), 403)
+      const refundDenied = await page.request.post(new URL('api/v2/business/after-sales/read-only-smoke/refunds', baseUrl).toString(), { data: { requestKey: 'read-only-refund', amount: 1, refundMethod: 'cash' } })
+      assert.equal(refundDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.after_sales')) {
+      const afterSalesDenied = await page.request.post(new URL('api/v2/business/after-sales', baseUrl).toString(), { data: { requestKey: 'read-only-after-sales', salesOrderId: 'none', reasonCode: 'other', items: [{ shipmentItemId: 'none', quantity: 1 }] } })
+      assert.equal(afterSalesDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.inventory')) {
       const warehouseDenied = await page.request.post(new URL('api/v2/business/warehouses', baseUrl).toString(), { data: { warehouseCode: 'SMOKE', name: '不应写入' } })

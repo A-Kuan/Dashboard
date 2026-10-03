@@ -7,15 +7,15 @@ const roleDefinitions = {
   },
   catalog_editor: {
     label: '资料录入',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.bulk', 'catalog.migration.plan', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance', 'business.after_sales'],
   },
   catalog_reviewer: {
     label: '资料审核',
-    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept', 'business.read'],
+    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept', 'business.read', 'business.after_sales.review'],
   },
   catalog_admin: {
     label: '资料管理员',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance', 'business.after_sales', 'business.after_sales.review'],
   },
 }
 

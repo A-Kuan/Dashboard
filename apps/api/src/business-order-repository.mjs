@@ -60,8 +60,14 @@ function mapSalesOrder(row) {
     discountAmount: number(row.discount_amount), freightAmount: number(row.freight_amount), totalAmount: number(row.total_amount),
     notes: row.notes, version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
     updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
-    itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count), stockReservationCount: number(row.stock_reservation_count),
-    receivable: row.receivable_id ? { id: row.receivable_id, receivableNo: row.receivable_no, status: row.receivable_status, originalAmount: number(row.receivable_original_amount), paidAmount: number(row.receivable_paid_amount), outstandingAmount: Math.round((number(row.receivable_original_amount) - number(row.receivable_paid_amount)) * 100) / 100, dueAt: row.receivable_due_at, version: row.receivable_version } : null,
+    itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count), stockReservationCount: number(row.stock_reservation_count), afterSalesCount: number(row.after_sales_count),
+    receivable: row.receivable_id ? (() => {
+      const originalAmount = number(row.receivable_original_amount); const creditedAmount = number(row.receivable_credited_amount)
+      const paidAmount = number(row.receivable_paid_amount); const refundedAmount = number(row.receivable_refunded_amount)
+      const adjustedAmount = Math.round((originalAmount - creditedAmount) * 100) / 100
+      const netCollectedAmount = Math.round((paidAmount - refundedAmount) * 100) / 100
+      return { id: row.receivable_id, receivableNo: row.receivable_no, status: row.receivable_status, originalAmount, creditedAmount, adjustedAmount, paidAmount, refundedAmount, netCollectedAmount, outstandingAmount: Math.max(0, Math.round((adjustedAmount - netCollectedAmount) * 100) / 100), refundableAmount: Math.max(0, Math.round((netCollectedAmount - adjustedAmount) * 100) / 100), dueAt: row.receivable_due_at, version: row.receivable_version }
+    })() : null,
   }
 }
 function mapSalesItem(row) {
@@ -190,12 +196,14 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
       (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
+      (SELECT count(*)::int FROM business_after_sales_case x WHERE x.sales_order_id=so.id) after_sales_count,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
-      r.paid_amount receivable_paid_amount,r.due_at receivable_due_at,r.version receivable_version
+      r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
+      r.due_at receivable_due_at,r.version receivable_version
       FROM business_sales_order so LEFT JOIN business_receivable r ON r.sales_order_id=so.id
       WHERE so.id=$1 OR so.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
-    const [items, purchaseOrders, stockReservations, events] = await Promise.all([
+    const [items, purchaseOrders, stockReservations, afterSalesCases, events] = await Promise.all([
       client.query('SELECT * FROM business_sales_order_item WHERE sales_order_id=$1 ORDER BY line_no', [row.id]),
       client.query(`SELECT po.*,so.order_no sales_order_no,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
@@ -203,9 +211,10 @@ export function createBusinessOrderRepository(pool) {
         FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id WHERE po.sales_order_id=$1 ORDER BY po.created_at,po.id`, [row.id]),
       client.query(`SELECT r.id,r.reservation_no,r.warehouse_id,w.warehouse_code,w.name warehouse_name,r.status,r.version,r.created_at,r.updated_at
         FROM business_stock_reservation r JOIN business_warehouse w ON w.id=r.warehouse_id WHERE r.sales_order_id=$1 ORDER BY r.created_at,r.id`, [row.id]),
+      client.query('SELECT id,case_no,status,reason_code,credited_amount,refunded_amount,version,created_at,updated_at FROM business_after_sales_case WHERE sales_order_id=$1 ORDER BY created_at,id', [row.id]),
       client.query("SELECT * FROM business_order_event WHERE sales_order_id=$1 ORDER BY created_at DESC,id DESC", [row.id]),
     ])
-    return { ...mapSalesOrder(row), items: items.rows.map(mapSalesItem), purchaseOrders: purchaseOrders.rows.map(mapPurchaseOrder), stockReservations: stockReservations.rows.map((item) => ({ id: item.id, reservationNo: item.reservation_no, warehouseId: item.warehouse_id, warehouseCode: item.warehouse_code, warehouseName: item.warehouse_name, status: item.status, version: item.version, createdAt: item.created_at, updatedAt: item.updated_at })), events: events.rows.map(mapEvent) }
+    return { ...mapSalesOrder(row), items: items.rows.map(mapSalesItem), purchaseOrders: purchaseOrders.rows.map(mapPurchaseOrder), stockReservations: stockReservations.rows.map((item) => ({ id: item.id, reservationNo: item.reservation_no, warehouseId: item.warehouse_id, warehouseCode: item.warehouse_code, warehouseName: item.warehouse_name, status: item.status, version: item.version, createdAt: item.created_at, updatedAt: item.updated_at })), afterSalesCases: afterSalesCases.rows.map((item) => ({ id: item.id, caseNo: item.case_no, status: item.status, reasonCode: item.reason_code, creditedAmount: number(item.credited_amount), refundedAmount: number(item.refunded_amount), version: item.version, createdAt: item.created_at, updatedAt: item.updated_at })), events: events.rows.map(mapEvent) }
   }
 
   async function getPurchaseOrder(id, client = pool) {
@@ -236,8 +245,10 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
       (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
+      (SELECT count(*)::int FROM business_after_sales_case x WHERE x.sales_order_id=so.id) after_sales_count,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
-      r.paid_amount receivable_paid_amount,r.due_at receivable_due_at,r.version receivable_version
+      r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
+      r.due_at receivable_due_at,r.version receivable_version
       FROM business_sales_order so LEFT JOIN business_receivable r ON r.sales_order_id=so.id ${clause}
       ORDER BY so.updated_at DESC,so.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
     const summaryRows = (await pool.query('SELECT status,count(*)::int count,COALESCE(sum(total_amount),0)::numeric amount FROM business_sales_order GROUP BY status')).rows
