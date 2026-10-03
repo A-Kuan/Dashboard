@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
+import { evaluateQuoteRisk } from './business-quote-policy.mjs'
 
 const salesStatuses = new Set(['draft', 'confirmed', 'fulfilling', 'completed', 'cancelled'])
 const purchaseStatuses = new Set(['draft', 'submitted', 'confirmed', 'partially_received', 'received', 'cancelled'])
@@ -325,6 +326,17 @@ export function createBusinessOrderRepository(pool) {
       if (inquiry.status !== 'won') throw problem('INQUIRY_NOT_WON', '只有已成交的询价可以转为订单', 409)
       const quote = (await client.query("SELECT * FROM business_quote WHERE inquiry_id=$1 AND state='accepted' ORDER BY sent_at DESC NULLS LAST,created_at DESC LIMIT 1 FOR UPDATE", [inquiry.id])).rows[0]
       if (!quote) throw problem('ACCEPTED_QUOTE_NOT_FOUND', '未找到客户已接受的报价单', 409)
+      const risk = await evaluateQuoteRisk(client, { customerPartnerId: inquiry.customer_partner_id, currency: quote.currency, totalAmount: quote.total_amount, marginAmount: quote.margin_amount })
+      if (risk.required && (quote.approval_status !== 'approved' || quote.approval_fingerprint !== risk.fingerprint)) {
+        const changed = quote.approval_status !== 'pending' || quote.approval_fingerprint !== risk.fingerprint
+        if (changed) {
+          const nextRevision = quote.revision + 1
+          await client.query(`UPDATE business_quote SET approval_status='pending',risk_reasons=$2::jsonb,risk_snapshot=$3::jsonb,approval_fingerprint=$4,margin_rate=$5,approved_revision=NULL,approved_by_id='',approved_by_name='',approved_at=NULL,approval_note='',revision=$6,updated_at=now() WHERE id=$1`, [quote.id, JSON.stringify(risk.reasons), JSON.stringify(risk.snapshot), risk.fingerprint, risk.marginRate, nextRevision])
+          await client.query(`INSERT INTO business_quote_approval_event (id,quote_id,action,from_status,to_status,actor_id,actor_name,note,risk_reasons,risk_snapshot,fingerprint)
+            VALUES ($1,$2,$3,$4,'pending',$5,$6,'成交转单前重新校验',$7::jsonb,$8::jsonb,$9)`, [randomUUID(), quote.id, quote.approval_status === 'approved' ? 'invalidated' : 'requested', quote.approval_status, by.id, by.name, JSON.stringify(risk.reasons), JSON.stringify(risk.snapshot), risk.fingerprint])
+        }
+        return { blocked: true, quoteId: quote.id, currentRevision: quote.revision + (changed ? 1 : 0), risk }
+      }
       const quoteItems = (await client.query(`SELECT qi.*,ii.catalog_sku_id,offer.supplier_name,offer.supplier_partner_id,offer.unit_price offer_unit_price,
         offer.freight_amount offer_freight_amount,offer.lead_time_days
         FROM business_quote_item qi
@@ -418,6 +430,7 @@ export function createBusinessOrderRepository(pool) {
         VALUES ($1,$2,'converted_to_order',$3,$3,$4,$5,$6,$7::jsonb)`, [randomUUID(), inquiry.id, inquiry.status, by.id, by.name, salesOrderNo, JSON.stringify({ salesOrderId, salesOrderNo, purchaseOrderIds, stockReservationIds })])
       return { salesOrderId, purchaseOrderIds, stockReservationIds, created: true }
     })
+    if (result.blocked) throw problem('ORDER_QUOTE_APPROVAL_REQUIRED', '客户信用额度或报价毛利条件已变化，需重新审批后才能转订单', 409, { quoteId: result.quoteId, currentRevision: result.currentRevision, riskReasons: result.risk.reasons, riskSnapshot: result.risk.snapshot })
     return { salesOrder: await getSalesOrder(result.salesOrderId), purchaseOrders: await Promise.all((result.purchaseOrderIds || []).map((id) => getPurchaseOrder(id))), stockReservationIds: result.stockReservationIds || [], created: result.created }
   }
 

@@ -1,5 +1,6 @@
 const workItemKinds = new Set([
   'inquiry_follow_up',
+  'quote_approval',
   'sales_order',
   'purchase_order',
   'receivable',
@@ -98,6 +99,33 @@ const workItemsCte = `WITH work_items AS (
     LIMIT 1
   ) latest_quote ON true
   WHERE i.status IN ('new','sourcing','quoting','quoted','follow_up')
+
+  UNION ALL
+
+  SELECT
+    'quote-approval:'||q.id,
+    'quote_approval',
+    'quote',
+    q.id,
+    q.quote_no,
+    q.approval_status,
+    '审批报价：'||i.customer_name,
+    i.customer_name,
+    i.customer_partner_id,
+    NULL::text,
+    i.assigned_to,
+    '独立复核毛利与客户信用额度',
+    'business.quote.approve',
+    '/business/inquiries/'||i.id,
+    ((((q.updated_at AT TIME ZONE 'Asia/Shanghai')::date)+time '23:59:59') AT TIME ZONE 'Asia/Shanghai'),
+    q.total_amount,
+    q.currency,
+    jsonb_build_object('inquiryId',i.id,'inquiryNo',i.inquiry_no,'riskReasons',q.risk_reasons,'riskSnapshot',q.risk_snapshot,'revision',q.revision),
+    q.updated_at,
+    -10
+  FROM business_quote q
+  JOIN business_inquiry i ON i.id=q.inquiry_id
+  WHERE q.approval_status='pending'
 
   UNION ALL
 

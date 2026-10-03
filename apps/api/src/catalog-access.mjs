@@ -11,11 +11,11 @@ const roleDefinitions = {
   },
   catalog_reviewer: {
     label: '资料审核',
-    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept', 'business.read', 'business.after_sales.review', 'business.purchase_return.review'],
+    capabilities: ['catalog.read', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.bulk', 'catalog.migration.review', 'catalog.migration.accept', 'business.read', 'business.quote.approve', 'business.after_sales.review', 'business.purchase_return.review'],
   },
   catalog_admin: {
     label: '资料管理员',
-    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.order', 'business.inventory', 'business.finance', 'business.after_sales', 'business.after_sales.review', 'business.purchase_return', 'business.purchase_return.review'],
+    capabilities: ['catalog.read', 'catalog.edit', 'catalog.import', 'catalog.submit', 'catalog.review', 'catalog.review_fitment', 'catalog.resolve_fitment_conflict', 'catalog.manage_platform', 'catalog.assign', 'catalog.resolve_conflict', 'catalog.merge', 'catalog.export', 'catalog.restore', 'catalog.lifecycle', 'catalog.bulk', 'catalog.configure', 'catalog.migration.plan', 'catalog.migration.review', 'catalog.migration.execute', 'catalog.migration.accept', 'business.read', 'business.manage', 'business.quote', 'business.quote.approve', 'business.policy', 'business.order', 'business.inventory', 'business.finance', 'business.after_sales', 'business.after_sales.review', 'business.purchase_return', 'business.purchase_return.review'],
   },
 }
 

@@ -867,6 +867,8 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
 
 test('connects customer vehicle, verified SKU and an idempotent quick quote', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('快速报价员'), 'x-operator-id': 'quick-quote-e2e-1' }
+  const reviewerHeaders = { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': encodeURIComponent('报价审核员'), 'x-operator-id': 'quick-quote-reviewer-e2e-1' }
+  const adminHeaders = { 'x-operator-role': 'catalog_admin', 'x-operator-name': encodeURIComponent('业务规则管理员'), 'x-operator-id': 'business-policy-admin-e2e-1' }
   const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
     warehouseCode: 'QQ-STOCK', name: '快速报价现货仓', address: '杭州市',
   } })
@@ -1027,11 +1029,47 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   } })
   expect(cancelPaidOrderResponse.status()).toBe(409)
   expect((await cancelPaidOrderResponse.json()).error).toBe('RECEIVABLE_HAS_PAYMENTS')
+
+  const lowMarginResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
+    ...payload,
+    requestKey: 'quick-quote-low-margin-e2e',
+    items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 610, costUnitPrice: 600 }],
+  } })
+  expect(lowMarginResponse.status()).toBe(201)
+  let lowMarginInquiry = (await lowMarginResponse.json()).inquiry
+  expect(lowMarginInquiry.quotes[0].approvalStatus).toBe('pending')
+  expect(lowMarginInquiry.quotes[0].riskReasons).toContain('low_margin')
+  const lowMarginBlocked = await page.request.post(`/api/v2/business/quotes/${lowMarginInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: lowMarginInquiry.quotes[0].revision } })
+  expect(lowMarginBlocked.status()).toBe(409)
+  expect((await lowMarginBlocked.json()).error).toBe('QUOTE_APPROVAL_REQUIRED')
+  const lowMarginApproved = await page.request.post(`/api/v2/business/quotes/${lowMarginInquiry.quotes[0].id}/approval`, { headers: reviewerHeaders, data: {
+    expectedRevision: lowMarginInquiry.quotes[0].revision, decision: 'approved', note: '低毛利报价有明确业务原因',
+  } })
+  expect(lowMarginApproved.ok()).toBeTruthy()
+  lowMarginInquiry = await lowMarginApproved.json()
+  const lowMarginSent = await page.request.post(`/api/v2/business/quotes/${lowMarginInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: lowMarginInquiry.quotes[0].revision } })
+  expect(lowMarginSent.ok()).toBeTruthy()
+
+  const controlsResponse = await page.request.get('/api/v2/business/controls', { headers: editorHeaders })
+  expect(controlsResponse.ok()).toBeTruthy()
+  let controls = await controlsResponse.json()
+  expect(controls.controls.minimumMarginRate).toBe(15)
+  const deniedControlsUpdate = await page.request.patch('/api/v2/business/controls', { headers: editorHeaders, data: { expectedVersion: controls.version, minimumMarginRate: 12 } })
+  expect(deniedControlsUpdate.status()).toBe(403)
+  const updatedControlsResponse = await page.request.patch('/api/v2/business/controls', { headers: adminHeaders, data: { expectedVersion: controls.version, minimumMarginRate: 12, note: '验证可配置毛利底线' } })
+  expect(updatedControlsResponse.ok()).toBeTruthy()
+  controls = await updatedControlsResponse.json()
+  expect(controls.version).toBe(2)
+  expect(controls.events[0].actorName).toBe('业务规则管理员')
+  const restoredControlsResponse = await page.request.patch('/api/v2/business/controls', { headers: adminHeaders, data: { expectedVersion: controls.version, minimumMarginRate: 15, note: '恢复默认毛利底线' } })
+  expect(restoredControlsResponse.ok()).toBeTruthy()
 })
 
 test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
   const afterSalesReviewerHeaders = { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': encodeURIComponent('独立售后审核员'), 'x-operator-id': 'after-sales-reviewer-e2e-1' }
+  const secondReviewerHeaders = { 'x-operator-role': 'catalog_reviewer', 'x-operator-name': encodeURIComponent('独立报价审核员乙'), 'x-operator-id': 'quote-reviewer-e2e-2' }
+  const creatorAdminHeaders = { 'x-operator-role': 'catalog_admin', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
   const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
     warehouseCode: 'HZ-MAIN', name: '杭州主仓', address: '杭州市余杭区', isDefault: true,
   } })
@@ -1040,7 +1078,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(warehouse.warehouseCode).toBe('HZ-MAIN')
   expect(warehouse.isDefault).toBe(true)
   const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
-    partnerType: 'customer', name: '业务闭环测试汽修', shortName: '闭环汽修', phone: '13800000001', paymentTermsDays: 15, creditLimit: 20000,
+    partnerType: 'customer', name: '业务闭环测试汽修', shortName: '闭环汽修', phone: '13800000001', paymentTermsDays: 15, creditLimit: 2500,
     contacts: [{ name: '王师傅', roleTitle: '店长', phone: '13800000001', wechat: 'wang-master', isPrimary: true }],
     vehicles: [{ vehicleLabel: 'Porsche Cayenne (95B)', vin: 'WP1AA29P39LA12345', licensePlate: '浙A12345', platformCode: '95B', engineCode: 'CGEA', modelYear: 2019 }],
   } })
@@ -1122,9 +1160,35 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(inquiry.status).toBe('quoting')
   expect(inquiry.quotes[0].totalAmount).toBe(3200)
   expect(inquiry.quotes[0].marginAmount).toBe(700)
+  expect(inquiry.quotes[0].approvalStatus).toBe('pending')
+  expect(inquiry.quotes[0].riskReasons).toContain('credit_limit_exceeded')
+
+  const approvalQueueResponse = await page.request.get('/api/v2/business/operations-center?kind=quote_approval', { headers: afterSalesReviewerHeaders })
+  expect(approvalQueueResponse.ok()).toBeTruthy()
+  const approvalQueue = await approvalQueueResponse.json()
+  expect(approvalQueue.items.some((item) => item.sourceId === inquiry.quotes[0].id && item.actionCapability === 'business.quote.approve')).toBeTruthy()
+
+  const blockedSendResponse = await page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/send`, { headers: editorHeaders, data: {
+    expectedRevision: 1, nextAction: '明天下午回访客户', note: '已通过微信发送报价',
+  } })
+  expect(blockedSendResponse.status()).toBe(409)
+  expect((await blockedSendResponse.json()).error).toBe('QUOTE_APPROVAL_REQUIRED')
+
+  const selfApprovalResponse = await page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/approval`, { headers: creatorAdminHeaders, data: {
+    expectedRevision: 1, decision: 'approved', note: '不允许制单人自审',
+  } })
+  expect(selfApprovalResponse.status()).toBe(403)
+  expect((await selfApprovalResponse.json()).error).toBe('QUOTE_APPROVAL_SELF_REVIEW_DENIED')
+  const approvalResponses = await Promise.all([afterSalesReviewerHeaders, secondReviewerHeaders].map((headers) => page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/approval`, { headers, data: {
+    expectedRevision: 1, decision: 'approved', note: '已复核客户额度与本单毛利',
+  } })))
+  expect(approvalResponses.map((response) => response.status()).sort()).toEqual([200, 409])
+  inquiry = await approvalResponses.find((response) => response.ok()).json()
+  expect(inquiry.quotes[0].approvalStatus).toBe('approved')
+  expect(inquiry.quotes[0].revision).toBe(2)
 
   const sentResponse = await page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/send`, { headers: editorHeaders, data: {
-    expectedRevision: 1, nextAction: '明天下午回访客户', note: '已通过微信发送报价',
+    expectedRevision: inquiry.quotes[0].revision, nextAction: '明天下午回访客户', note: '已通过微信发送报价',
   } })
   expect(sentResponse.ok()).toBeTruthy()
   inquiry = await sentResponse.json()
@@ -1145,6 +1209,21 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(inquiry.quotes[0].state).toBe('accepted')
   expect(inquiry.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created', 'supplier_offer_added', 'quote_created', 'quote_sent', 'status_changed']))
 
+  const tightenedCreditResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: {
+    expectedVersion: customer.version, creditLimit: 2000, notes: '成交转单前额度复核',
+  } })
+  expect(tightenedCreditResponse.ok()).toBeTruthy()
+  customer = await tightenedCreditResponse.json()
+  const blockedConvertResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(blockedConvertResponse.status()).toBe(409)
+  const blockedConvert = await blockedConvertResponse.json()
+  expect(blockedConvert.error).toBe('ORDER_QUOTE_APPROVAL_REQUIRED')
+  expect(blockedConvert.details.currentRevision).toBeGreaterThan(inquiry.quotes[0].revision)
+  const conversionApprovalResponse = await page.request.post(`/api/v2/business/quotes/${inquiry.quotes[0].id}/approval`, { headers: afterSalesReviewerHeaders, data: {
+    expectedRevision: blockedConvert.details.currentRevision, decision: 'approved', note: '已按最新信用额度复核成交转单',
+  } })
+  expect(conversionApprovalResponse.ok()).toBeTruthy()
+
   const convertResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/convert-order`, { headers: editorHeaders })
   expect(convertResponse.status()).toBe(201)
   const conversion = await convertResponse.json()
@@ -1163,6 +1242,13 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(repeatedConversion.created).toBe(false)
   expect(repeatedConversion.salesOrder.id).toBe(conversion.salesOrder.id)
   expect(repeatedConversion.purchaseOrders.map((order) => order.id)).toEqual(conversion.purchaseOrders.map((order) => order.id))
+
+  customer = await (await page.request.get(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders })).json()
+  const expandedCreditResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: {
+    expectedVersion: customer.version, creditLimit: 20000, notes: '独立审批通过首单后调整测试额度',
+  } })
+  expect(expandedCreditResponse.ok()).toBeTruthy()
+  customer = await expandedCreditResponse.json()
 
   let salesOrder = conversion.salesOrder
   const confirmedSalesResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/transition`, { headers: editorHeaders, data: {

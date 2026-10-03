@@ -23,6 +23,7 @@ import { createBusinessFinanceRepository } from './business-finance-repository.m
 import { createBusinessAfterSalesRepository } from './business-after-sales-repository.mjs'
 import { createBusinessSupplierReturnRepository } from './business-supplier-return-repository.mjs'
 import { createBusinessOperationsRepository } from './business-operations-repository.mjs'
+import { createBusinessControlsRepository } from './business-controls-repository.mjs'
 import { migrationReadiness } from './migration-runner.mjs'
 import { resolveReleaseRevision } from './release-info.mjs'
 
@@ -56,6 +57,7 @@ const app = buildApp({
   businessAfterSalesRepository: createBusinessAfterSalesRepository(pool),
   businessSupplierReturnRepository: createBusinessSupplierReturnRepository(pool),
   businessOperationsRepository: createBusinessOperationsRepository(pool),
+  businessControlsRepository: createBusinessControlsRepository(pool),
   releaseRevision,
   getDatabasePoolStats: () => ({ totalCount: pool.totalCount, idleCount: pool.idleCount, waitingCount: pool.waitingCount }),
   readinessCheck: async () => {

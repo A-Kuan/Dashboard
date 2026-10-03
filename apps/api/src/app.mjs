@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, businessOperationsRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, businessOperationsRepository, businessControlsRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -133,6 +133,18 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       page: request.query?.page,
       pageSize: request.query?.pageSize,
     })
+  })
+  app.get('/api/v2/business/controls', async (request, reply) => {
+    if (!businessControlsRepository) return reply.code(503).send({ error: 'BUSINESS_CONTROLS_UNAVAILABLE', message: '业务控制规则服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessControlsRepository.get()
+  })
+  app.patch('/api/v2/business/controls', async (request, reply) => {
+    if (!businessControlsRepository) return reply.code(503).send({ error: 'BUSINESS_CONTROLS_UNAVAILABLE', message: '业务控制规则服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.policy')
+    if (!actor) return
+    return businessControlsRepository.update(request.body, actor)
   })
   app.post('/api/v2/business/partners', async (request, reply) => {
     if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
@@ -244,6 +256,12 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.quote')
     if (!actor) return
     return businessInquiryRepository.sendQuote(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/quotes/:id/approval', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote.approve')
+    if (!actor) return
+    return businessInquiryRepository.reviewQuoteApproval(request.params.id, request.body, actor)
   })
   app.post('/api/v2/business/inquiries/:id/transition', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })

@@ -100,6 +100,8 @@ SELECT json_build_object(
   'businessSupplierOffer',pg_temp.exact_count('business_supplier_offer'),
   'businessQuote',pg_temp.exact_count('business_quote'),
   'businessQuoteItem',pg_temp.exact_count('business_quote_item'),
+  'businessQuoteApprovalEvent',pg_temp.exact_count('business_quote_approval_event'),
+  'businessControlEvent',pg_temp.exact_count('business_control_event'),
   'businessInquiryEvent',pg_temp.exact_count('business_inquiry_event'),
   'businessPartner',pg_temp.exact_count('business_partner'),
   'businessPartnerContact',pg_temp.exact_count('business_partner_contact'),
