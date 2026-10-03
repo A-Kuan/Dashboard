@@ -941,9 +941,12 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(context.warehouses.map((item) => item.id)).toContain(warehouse.id)
   expect(context.skus[0].inventoryByWarehouse).toEqual([])
 
-  const initialDecisionResponse = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=2&costUnitPrice=600&saleUnitPrice=888`, { headers: editorHeaders })
-  expect(initialDecisionResponse.ok()).toBeTruthy()
-  const initialDecision = await initialDecisionResponse.json()
+  const loadQuoteDecision = async ({ quantity = 1, costUnitPrice, saleUnitPrice }) => {
+    const response = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=${quantity}&costUnitPrice=${costUnitPrice}&saleUnitPrice=${saleUnitPrice}`, { headers: editorHeaders })
+    expect(response.ok()).toBeTruthy()
+    return response.json()
+  }
+  const initialDecision = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 888 })
   expect(initialDecision.fitment.status).toBe('matched')
   expect(initialDecision.fitment.evidence.fitmentId).toBe(selectedFitment.id)
   expect(initialDecision.pricing.marginFloorUnitPrice).toBe(705.89)
@@ -960,11 +963,31 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   } })
   expect(unavailableStockResponse.status()).toBe(409)
   expect((await unavailableStockResponse.json()).error).toBe('QUICK_QUOTE_STOCK_INSUFFICIENT')
+  const missingDecisionResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-missing-decision', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id }],
+  } })
+  expect(missingDecisionResponse.status()).toBe(409)
+  expect((await missingDecisionResponse.json()).error).toBe('QUICK_QUOTE_DECISION_REQUIRED')
+
+  const refreshedCustomerResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: {
+    expectedVersion: customer.version, notes: '报价前刷新客户资料版本',
+  } })
+  expect(refreshedCustomerResponse.ok()).toBeTruthy()
+  const staleDecisionResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-stale-decision', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, decisionFingerprint: initialDecision.decisionFingerprint, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id }],
+  } })
+  expect(staleDecisionResponse.status()).toBe(409)
+  const staleDecision = await staleDecisionResponse.json()
+  expect(staleDecision.error).toBe('QUICK_QUOTE_DECISION_STALE')
+  expect(staleDecision.details.currentFingerprint).not.toBe(initialDecision.decisionFingerprint)
+  const currentDecision = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 888 })
 
   const payload = {
     requestKey: 'quick-quote-e2e-0001', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
     validUntil: '2026-10-31', note: '车型、OE 与 SKU 已复核',
-    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id, leadTimeDays: 2 }],
+    items: [{ catalogSkuId: selectedSku.id, quantity: 2, saleUnitPrice: 888, costUnitPrice: 600, decisionFingerprint: currentDecision.decisionFingerprint, fulfillmentSource: 'purchase', supplierPartnerId: supplier.id, leadTimeDays: 2 }],
   }
   const quickResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: payload })
   expect(quickResponse.status()).toBe(201)
@@ -981,6 +1004,9 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(quick.inquiry.quotes[0].items[0].catalogSkuVersion).toBe(selectedSku.version)
   expect(quick.inquiry.quotes[0].items[0].fulfillmentSource).toBe('purchase')
   expect(quick.inquiry.quotes[0].items[0].supplierOfferId).toBeTruthy()
+  expect(quick.inquiry.quotes[0].items[0].decisionFingerprint).toBe(currentDecision.decisionFingerprint)
+  expect(quick.inquiry.quotes[0].items[0].decisionSnapshot.customer.version).toBeGreaterThan(initialDecision.customer.version)
+  expect(quick.inquiry.quotes[0].items[0].decisionSnapshot.selectedFulfillment.supplierPartnerId).toBe(supplier.id)
 
   const repeatedResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, items: [{ ...payload.items[0], saleUnitPrice: 999 }] } })
   expect(repeatedResponse.status()).toBe(200)
@@ -989,8 +1015,9 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(repeated.quoteId).toBe(quick.quoteId)
   expect(repeated.inquiry.quotes[0].totalAmount).toBe(1776)
 
+  const integrityDecision = await loadQuoteDecision({ quantity: 1, costUnitPrice: 600, saleUnitPrice: 920 })
   const integrityDraftResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
-    ...payload, requestKey: 'quick-quote-integrity-e2e', items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 920 }],
+    ...payload, requestKey: 'quick-quote-integrity-e2e', items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 920, decisionFingerprint: integrityDecision.decisionFingerprint }],
   } })
   expect(integrityDraftResponse.status()).toBe(201)
   let integrityInquiry = (await integrityDraftResponse.json()).inquiry
@@ -1029,7 +1056,8 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(refreshedIntegrityQuote.items[0].supplierOfferId).toBe(integrityQuote.items[0].supplierOfferId)
   expect(refreshedIntegrityQuote.integrityEvents.some((event) => event.action === 'revised' && event.result === 'valid')).toBeTruthy()
 
-  const concurrentPayload = { ...payload, requestKey: 'quick-quote-e2e-0002' }
+  const concurrentDecision = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 888 })
+  const concurrentPayload = { ...payload, requestKey: 'quick-quote-e2e-0002', items: [{ ...payload.items[0], decisionFingerprint: concurrentDecision.decisionFingerprint }] }
   const concurrentResponses = await Promise.all([
     page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: concurrentPayload }),
     page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: concurrentPayload }),
@@ -1045,7 +1073,8 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(concurrentRevisionResponses.map((response) => response.status()).sort()).toEqual([201, 409])
 
   const expiredDate = '2000-01-01'
-  const expiredDraftResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, requestKey: 'quick-quote-expired-e2e', validUntil: expiredDate, items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 900 }] } })
+  const expiredDecision = await loadQuoteDecision({ quantity: 1, costUnitPrice: 600, saleUnitPrice: 900 })
+  const expiredDraftResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, requestKey: 'quick-quote-expired-e2e', validUntil: expiredDate, items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 900, decisionFingerprint: expiredDecision.decisionFingerprint }] } })
   expect(expiredDraftResponse.status()).toBe(201)
   let expiredInquiry = (await expiredDraftResponse.json()).inquiry
   const expiredSendResponse = await page.request.post(`/api/v2/business/quotes/${expiredInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: expiredInquiry.quotes[0].revision } })
@@ -1108,10 +1137,11 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(cancelPaidOrderResponse.status()).toBe(409)
   expect((await cancelPaidOrderResponse.json()).error).toBe('RECEIVABLE_HAS_PAYMENTS')
 
+  const lowMarginDecision = await loadQuoteDecision({ quantity: 1, costUnitPrice: 600, saleUnitPrice: 610 })
   const lowMarginResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
     ...payload,
     requestKey: 'quick-quote-low-margin-e2e',
-    items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 610, costUnitPrice: 600 }],
+    items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 610, costUnitPrice: 600, decisionFingerprint: lowMarginDecision.decisionFingerprint }],
   } })
   expect(lowMarginResponse.status()).toBe(201)
   let lowMarginInquiry = (await lowMarginResponse.json()).inquiry
