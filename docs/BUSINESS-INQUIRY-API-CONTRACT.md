@@ -207,7 +207,32 @@
 }
 ```
 
-只有草稿报价可以发送；版本不一致返回 `409 QUOTE_VERSION_CONFLICT`。发送前会重新计算风险：缺少有效审批时返回 `409 QUOTE_APPROVAL_REQUIRED`，并保留最新风险快照。
+只有当前血缘中的最新草稿版本可以发送；版本不一致返回 `409 QUOTE_VERSION_CONFLICT`。已过 `validUntil` 的草稿会被标记为 `expired` 并返回 `409 QUOTE_EXPIRED`。发送前会重新计算风险：缺少有效审批时返回 `409 QUOTE_APPROVAL_REQUIRED`，并保留最新风险快照。新报价发送成功后，同一询价此前仍为 `sent` 的报价自动进入 `superseded`，避免客户同时确认多个有效报价。
+
+### 修订报价
+
+`POST /api/v2/business/quotes/:id/revisions`
+
+```json
+{
+  "expectedRevision": 3,
+  "reason": "客户要求调整成交价格",
+  "validUntil": "2026-10-08",
+  "discountAmount": 50,
+  "items": [
+    {
+      "sourceQuoteItemId": "quote-item-id",
+      "quantity": 2,
+      "saleUnitPrice": 850,
+      "costUnitPrice": 600
+    }
+  ]
+}
+```
+
+修订不会覆盖原报价，而是生成同一 `lineageId` 下递增的 `versionNo`。原版本进入 `superseded`，新版本回到 `draft` 并重新计算金额、毛利、信用风险与审批要求。`revision` 仍只用于并发控制，`versionNo` 才是客户报价的商业版本。只有血缘中的最新版本可以继续修订或发送；审批不会跨版本继承。
+
+询价详情同时返回 `quoteRevisionEvents`，包含前后快照、修订原因与变更行，供后续界面展示版本对比和审计历史。
 
 ### 审批报价
 
@@ -221,7 +246,7 @@
 }
 ```
 
-审批结论支持 `approved` 和 `rejected`。只有待审批报价可以审核；制单人即使拥有管理员权限也不能审批自己的报价。审批会增加报价版本并写入不可覆盖的审批事件。
+审批结论支持 `approved` 和 `rejected`。只有待审批报价可以审核；制单人即使拥有管理员权限也不能审批自己的报价。审批会增加并发控制号 `revision` 并写入不可覆盖的审批事件，但不会改变客户可见的商业版本号 `versionNo`。
 
 ### 业务状态流转
 
@@ -240,13 +265,13 @@
 
 `new → sourcing → quoting → quoted → follow_up → won/lost`
 
-允许报价后直接成交或丢单，也允许丢单重新进入跟进。无效流转与旧版本写入均返回 `409`。
+允许报价后直接成交或丢单，也允许丢单重新进入跟进。成交或丢单时可传 `quoteId`；服务端只接受当前最新、仍在有效期内且状态为 `sent` 的报价。旧报价返回 `409 QUOTE_NOT_LATEST`，过期报价返回 `409 QUOTE_EXPIRED`。无效流转与旧版本写入均返回 `409`。
 
 ### 成交转订单
 
 `POST /api/v2/business/inquiries/:id/convert-order`
 
-仅允许转换 `won` 状态且存在已接受报价的询价。转单前会再次核对毛利、信用额度与未结应收；风险指纹变化时返回 `409 ORDER_QUOTE_APPROVAL_REQUIRED`，需要按最新快照重新审批。每项报价必须关联供应商报价，服务端在同一事务中完成：
+仅允许转换 `won` 状态且存在已接受报价的询价。已接受报价必须仍是血缘最新版本且未过有效期，否则拒绝转单。转单前会再次核对毛利、信用额度与未结应收；风险指纹变化时返回 `409 ORDER_QUOTE_APPROVAL_REQUIRED`，需要按最新快照重新审批。每项报价必须关联供应商报价，服务端在同一事务中完成：
 
 1. 生成一张销售订单及销售明细；
 2. 按供应商拆分一张或多张采购订单；

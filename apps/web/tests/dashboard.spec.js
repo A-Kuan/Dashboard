@@ -984,6 +984,23 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(concurrentResponses.map((response) => response.status()).sort()).toEqual([200, 201])
   const concurrentResults = await Promise.all(concurrentResponses.map((response) => response.json()))
   expect(new Set(concurrentResults.map((result) => result.quoteId)).size).toBe(1)
+  const concurrentSource = concurrentResults[0].inquiry.quotes[0]
+  const concurrentRevisionResponses = await Promise.all([
+    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求甲', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 980 }] } }),
+    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求乙', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 970 }] } }),
+  ])
+  expect(concurrentRevisionResponses.map((response) => response.status()).sort()).toEqual([201, 409])
+
+  const expiredDate = '2000-01-01'
+  const expiredDraftResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: { ...payload, requestKey: 'quick-quote-expired-e2e', validUntil: expiredDate, items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 900 }] } })
+  expect(expiredDraftResponse.status()).toBe(201)
+  let expiredInquiry = (await expiredDraftResponse.json()).inquiry
+  const expiredSendResponse = await page.request.post(`/api/v2/business/quotes/${expiredInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: expiredInquiry.quotes[0].revision } })
+  expect(expiredSendResponse.status()).toBe(409)
+  expect((await expiredSendResponse.json()).error).toBe('QUOTE_EXPIRED')
+  expiredInquiry = await (await page.request.get(`/api/v2/business/inquiries/${expiredInquiry.id}`, { headers: editorHeaders })).json()
+  expect(expiredInquiry.quotes[0].state).toBe('expired')
+  expect(expiredInquiry.quoteRevisionEvents.some((event) => event.action === 'expired')).toBeTruthy()
 
   let orderInquiry = quick.inquiry
   const sentResponse = await page.request.post(`/api/v2/business/quotes/${orderInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: {
@@ -1049,6 +1066,49 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   lowMarginInquiry = await lowMarginApproved.json()
   const lowMarginSent = await page.request.post(`/api/v2/business/quotes/${lowMarginInquiry.quotes[0].id}/send`, { headers: editorHeaders, data: { expectedRevision: lowMarginInquiry.quotes[0].revision } })
   expect(lowMarginSent.ok()).toBeTruthy()
+  lowMarginInquiry = await lowMarginSent.json()
+  const originalQuote = lowMarginInquiry.quotes[0]
+  expect(originalQuote.versionNo).toBe(1)
+  const nearExpiry = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)
+  const revisionResponse = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/revisions`, { headers: editorHeaders, data: {
+    expectedRevision: originalQuote.revision, reason: '客户要求调整成交价格', validUntil: nearExpiry,
+    items: [{ sourceQuoteItemId: originalQuote.items[0].id, quantity: 1, saleUnitPrice: 650, costUnitPrice: 600 }],
+  } })
+  expect(revisionResponse.status()).toBe(201)
+  lowMarginInquiry = await revisionResponse.json()
+  const revisedQuote = lowMarginInquiry.quotes.find((quote) => quote.versionNo === 2)
+  const supersededQuote = lowMarginInquiry.quotes.find((quote) => quote.versionNo === 1)
+  expect(revisedQuote.lineageId).toBe(originalQuote.lineageId)
+  expect(revisedQuote.predecessorQuoteId).toBe(originalQuote.id)
+  expect(revisedQuote.approvalStatus).toBe('pending')
+  expect(revisedQuote.approvedById).toBe('')
+  expect(revisedQuote.totalAmount).toBe(650)
+  expect(supersededQuote.state).toBe('superseded')
+  expect(supersededQuote.supersededByQuoteId).toBe(revisedQuote.id)
+  expect(lowMarginInquiry.quoteRevisionEvents.some((event) => event.action === 'revised' && event.fromQuoteId === originalQuote.id && event.toQuoteId === revisedQuote.id && event.changeSet.changedLines.includes(1))).toBeTruthy()
+
+  const staleSend = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/send`, { headers: editorHeaders, data: { expectedRevision: originalQuote.revision } })
+  expect(staleSend.status()).toBe(409)
+  expect((await staleSend.json()).error).toBe('QUOTE_STATE_CONFLICT')
+  const revisedApproval = await page.request.post(`/api/v2/business/quotes/${revisedQuote.id}/approval`, { headers: reviewerHeaders, data: { expectedRevision: revisedQuote.revision, decision: 'approved', note: '已按修订价格重新复核毛利' } })
+  expect(revisedApproval.ok()).toBeTruthy()
+  lowMarginInquiry = await revisedApproval.json()
+  const approvedRevision = lowMarginInquiry.quotes.find((quote) => quote.id === revisedQuote.id)
+  const revisedSend = await page.request.post(`/api/v2/business/quotes/${revisedQuote.id}/send`, { headers: editorHeaders, data: { expectedRevision: approvedRevision.revision } })
+  expect(revisedSend.ok()).toBeTruthy()
+  lowMarginInquiry = await revisedSend.json()
+  const expiryQueueResponse = await page.request.get('/api/v2/business/operations-center?kind=quote_expiry&pageSize=100', { headers: editorHeaders })
+  expect(expiryQueueResponse.ok()).toBeTruthy()
+  const expiryQueue = await expiryQueueResponse.json()
+  expect(expiryQueue.items.some((item) => item.sourceId === revisedQuote.id && item.details.versionNo === 2)).toBeTruthy()
+
+  const oldDecision = await page.request.post(`/api/v2/business/inquiries/${lowMarginInquiry.id}/transition`, { headers: editorHeaders, data: { expectedVersion: lowMarginInquiry.version, status: 'won', quoteId: originalQuote.id, note: '不应接受旧报价' } })
+  expect(oldDecision.status()).toBe(409)
+  expect((await oldDecision.json()).error).toBe('QUOTE_NOT_LATEST')
+  const latestDecision = await page.request.post(`/api/v2/business/inquiries/${lowMarginInquiry.id}/transition`, { headers: editorHeaders, data: { expectedVersion: lowMarginInquiry.version, status: 'won', quoteId: revisedQuote.id, note: '客户接受最新修订报价' } })
+  expect(latestDecision.ok()).toBeTruthy()
+  lowMarginInquiry = await latestDecision.json()
+  expect(lowMarginInquiry.quotes.find((quote) => quote.id === revisedQuote.id).state).toBe('accepted')
 
   const controlsResponse = await page.request.get('/api/v2/business/controls', { headers: editorHeaders })
   expect(controlsResponse.ok()).toBeTruthy()

@@ -1,6 +1,7 @@
 const workItemKinds = new Set([
   'inquiry_follow_up',
   'quote_approval',
+  'quote_expiry',
   'sales_order',
   'purchase_order',
   'receivable',
@@ -125,7 +126,35 @@ const workItemsCte = `WITH work_items AS (
     -10
   FROM business_quote q
   JOIN business_inquiry i ON i.id=q.inquiry_id
-  WHERE q.approval_status='pending'
+  WHERE q.state IN ('draft','accepted') AND q.approval_status='pending'
+
+  UNION ALL
+
+  SELECT
+    'quote-expiry:'||q.id,
+    'quote_expiry',
+    'quote',
+    q.id,
+    q.quote_no,
+    q.state,
+    '报价到期跟进：'||i.customer_name,
+    i.customer_name,
+    i.customer_partner_id,
+    NULL::text,
+    i.assigned_to,
+    CASE WHEN q.valid_until<($1::timestamptz AT TIME ZONE 'Asia/Shanghai')::date THEN '报价已到期，创建修订版本后重新发送' ELSE '报价即将到期，确认客户决定或修订报价' END,
+    'business.quote',
+    '/business/inquiries/'||i.id,
+    ((q.valid_until+time '23:59:59') AT TIME ZONE 'Asia/Shanghai'),
+    q.total_amount,
+    q.currency,
+    jsonb_build_object('inquiryId',i.id,'inquiryNo',i.inquiry_no,'lineageId',q.lineage_id,'versionNo',q.version_no,'validUntil',q.valid_until),
+    q.updated_at,
+    0
+  FROM business_quote q
+  JOIN business_inquiry i ON i.id=q.inquiry_id
+  WHERE q.state='sent' AND q.valid_until IS NOT NULL
+    AND q.valid_until<=(($1::timestamptz AT TIME ZONE 'Asia/Shanghai')::date+3)
 
   UNION ALL
 
