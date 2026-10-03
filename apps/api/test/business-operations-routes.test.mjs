@@ -45,3 +45,51 @@ test('operations center validates work item filters before querying the database
   await assert.rejects(() => repository.listWorkItems({ urgency: 'whenever' }), (error) => error.errorCode === 'INVALID_WORK_ITEM_URGENCY')
   await assert.rejects(() => repository.listWorkItems({ now: 'not-a-date' }), (error) => error.errorCode === 'INVALID_WORK_ITEM_AS_OF')
 })
+
+test('operations center combines open master-data risks with the existing work queue', async () => {
+  const pool = {
+    query: async (sql) => {
+      if (sql.includes('SELECT * FROM classified')) return { rows: [{
+        id: 'inquiry:1', kind: 'inquiry_follow_up', source_type: 'inquiry', source_id: '1', source_no: 'INQ-1', status: 'new',
+        title: '跟进询价：现有客户', counterpart_name: '现有客户', customer_partner_id: 'customer-1', supplier_partner_id: null,
+        assigned_to: '业务员甲', next_action: '核对需求', action_capability: 'business.manage', route_path: '/business/inquiries/1',
+        due_at: '2026-10-03T15:59:59.999Z', urgency: 'today', overdue_days: 0, amount: 100, currency: 'CNY', details: {},
+        updated_at: '2026-10-03T07:00:00.000Z', priority_rank: 120,
+      }] }
+      return { rows: [{ kind: 'inquiry_follow_up', urgency: 'today', currency: 'CNY', count: 1, amount: 100 }] }
+    },
+  }
+  const issue = {
+    issueKey: 'vehicle_duplicate:vehicle-1:vehicle-2', kind: 'vehicle_duplicate', status: 'open', severity: 'high', score: 85,
+    title: '疑似重复车辆：卡宴 / 卡宴', explanation: '车牌一致', signals: [{ code: 'same_license_plate', label: '车牌一致' }], sameOwner: true,
+    fingerprint: 'a'.repeat(64), recommendedAction: 'vehicle_merge_preview', previewRequest: { survivorVehicleId: 'vehicle-1', retiredVehicleId: 'vehicle-2' },
+    candidateA: { id: 'vehicle-1', partnerId: 'customer-1', customerName: '虎山行客户', vehicleLabel: '卡宴', licensePlate: '浙A12345', updatedAt: '2026-10-03T08:00:00.000Z' },
+    candidateB: { id: 'vehicle-2', partnerId: 'customer-1', customerName: '虎山行客户', vehicleLabel: '卡宴', licensePlate: '浙A12345', updatedAt: '2026-10-03T09:00:00.000Z' },
+  }
+  const qualityCalls = []
+  const repository = createBusinessOperationsRepository(pool, { masterDataQualityRepository: {
+    listOpenForOperations: async (input) => { qualityCalls.push(input); return [issue] },
+  } })
+  const result = await repository.listWorkItems({ now: '2026-10-03T06:00:00.000Z', pageSize: 10 })
+  assert.equal(result.total, 2)
+  assert.equal(result.items[0].kind, 'vehicle_duplicate')
+  assert.equal(result.items[0].actionCapability, 'business.data_quality.review')
+  assert.equal(result.items[0].details.fingerprint, 'a'.repeat(64))
+  assert.equal(result.items[0].details.previewRequest.survivorVehicleId, 'vehicle-1')
+  assert.equal('sortRank' in result.items[0], false)
+  assert.equal(result.summary.byKind.vehicle_duplicate.count, 1)
+  assert.equal(result.summary.byKind.inquiry_follow_up.count, 1)
+  assert.equal(result.summary.byUrgency.today, 2)
+  assert.deepEqual(qualityCalls, [{ kind: '', query: '' }])
+})
+
+test('operations center can filter directly to one master-data quality kind', async () => {
+  const calls = []
+  const repository = createBusinessOperationsRepository({ query: async () => { throw new Error('operational query should be skipped') } }, {
+    masterDataQualityRepository: { listOpenForOperations: async (input) => { calls.push(input); return [] } },
+  })
+  const result = await repository.listWorkItems({ kind: 'customer_duplicate', query: '虎山行', pageSize: 20, now: '2026-10-03T06:00:00.000Z' })
+  assert.equal(result.total, 0)
+  assert.deepEqual(result.items, [])
+  assert.deepEqual(calls, [{ kind: 'customer_duplicate', query: '虎山行' }])
+})

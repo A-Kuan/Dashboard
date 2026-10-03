@@ -35,6 +35,7 @@ const catalogImportMappingRepository = createCatalogImportMappingRepository(pool
 const catalogDictionaryGovernanceRepository = createCatalogDictionaryGovernanceRepository(pool)
 const catalogPlatformRepository = createCatalogPlatformRepository(pool)
 const catalogEpcIntakeRepository = createCatalogEpcIntakeRepository(pool)
+const businessMasterDataQualityRepository = createBusinessMasterDataQualityRepository(pool)
 const app = buildApp({
   repository: createSkuRepository(pool),
   vehicleRepository: createVehicleRepository(pool),
@@ -57,8 +58,8 @@ const app = buildApp({
   businessFinanceRepository: createBusinessFinanceRepository(pool),
   businessAfterSalesRepository: createBusinessAfterSalesRepository(pool),
   businessSupplierReturnRepository: createBusinessSupplierReturnRepository(pool),
-  businessOperationsRepository: createBusinessOperationsRepository(pool),
-  businessMasterDataQualityRepository: createBusinessMasterDataQualityRepository(pool),
+  businessOperationsRepository: createBusinessOperationsRepository(pool, { masterDataQualityRepository: businessMasterDataQualityRepository }),
+  businessMasterDataQualityRepository,
   businessControlsRepository: createBusinessControlsRepository(pool),
   releaseRevision,
   getDatabasePoolStats: () => ({ totalCount: pool.totalCount, idleCount: pool.idleCount, waitingCount: pool.waitingCount }),

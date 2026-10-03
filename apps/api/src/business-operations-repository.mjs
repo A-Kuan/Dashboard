@@ -14,7 +14,10 @@ const workItemKinds = new Set([
   'supplier_return_review',
   'supplier_return_shipment',
   'supplier_refund',
+  'customer_duplicate',
+  'vehicle_duplicate',
 ])
+const masterDataQualityKinds = new Set(['customer_duplicate', 'vehicle_duplicate'])
 const urgencyLevels = new Set(['overdue', 'today', 'upcoming', 'normal', 'unscheduled'])
 
 function clean(value) { return String(value ?? '').trim() }
@@ -46,7 +49,74 @@ function mapWorkItem(row) {
     currency: row.currency,
     details: row.details || {},
     updatedAt: row.updated_at,
+    sortRank: number(row.priority_rank),
   }
+}
+
+function shanghaiDayEnd(asOf, offsetDays = 0) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(asOf).filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]))
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day + offsetDays, 15, 59, 59, 999))
+}
+
+function qualityWorkItem(issue, asOf) {
+  const highRisk = issue.severity === 'high'
+  const dueAt = shanghaiDayEnd(asOf, highRisk ? 0 : 3)
+  const candidateUpdatedAt = [issue.candidateA?.updatedAt, issue.candidateB?.updatedAt].filter(Boolean).sort().at(-1) || asOf.toISOString()
+  const customerDuplicate = issue.kind === 'customer_duplicate'
+  const counterpartName = customerDuplicate
+    ? [issue.candidateA?.name, issue.candidateB?.name].filter(Boolean).join(' / ')
+    : [issue.candidateA?.customerName, issue.candidateB?.customerName].filter(Boolean).join(' / ')
+  const sourceNo = customerDuplicate
+    ? [issue.candidateA?.partnerNo, issue.candidateB?.partnerNo].filter(Boolean).join(' / ')
+    : [issue.candidateA?.licensePlate || issue.candidateA?.vin, issue.candidateB?.licensePlate || issue.candidateB?.vin].filter(Boolean).join(' / ')
+  return {
+    id: `master-data-quality:${issue.issueKey}`,
+    kind: issue.kind,
+    sourceType: 'master_data_quality',
+    sourceId: issue.issueKey,
+    sourceNo,
+    status: issue.status,
+    title: issue.title,
+    counterpartName,
+    customerPartnerId: customerDuplicate ? issue.previewRequest?.survivorPartnerId || '' : issue.sameOwner ? issue.candidateA?.partnerId || '' : '',
+    supplierPartnerId: null,
+    assignedTo: '',
+    nextAction: highRisk ? '优先核对重复证据并进入安全合并预览' : '核对客户或车辆身份，确认合并或标记并非重复',
+    actionCapability: 'business.data_quality.review',
+    routePath: `/business/master-data-quality?issueKey=${encodeURIComponent(issue.issueKey)}`,
+    dueAt: dueAt.toISOString(),
+    urgency: highRisk ? 'today' : 'upcoming',
+    overdueDays: 0,
+    amount: 0,
+    currency: 'CNY',
+    details: {
+      severity: issue.severity,
+      score: issue.score,
+      explanation: issue.explanation,
+      signals: issue.signals,
+      fingerprint: issue.fingerprint,
+      recommendedAction: issue.recommendedAction,
+      previewRequest: issue.previewRequest,
+      candidateA: issue.candidateA,
+      candidateB: issue.candidateB,
+    },
+    updatedAt: candidateUpdatedAt,
+    sortRank: highRisk ? 93 : 215,
+  }
+}
+
+function compareWorkItems(a, b) {
+  return a.sortRank - b.sortRank
+    || String(a.dueAt || '9999').localeCompare(String(b.dueAt || '9999'))
+    || String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''))
+    || a.id.localeCompare(b.id)
+}
+
+function publicWorkItem(item) {
+  const { sortRank, ...result } = item
+  return result
 }
 
 function emptyExposure() {
@@ -434,7 +504,7 @@ const workItemsCte = `WITH work_items AS (
   FROM work_items
 )`
 
-export function createBusinessOperationsRepository(pool) {
+export function createBusinessOperationsRepository(pool, { masterDataQualityRepository } = {}) {
   return {
     async listWorkItems({ query = '', kind = '', urgency = '', assignedTo = '', page = 1, pageSize = 30, now = new Date() } = {}) {
       const workKind = clean(kind)
@@ -445,6 +515,8 @@ export function createBusinessOperationsRepository(pool) {
       if (Number.isNaN(asOf.getTime())) throw problem('INVALID_WORK_ITEM_AS_OF', '业务跟进统计时间无效')
       const currentPage = Math.max(1, Math.trunc(Number(page) || 1))
       const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 30)))
+      const offset = (currentPage - 1) * size
+      const boundary = currentPage * size
       const values = [asOf.toISOString()]
       const where = []
       const term = clean(query)
@@ -457,17 +529,21 @@ export function createBusinessOperationsRepository(pool) {
       if (clean(assignedTo)) { values.push(clean(assignedTo)); where.push(`assigned_to=$${values.length}`) }
       const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
       const summaryValues = [...values]
-      values.push(size, (currentPage - 1) * size)
-      const [itemsResult, summaryResult] = await Promise.all([
-        pool.query(`${workItemsCte}
+      const qualityKind = masterDataQualityKinds.has(workKind)
+      const includeQuality = Boolean(masterDataQualityRepository?.listOpenForOperations) && !clean(assignedTo) && (!workKind || qualityKind)
+      const includeOperational = !qualityKind
+      const itemQueryValues = [...values, boundary]
+      const [itemsResult, summaryResult, qualityIssues] = await Promise.all([
+        includeOperational ? pool.query(`${workItemsCte}
           SELECT * FROM classified ${clause}
           ORDER BY priority_rank,due_at NULLS LAST,updated_at,id
-          LIMIT $${values.length - 1} OFFSET $${values.length}`, values),
-        pool.query(`${workItemsCte}
+          LIMIT $${itemQueryValues.length}`, itemQueryValues) : { rows: [] },
+        includeOperational ? pool.query(`${workItemsCte}
           SELECT kind,urgency,currency,count(*)::int count,COALESCE(sum(amount),0)::numeric amount
           FROM classified ${clause}
           GROUP BY kind,urgency,currency
-          ORDER BY kind,urgency,currency`, summaryValues),
+          ORDER BY kind,urgency,currency`, summaryValues) : { rows: [] },
+        includeQuality ? masterDataQualityRepository.listOpenForOperations({ kind: qualityKind ? workKind : '', query: term }) : [],
       ])
       const byKind = {}
       const byUrgency = Object.fromEntries([...urgencyLevels].map((value) => [value, 0]))
@@ -487,9 +563,24 @@ export function createBusinessOperationsRepository(pool) {
         if (row.kind === 'customer_refund') addCurrencyAmount(exposure.customerRefund, row.currency, amount)
         if (row.kind === 'supplier_refund') addCurrencyAmount(exposure.supplierRefund, row.currency, amount)
       }
+      const qualityItems = qualityIssues
+        .map((issue) => qualityWorkItem(issue, asOf))
+        .filter((item) => !urgencyLevel || item.urgency === urgencyLevel)
+      for (const item of qualityItems) {
+        total += 1
+        byUrgency[item.urgency] = number(byUrgency[item.urgency]) + 1
+        const current = byKind[item.kind] || { count: 0, amountByCurrency: {} }
+        current.count += 1
+        addCurrencyAmount(current.amountByCurrency, item.currency, 0)
+        byKind[item.kind] = current
+      }
+      const items = [...itemsResult.rows.map(mapWorkItem), ...qualityItems]
+        .sort(compareWorkItems)
+        .slice(offset, boundary)
+        .map(publicWorkItem)
       return {
         asOf: asOf.toISOString(),
-        items: itemsResult.rows.map(mapWorkItem),
+        items,
         total,
         page: currentPage,
         pageSize: size,
@@ -499,4 +590,4 @@ export function createBusinessOperationsRepository(pool) {
   }
 }
 
-export { urgencyLevels, workItemKinds }
+export { masterDataQualityKinds, urgencyLevels, workItemKinds }
