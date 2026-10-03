@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
 const receivableStatuses = new Set(['open', 'partial', 'paid', 'refund_pending', 'void'])
+const payableStatuses = new Set(['open', 'partial', 'paid', 'void'])
 const paymentMethods = new Set(['bank_transfer', 'cash', 'wechat', 'alipay', 'card', 'other'])
 
 function clean(value) { return String(value ?? '').trim() }
@@ -56,11 +57,33 @@ function mapPayment(row) {
 function mapEvent(row) {
   return { id: row.id, action: row.action, fromStatus: row.from_status, toStatus: row.to_status, actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, createdAt: row.created_at }
 }
+function mapPayable(row) {
+  const originalAmount = number(row.original_amount); const paidAmount = number(row.paid_amount)
+  return {
+    id: row.id, payableNo: row.payable_no, purchaseOrderId: row.purchase_order_id, purchaseOrderNo: row.purchase_order_no,
+    purchaseOrderStatus: row.purchase_order_status, salesOrderId: row.sales_order_id, salesOrderNo: row.sales_order_no,
+    supplierPartnerId: row.supplier_partner_id, supplierName: row.supplier_name, status: row.status, currency: row.currency,
+    originalAmount, paidAmount, outstandingAmount: Math.max(0, Math.round((originalAmount - paidAmount) * 100) / 100),
+    paymentTermsDays: row.payment_terms_days, dueAt: row.due_at,
+    overdue: ['open', 'partial'].includes(row.status) && String(row.due_at) < new Date().toISOString().slice(0, 10),
+    version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
+    updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
+  }
+}
+function mapSupplierPayment(row) {
+  return { id: row.id, paymentNo: row.payment_no, requestKey: row.source_request_id, payableId: row.payable_id, amount: number(row.amount), paymentMethod: row.payment_method, paidAt: row.paid_at, referenceNo: row.reference_no, note: row.note, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
+}
 async function insertEvent(client, receivableId, action, actor, { fromStatus = '', toStatus = '', note = '', snapshot = {} } = {}) {
   const by = actorDetails(actor)
   await client.query(`INSERT INTO business_receivable_event
     (id,receivable_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), receivableId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
+}
+async function insertPayableEvent(client, payableId, action, actor, { fromStatus = '', toStatus = '', note = '', snapshot = {} } = {}) {
+  const by = actorDetails(actor)
+  await client.query(`INSERT INTO business_payable_event
+    (id,payable_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), payableId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
 }
 
 export function createBusinessFinanceRepository(pool) {
@@ -76,8 +99,21 @@ export function createBusinessFinanceRepository(pool) {
     return { ...mapReceivable(row), payments: payments.rows.map(mapPayment), events: events.rows.map(mapEvent) }
   }
 
+  async function getPayable(id, client = pool) {
+    const row = (await client.query(`SELECT a.*,p.order_no purchase_order_no,p.status purchase_order_status,s.order_no sales_order_no
+      FROM business_payable a JOIN business_purchase_order p ON p.id=a.purchase_order_id JOIN business_sales_order s ON s.id=a.sales_order_id
+      WHERE a.id=$1 OR a.payable_no=upper(trim($1)) OR p.id=$1 OR p.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
+    if (!row) return null
+    const [payments, events] = await Promise.all([
+      client.query('SELECT * FROM business_supplier_payment WHERE payable_id=$1 ORDER BY paid_at DESC,id DESC', [row.id]),
+      client.query('SELECT * FROM business_payable_event WHERE payable_id=$1 ORDER BY created_at DESC,id DESC', [row.id]),
+    ])
+    return { ...mapPayable(row), payments: payments.rows.map(mapSupplierPayment), events: events.rows.map(mapEvent) }
+  }
+
   return {
     getReceivable,
+    getPayable,
 
     async listReceivables({ query = '', status = '', customerPartnerId = '', page = 1, pageSize = 30 } = {}) {
       const q = clean(query); const state = clean(status); const currentPage = Math.max(1, Math.trunc(Number(page) || 1)); const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 30)))
@@ -136,6 +172,53 @@ export function createBusinessFinanceRepository(pool) {
       })
       const receivable = await getReceivable(result.receivableId)
       return { created: result.created, payment: receivable.payments.find((item) => item.id === result.paymentId), receivable }
+    },
+
+    async listPayables({ query = '', status = '', supplierPartnerId = '', page = 1, pageSize = 30 } = {}) {
+      const q = clean(query); const state = clean(status); const currentPage = Math.max(1, Math.trunc(Number(page) || 1)); const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 30)))
+      if (state && !payableStatuses.has(state)) throw problem('INVALID_PAYABLE_STATUS', '应付状态无效')
+      const where = []; const values = []
+      if (q) { values.push(`%${q}%`); where.push(`(a.payable_no ILIKE $${values.length} OR p.order_no ILIKE $${values.length} OR s.order_no ILIKE $${values.length} OR a.supplier_name ILIKE $${values.length})`) }
+      if (state) { values.push(state); where.push(`a.status=$${values.length}`) }
+      if (clean(supplierPartnerId)) { values.push(clean(supplierPartnerId)); where.push(`a.supplier_partner_id=$${values.length}`) }
+      const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+      const total = number((await pool.query(`SELECT count(*) FROM business_payable a JOIN business_purchase_order p ON p.id=a.purchase_order_id JOIN business_sales_order s ON s.id=a.sales_order_id ${clause}`, values)).rows[0].count)
+      values.push(size, (currentPage - 1) * size)
+      const rows = (await pool.query(`SELECT a.*,p.order_no purchase_order_no,p.status purchase_order_status,s.order_no sales_order_no
+        FROM business_payable a JOIN business_purchase_order p ON p.id=a.purchase_order_id JOIN business_sales_order s ON s.id=a.sales_order_id ${clause}
+        ORDER BY CASE WHEN a.status IN ('open','partial') AND a.due_at<current_date THEN 0 WHEN a.status IN ('open','partial') THEN 1 ELSE 2 END,a.due_at,a.updated_at DESC
+        LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
+      const summaryRows = (await pool.query(`SELECT status,count(*)::int count,COALESCE(sum(original_amount),0) original_amount,COALESCE(sum(paid_amount),0) paid_amount,COALESCE(sum(original_amount-paid_amount),0) outstanding_amount FROM business_payable GROUP BY status`)).rows
+      const overdue = (await pool.query("SELECT count(*)::int count,COALESCE(sum(original_amount-paid_amount),0) amount FROM business_payable WHERE status IN ('open','partial') AND due_at<current_date")).rows[0]
+      return { items: rows.map(mapPayable), total, page: currentPage, pageSize: size, summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), originalAmount: number(item.original_amount), paidAmount: number(item.paid_amount), outstandingAmount: number(item.outstanding_amount) }])), overdue: { count: number(overdue.count), amount: number(overdue.amount) } }
+    },
+
+    async recordSupplierPayment(id, rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey); const amount = paymentAmount(rawInput.amount); const method = clean(rawInput.paymentMethod)
+      if (!paymentMethods.has(method)) throw problem('INVALID_PAYMENT_METHOD', '付款方式无效')
+      const paidAt = paymentDate(rawInput.paidAt); const by = actorDetails(actor)
+      const result = await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-supplier-payment:${key}`])
+        const existing = (await client.query('SELECT id,payable_id FROM business_supplier_payment WHERE source_request_id=$1', [key])).rows[0]
+        if (existing) return { paymentId: existing.id, payableId: existing.payable_id, created: false }
+        const payable = (await client.query(`SELECT a.*,p.status purchase_order_status FROM business_payable a JOIN business_purchase_order p ON p.id=a.purchase_order_id
+          WHERE a.id=$1 OR a.payable_no=upper(trim($1)) OR p.id=$1 OR p.order_no=upper(trim($1)) LIMIT 1 FOR UPDATE OF a`, [id])).rows[0]
+        if (!payable) throw problem('PAYABLE_NOT_FOUND', '应付单不存在', 404)
+        if (payable.status === 'void' || payable.purchase_order_status === 'cancelled') throw problem('PAYABLE_VOID', '已作废应付单不能付款', 409)
+        if (!['confirmed', 'partially_received', 'received'].includes(payable.purchase_order_status)) throw problem('PURCHASE_ORDER_NOT_PAYABLE', '采购单确认后才能登记付款', 409)
+        const outstanding = Math.round((number(payable.original_amount) - number(payable.paid_amount)) * 100) / 100
+        if (amount > outstanding) throw problem('SUPPLIER_PAYMENT_EXCEEDS_OUTSTANDING', '付款金额不能超过未付金额', 409, { outstandingAmount: outstanding })
+        const paidAmount = Math.round((number(payable.paid_amount) + amount) * 100) / 100; const nextStatus = paidAmount === number(payable.original_amount) ? 'paid' : 'partial'
+        const paymentId = randomUUID(); const paymentNo = generatedNumber('SPAY')
+        await client.query(`INSERT INTO business_supplier_payment
+          (id,payment_no,source_request_id,payable_id,amount,payment_method,paid_at,reference_no,note,created_by_id,created_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [paymentId, paymentNo, key, payable.id, amount, method, paidAt, clean(rawInput.referenceNo), clean(rawInput.note), by.id, by.name])
+        await client.query('UPDATE business_payable SET paid_amount=$2,status=$3,version=version+1,updated_by_id=$4,updated_by_name=$5,updated_at=now() WHERE id=$1', [payable.id, paidAmount, nextStatus, by.id, by.name])
+        await insertPayableEvent(client, payable.id, 'supplier_payment_recorded', actor, { fromStatus: payable.status, toStatus: nextStatus, note: rawInput.note, snapshot: { paymentId, paymentNo, amount, paymentMethod: method, paidAt, paidAmount, outstandingAmount: Math.round((number(payable.original_amount) - paidAmount) * 100) / 100 } })
+        return { paymentId, payableId: payable.id, created: true }
+      })
+      const payable = await getPayable(result.payableId)
+      return { created: result.created, payment: payable.payments.find((item) => item.id === result.paymentId), payable }
     },
   }
 }

@@ -130,7 +130,10 @@ SELECT json_build_object(
   'businessReturnReceipt',pg_temp.exact_count('business_return_receipt'),
   'businessReturnReceiptItem',pg_temp.exact_count('business_return_receipt_item'),
   'businessRefund',pg_temp.exact_count('business_refund'),
-  'businessAfterSalesEvent',pg_temp.exact_count('business_after_sales_event')
+  'businessAfterSalesEvent',pg_temp.exact_count('business_after_sales_event'),
+  'businessPayable',pg_temp.exact_count('business_payable'),
+  'businessSupplierPayment',pg_temp.exact_count('business_supplier_payment'),
+  'businessPayableEvent',pg_temp.exact_count('business_payable_event')
 )::text;
 SQL
 REMOTE
