@@ -281,8 +281,6 @@ export function createBusinessInventoryRepository(pool) {
       const sales = (await client.query('SELECT * FROM business_sales_order WHERE id=$1 OR order_no=upper(trim($1)) FOR UPDATE', [salesOrderId])).rows[0]
       if (!sales) throw problem('SALES_ORDER_NOT_FOUND', '销售订单不存在', 404)
       if (!['confirmed', 'fulfilling'].includes(sales.status)) throw problem('SALES_ORDER_NOT_RESERVABLE', '只有已确认或履约中的销售订单可以预留库存', 409)
-      const existing = (await client.query("SELECT id FROM business_stock_reservation WHERE sales_order_id=$1 AND status='active'", [sales.id])).rows[0]
-      if (existing) return { id: existing.id, created: false }
       const warehouse = (await client.query('SELECT * FROM business_warehouse WHERE id=$1 FOR UPDATE', [clean(rawInput.warehouseId)])).rows[0]
       if (!warehouse || warehouse.status !== 'active') throw problem('WAREHOUSE_UNAVAILABLE', '预留仓库不存在或已停用', 409)
       const salesItems = (await client.query(`SELECT soi.*,
@@ -300,11 +298,20 @@ export function createBusinessInventoryRepository(pool) {
         if (requestedQuantity > remaining) throw problem('RESERVATION_EXCEEDS_ORDER_QUANTITY', `第 ${item.line_no} 项预留数量超过未出库数量`, 409)
         normalized.push({ item, requestedQuantity, stockKey: stockKey(item) })
       }
-      const reservationId = randomUUID(); const reservationNo = generatedNumber('RSV'); const by = actorDetails(actor)
-      await client.query(`INSERT INTO business_stock_reservation
+      const existing = (await client.query("SELECT * FROM business_stock_reservation WHERE sales_order_id=$1 AND warehouse_id=$2 AND status='active' FOR UPDATE", [sales.id, warehouse.id])).rows[0]
+      const existingItems = existing ? (await client.query('SELECT * FROM business_stock_reservation_item WHERE reservation_id=$1 FOR UPDATE', [existing.id])).rows : []
+      const pending = []
+      for (const entry of normalized) {
+        const current = existingItems.find((item) => item.sales_order_item_id === entry.item.id)
+        if (!current) pending.push(entry)
+        else if (number(current.requested_quantity) !== entry.requestedQuantity) throw problem('RESERVATION_ITEM_ALREADY_EXISTS', `第 ${entry.item.line_no} 项已按其他数量锁定，请先释放原预留`, 409, { salesOrderItemId: entry.item.id, reservedRequestQuantity: number(current.requested_quantity) })
+      }
+      if (existing && !pending.length) return { id: existing.id, created: false, extended: false }
+      const reservationId = existing?.id || randomUUID(); const reservationNo = existing?.reservation_no || generatedNumber('RSV'); const by = actorDetails(actor)
+      if (!existing) await client.query(`INSERT INTO business_stock_reservation
         (id,reservation_no,sales_order_id,warehouse_id,note,created_by_id,created_by_name,updated_by_id,updated_by_name)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7)`, [reservationId, reservationNo, sales.id, warehouse.id, clean(rawInput.note), by.id, by.name])
-      for (const entry of normalized) {
+      for (const entry of pending) {
         const balance = (await client.query('SELECT * FROM business_inventory_balance WHERE warehouse_id=$1 AND stock_key=$2 FOR UPDATE', [warehouse.id, entry.stockKey])).rows[0]
         const available = balance ? roundQuantity(number(balance.on_hand_quantity) - number(balance.reserved_quantity)) : 0
         if (!rawInput.allowPartial && available < entry.requestedQuantity) throw problem('INSUFFICIENT_AVAILABLE_STOCK', `第 ${entry.item.line_no} 项可用库存不足`, 409, { salesOrderItemId: entry.item.id, requestedQuantity: entry.requestedQuantity, availableQuantity: available })
@@ -329,9 +336,10 @@ export function createBusinessInventoryRepository(pool) {
           await client.query('UPDATE business_inventory_balance SET reserved_quantity=reserved_quantity+$3,version=version+1,updated_at=now() WHERE warehouse_id=$1 AND stock_key=$2', [warehouse.id, entry.stockKey, reservedQuantity])
         }
       }
-      return { id: reservationId, created: true }
+      if (existing) await client.query('UPDATE business_stock_reservation SET version=version+1,note=CASE WHEN $2<>\'\' THEN $2 ELSE note END,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [reservationId, clean(rawInput.note), by.id, by.name])
+      return { id: reservationId, created: !existing, extended: Boolean(existing) }
     })
-    return { reservation: await getReservation(result.id), created: result.created }
+    return { reservation: await getReservation(result.id), created: result.created, extended: result.extended }
   }
 
   async function releaseReservation(id, rawInput = {}, actor) {

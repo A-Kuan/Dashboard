@@ -29,6 +29,7 @@ function generatedNumber(prefix) {
 }
 function actorDetails(actor) { return { id: clean(actor?.id), name: clean(actor?.name) || '系统操作员' } }
 function number(value) { return Number(value || 0) }
+function roundQuantity(value) { return Math.round(number(value) * 1000) / 1000 }
 function expectedVersion(value, current, errorCode, label) {
   const version = Number(value)
   if (!Number.isInteger(version) || version !== current) throw problem(errorCode, `${label}已被其他操作更新，请刷新后重试`, 409, { currentVersion: current })
@@ -59,7 +60,7 @@ function mapSalesOrder(row) {
     discountAmount: number(row.discount_amount), freightAmount: number(row.freight_amount), totalAmount: number(row.total_amount),
     notes: row.notes, version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
     updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
-    itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count),
+    itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count), stockReservationCount: number(row.stock_reservation_count),
   }
 }
 function mapSalesItem(row) {
@@ -108,23 +109,92 @@ async function insertEvent(client, orderType, orderId, action, actor, { fromStat
   ])
 }
 
+async function insertInventoryMovement(client, { warehouseId, stockKey, lotId, type, reservedDelta, referenceId, actor, note = '', snapshot = {} }) {
+  const by = actorDetails(actor)
+  await client.query(`INSERT INTO business_inventory_movement
+    (id,warehouse_id,stock_key,inventory_lot_id,movement_type,reserved_delta,reference_type,reference_id,actor_id,actor_name,note,snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,'stock_reservation',$7,$8,$9,$10,$11::jsonb)`, [
+    randomUUID(), warehouseId, stockKey, lotId, type, reservedDelta, referenceId, by.id, by.name, clean(note), JSON.stringify(snapshot),
+  ])
+}
+
+async function createAtomicStockReservations(client, salesOrderId, entries, actor) {
+  const groups = new Map()
+  for (const entry of entries) {
+    if (!groups.has(entry.fulfillment_warehouse_id)) groups.set(entry.fulfillment_warehouse_id, [])
+    groups.get(entry.fulfillment_warehouse_id).push(entry)
+  }
+  const by = actorDetails(actor); const reservationIds = []
+  for (const [warehouseId, items] of groups) {
+    const reservationId = randomUUID(); const reservationNo = generatedNumber('RSV')
+    await client.query(`INSERT INTO business_stock_reservation
+      (id,reservation_no,sales_order_id,warehouse_id,note,created_by_id,created_by_name,updated_by_id,updated_by_name)
+      VALUES ($1,$2,$3,$4,'成交转单自动锁定现货',$5,$6,$5,$6)`, [reservationId, reservationNo, salesOrderId, warehouseId, by.id, by.name])
+    for (const item of items) {
+      const key = orderStockKey(item); const requestedQuantity = roundQuantity(item.quantity); const reservationItemId = randomUUID()
+      await client.query(`INSERT INTO business_stock_reservation_item
+        (id,reservation_id,sales_order_item_id,stock_key,requested_quantity,reserved_quantity,shortage_quantity)
+        VALUES ($1,$2,$3,$4,$5,$5,0)`, [reservationItemId, reservationId, item.salesOrderItemId, key, requestedQuantity])
+      const lots = (await client.query(`SELECT * FROM business_inventory_lot WHERE warehouse_id=$1 AND stock_key=$2 AND on_hand_quantity>reserved_quantity
+        ORDER BY received_at,id FOR UPDATE`, [warehouseId, key])).rows
+      let remaining = requestedQuantity
+      for (const lot of lots) {
+        if (remaining <= 0) break
+        const take = Math.min(roundQuantity(number(lot.on_hand_quantity) - number(lot.reserved_quantity)), remaining)
+        if (take <= 0) continue
+        await client.query('UPDATE business_inventory_lot SET reserved_quantity=reserved_quantity+$2 WHERE id=$1', [lot.id, take])
+        await client.query('INSERT INTO business_stock_reservation_allocation (id,reservation_item_id,inventory_lot_id,quantity) VALUES ($1,$2,$3,$4)', [randomUUID(), reservationItemId, lot.id, take])
+        await insertInventoryMovement(client, { warehouseId, stockKey: key, lotId: lot.id, type: 'reserve', reservedDelta: take, referenceId: reservationId, actor, snapshot: { salesOrderId, salesOrderItemId: item.salesOrderItemId, source: 'order_conversion' } })
+        remaining = roundQuantity(remaining - take)
+      }
+      if (remaining !== 0) throw problem('INVENTORY_ALLOCATION_CONFLICT', '库存批次数量与汇总库存不一致，请检查库存流水', 409, { warehouseId, stockKey: key, remainingQuantity: remaining })
+      await client.query('UPDATE business_inventory_balance SET reserved_quantity=reserved_quantity+$3,version=version+1,updated_at=now() WHERE warehouse_id=$1 AND stock_key=$2', [warehouseId, key, requestedQuantity])
+    }
+    reservationIds.push(reservationId)
+  }
+  return reservationIds
+}
+
+async function releaseActiveStockReservations(client, salesOrderId, actor, note) {
+  const reservations = (await client.query("SELECT * FROM business_stock_reservation WHERE sales_order_id=$1 AND status='active' FOR UPDATE", [salesOrderId])).rows
+  for (const reservation of reservations) {
+    const allocations = (await client.query(`SELECT a.*,ri.stock_key FROM business_stock_reservation_allocation a
+      JOIN business_stock_reservation_item ri ON ri.id=a.reservation_item_id WHERE ri.reservation_id=$1 FOR UPDATE OF a`, [reservation.id])).rows
+    const releasedByStock = new Map()
+    for (const allocation of allocations) {
+      const remaining = roundQuantity(number(allocation.quantity) - number(allocation.fulfilled_quantity))
+      if (remaining <= 0) continue
+      await client.query('UPDATE business_inventory_lot SET reserved_quantity=reserved_quantity-$2 WHERE id=$1', [allocation.inventory_lot_id, remaining])
+      releasedByStock.set(allocation.stock_key, roundQuantity((releasedByStock.get(allocation.stock_key) || 0) + remaining))
+      await insertInventoryMovement(client, { warehouseId: reservation.warehouse_id, stockKey: allocation.stock_key, lotId: allocation.inventory_lot_id, type: 'release', reservedDelta: -remaining, referenceId: reservation.id, actor, note, snapshot: { salesOrderId, source: 'sales_order_cancelled' } })
+    }
+    for (const [key, amount] of releasedByStock) await client.query('UPDATE business_inventory_balance SET reserved_quantity=reserved_quantity-$3,version=version+1,updated_at=now() WHERE warehouse_id=$1 AND stock_key=$2', [reservation.warehouse_id, key, amount])
+    const by = actorDetails(actor)
+    await client.query("UPDATE business_stock_reservation SET status='released',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [reservation.id, by.id, by.name])
+  }
+  return reservations.map((item) => item.id)
+}
+
 export function createBusinessOrderRepository(pool) {
   async function getSalesOrder(id, client = pool) {
     const row = (await client.query(`SELECT so.*,
       (SELECT count(*)::int FROM business_sales_order_item x WHERE x.sales_order_id=so.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
-      (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count
+      (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
+      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count
       FROM business_sales_order so WHERE so.id=$1 OR so.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
-    const [items, purchaseOrders, events] = await Promise.all([
+    const [items, purchaseOrders, stockReservations, events] = await Promise.all([
       client.query('SELECT * FROM business_sales_order_item WHERE sales_order_id=$1 ORDER BY line_no', [row.id]),
       client.query(`SELECT po.*,so.order_no sales_order_no,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count
         FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id WHERE po.sales_order_id=$1 ORDER BY po.created_at,po.id`, [row.id]),
+      client.query(`SELECT r.id,r.reservation_no,r.warehouse_id,w.warehouse_code,w.name warehouse_name,r.status,r.version,r.created_at,r.updated_at
+        FROM business_stock_reservation r JOIN business_warehouse w ON w.id=r.warehouse_id WHERE r.sales_order_id=$1 ORDER BY r.created_at,r.id`, [row.id]),
       client.query("SELECT * FROM business_order_event WHERE sales_order_id=$1 ORDER BY created_at DESC,id DESC", [row.id]),
     ])
-    return { ...mapSalesOrder(row), items: items.rows.map(mapSalesItem), purchaseOrders: purchaseOrders.rows.map(mapPurchaseOrder), events: events.rows.map(mapEvent) }
+    return { ...mapSalesOrder(row), items: items.rows.map(mapSalesItem), purchaseOrders: purchaseOrders.rows.map(mapPurchaseOrder), stockReservations: stockReservations.rows.map((item) => ({ id: item.id, reservationNo: item.reservation_no, warehouseId: item.warehouse_id, warehouseCode: item.warehouse_code, warehouseName: item.warehouse_name, status: item.status, version: item.version, createdAt: item.created_at, updatedAt: item.updated_at })), events: events.rows.map(mapEvent) }
   }
 
   async function getPurchaseOrder(id, client = pool) {
@@ -153,7 +223,8 @@ export function createBusinessOrderRepository(pool) {
     const rows = (await pool.query(`SELECT so.*,
       (SELECT count(*)::int FROM business_sales_order_item x WHERE x.sales_order_id=so.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
-      (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count
+      (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
+      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count
       FROM business_sales_order so ${clause} ORDER BY so.updated_at DESC,so.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
     const summaryRows = (await pool.query('SELECT status,count(*)::int count,COALESCE(sum(total_amount),0)::numeric amount FROM business_sales_order GROUP BY status')).rows
     return { items: rows.map(mapSalesOrder), total, page: currentPage, pageSize: size, summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), amount: number(item.amount) }])) }
@@ -186,7 +257,8 @@ export function createBusinessOrderRepository(pool) {
       const existing = (await client.query('SELECT id FROM business_sales_order WHERE inquiry_id=$1', [inquiry.id])).rows[0]
       if (existing) {
         const purchaseOrderIds = (await client.query('SELECT id FROM business_purchase_order WHERE sales_order_id=$1 ORDER BY created_at,id', [existing.id])).rows.map((row) => row.id)
-        return { salesOrderId: existing.id, purchaseOrderIds, created: false }
+        const stockReservationIds = (await client.query('SELECT id FROM business_stock_reservation WHERE sales_order_id=$1 ORDER BY created_at,id', [existing.id])).rows.map((row) => row.id)
+        return { salesOrderId: existing.id, purchaseOrderIds, stockReservationIds, created: false }
       }
       if (inquiry.status !== 'won') throw problem('INQUIRY_NOT_WON', '只有已成交的询价可以转为订单', 409)
       const quote = (await client.query("SELECT * FROM business_quote WHERE inquiry_id=$1 AND state='accepted' ORDER BY sent_at DESC NULLS LAST,created_at DESC LIMIT 1 FOR UPDATE", [inquiry.id])).rows[0]
@@ -225,12 +297,18 @@ export function createBusinessOrderRepository(pool) {
         inquiry.contact_phone, inquiry.customer_vehicle_id, inquiry.vehicle_label, inquiry.vin, quote.currency, quote.subtotal,
         quote.discount_amount, quote.freight_amount, quote.total_amount, quote.note, by.id, by.name,
       ])
-      for (const item of quoteItems) await client.query(`INSERT INTO business_sales_order_item
+      const stockReservationEntries = []
+      for (const item of quoteItems) {
+        const salesOrderItemId = randomUUID()
+        await client.query(`INSERT INTO business_sales_order_item
         (id,sales_order_id,quote_item_id,inquiry_item_id,catalog_sku_id,fulfillment_source,fulfillment_warehouse_id,line_no,description,oe_number,quantity,unit,sale_unit_price,line_total)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
-        randomUUID(), salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.fulfillment_source, item.fulfillment_warehouse_id, item.line_no, item.description,
+        salesOrderItemId, salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.fulfillment_source, item.fulfillment_warehouse_id, item.line_no, item.description,
         item.oe_number, item.quantity, item.unit, item.sale_unit_price, item.line_total,
       ])
+        if (item.fulfillment_source === 'stock') stockReservationEntries.push({ ...item, salesOrderItemId })
+      }
+      const stockReservationIds = await createAtomicStockReservations(client, salesOrderId, stockReservationEntries, actor)
 
       const groups = new Map()
       for (const item of quoteItems.filter((entry) => entry.fulfillment_source === 'purchase')) {
@@ -261,12 +339,12 @@ export function createBusinessOrderRepository(pool) {
         await insertEvent(client, 'purchase', purchaseOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, salesOrderId, supplierName: group.supplierName, itemCount: group.items.length, totalAmount: subtotal + freightAmount } })
         purchaseOrderIds.push(purchaseOrderId)
       }
-      await insertEvent(client, 'sales', salesOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, quoteId: quote.id, quoteNo: quote.quote_no, stockItemCount: quoteItems.filter((item) => item.fulfillment_source === 'stock').length, purchaseItemCount: quoteItems.filter((item) => item.fulfillment_source === 'purchase').length, purchaseOrderCount: purchaseOrderIds.length, totalAmount: number(quote.total_amount) } })
+      await insertEvent(client, 'sales', salesOrderId, 'created_from_inquiry', actor, { toStatus: 'draft', snapshot: { inquiryId: inquiry.id, inquiryNo: inquiry.inquiry_no, quoteId: quote.id, quoteNo: quote.quote_no, stockItemCount: quoteItems.filter((item) => item.fulfillment_source === 'stock').length, purchaseItemCount: quoteItems.filter((item) => item.fulfillment_source === 'purchase').length, stockReservationIds, purchaseOrderCount: purchaseOrderIds.length, totalAmount: number(quote.total_amount) } })
       await client.query(`INSERT INTO business_inquiry_event (id,inquiry_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
-        VALUES ($1,$2,'converted_to_order',$3,$3,$4,$5,$6,$7::jsonb)`, [randomUUID(), inquiry.id, inquiry.status, by.id, by.name, salesOrderNo, JSON.stringify({ salesOrderId, salesOrderNo, purchaseOrderIds })])
-      return { salesOrderId, purchaseOrderIds, created: true }
+        VALUES ($1,$2,'converted_to_order',$3,$3,$4,$5,$6,$7::jsonb)`, [randomUUID(), inquiry.id, inquiry.status, by.id, by.name, salesOrderNo, JSON.stringify({ salesOrderId, salesOrderNo, purchaseOrderIds, stockReservationIds })])
+      return { salesOrderId, purchaseOrderIds, stockReservationIds, created: true }
     })
-    return { salesOrder: await getSalesOrder(result.salesOrderId), purchaseOrders: await Promise.all((result.purchaseOrderIds || []).map((id) => getPurchaseOrder(id))), created: result.created }
+    return { salesOrder: await getSalesOrder(result.salesOrderId), purchaseOrders: await Promise.all((result.purchaseOrderIds || []).map((id) => getPurchaseOrder(id))), stockReservationIds: result.stockReservationIds || [], created: result.created }
   }
 
   async function transitionSalesOrder(id, rawInput = {}, actor) {
@@ -287,10 +365,14 @@ export function createBusinessOrderRepository(pool) {
       if (nextStatus === 'cancelled') {
         const received = number((await client.query('SELECT COALESCE(sum(received_quantity),0) quantity FROM business_purchase_order_item WHERE purchase_order_id=ANY($1::text[])', [purchaseRows.map((item) => item.id)])).rows[0]?.quantity)
         if (received > 0) throw problem('ORDER_HAS_RECEIPTS', '已有到货记录的订单不能直接取消，请先处理退货', 409)
+        const shipped = number((await client.query('SELECT COALESCE(sum(si.quantity),0) quantity FROM business_shipment_item si JOIN business_shipment s ON s.id=si.shipment_id WHERE s.sales_order_id=$1', [order.id])).rows[0]?.quantity)
+        if (shipped > 0) throw problem('ORDER_HAS_SHIPMENTS', '已有出库记录的订单不能直接取消，请先处理退货', 409)
         for (const purchase of purchaseRows.filter((item) => item.status !== 'cancelled')) {
           await client.query("UPDATE business_purchase_order SET status='cancelled',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [purchase.id, actorDetails(actor).id, actorDetails(actor).name])
           await insertEvent(client, 'purchase', purchase.id, 'cancelled_with_sales_order', actor, { fromStatus: purchase.status, toStatus: 'cancelled', note: clean(rawInput.note) })
         }
+        const releasedReservationIds = await releaseActiveStockReservations(client, order.id, actor, clean(rawInput.note) || '销售订单取消，自动释放库存')
+        if (releasedReservationIds.length) await insertEvent(client, 'sales', order.id, 'stock_reservations_released', actor, { fromStatus: order.status, toStatus: order.status, note: clean(rawInput.note), snapshot: { releasedReservationIds } })
       }
       const by = actorDetails(actor)
       await client.query('UPDATE business_sales_order SET status=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [order.id, nextStatus, by.id, by.name])
