@@ -1132,6 +1132,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(firstReceipt.created).toBe(true)
   expect(firstReceipt.receipt.warehouseId).toBe(warehouse.id)
   expect(firstReceipt.receipt.items[0].receivedQuantity).toBe(1)
+  expect(firstReceipt.receipt.stockReservationIds).toHaveLength(1)
+  expect(firstReceipt.receipt.autoReservedQuantity).toBe(1)
   purchaseOrder = await (await page.request.get(`/api/v2/business/purchase-orders/${purchaseOrder.id}`, { headers: editorHeaders })).json()
   expect(purchaseOrder.status).toBe('partially_received')
   expect(purchaseOrder.items[0].receivedQuantity).toBe(1)
@@ -1155,6 +1157,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(finalReceiptResponse.status()).toBe(201)
   const finalReceipt = await finalReceiptResponse.json()
   expect(finalReceipt.receipt.items).toHaveLength(2)
+  expect(finalReceipt.receipt.stockReservationIds).toEqual(firstReceipt.receipt.stockReservationIds)
+  expect(finalReceipt.receipt.autoReservedQuantity).toBe(2)
   const repeatedReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receipts`, { headers: editorHeaders, data: {
     requestKey: 'e2e-receipt-final', warehouseId: warehouse.id, expectedVersion: purchaseOrder.version,
     items: [{ itemId: purchaseOrder.items[0].id, quantity: 1 }],
@@ -1170,7 +1174,21 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const stockedBalances = await stockedBalancesResponse.json()
   expect(stockedBalances.items).toHaveLength(2)
   expect(stockedBalances.items.reduce((sum, item) => sum + item.onHandQuantity, 0)).toBe(3)
-  expect(stockedBalances.items.every((item) => item.reservedQuantity === 0)).toBeTruthy()
+  expect(stockedBalances.items.reduce((sum, item) => sum + item.reservedQuantity, 0)).toBe(3)
+  salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
+  expect(salesOrder.stockReservations).toHaveLength(1)
+  expect(salesOrder.stockReservations[0].id).toBe(firstReceipt.receipt.stockReservationIds[0])
+  expect(salesOrder.stockReservations[0].status).toBe('active')
+  expect(salesOrder.events.map((event) => event.action)).toContain('purchase_receipt_auto_reserved')
+  const receiptReservation = await (await page.request.get(`/api/v2/business/reservations/${salesOrder.stockReservations[0].id}`, { headers: editorHeaders })).json()
+  expect(receiptReservation.items).toHaveLength(2)
+  expect(receiptReservation.items.reduce((sum, item) => sum + item.reservedQuantity, 0)).toBe(3)
+  const releaseReceiptReservationResponse = await page.request.post(`/api/v2/business/reservations/${receiptReservation.id}/release`, { headers: editorHeaders, data: {
+    expectedVersion: receiptReservation.version, note: '释放采购专属锁定以继续并发库存回归',
+  } })
+  expect(releaseReceiptReservationResponse.ok()).toBeTruthy()
+  const balancesAfterReceiptRelease = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterReceiptRelease.items.every((item) => item.reservedQuantity === 0)).toBeTruthy()
 
   const stockInquiryResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
     customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,

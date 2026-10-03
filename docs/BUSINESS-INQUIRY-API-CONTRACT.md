@@ -256,7 +256,7 @@
 }
 ```
 
-服务端累计已到货数量，不允许超过采购数量。并发旧版本返回 `409 PURCHASE_ORDER_VERSION_CONFLICT`，超收返回 `409 RECEIPT_EXCEEDS_ORDERED_QUANTITY`。迁移 `035` 起，新收货还会在同一事务中创建收货单、库存批次、汇总余额和库存流水，完整契约见 [库存与收发货业务 API](./BUSINESS-INVENTORY-API-CONTRACT.md)。
+服务端累计已到货数量，不允许超过采购数量。并发旧版本返回 `409 PURCHASE_ORDER_VERSION_CONFLICT`，超收返回 `409 RECEIPT_EXCEEDS_ORDERED_QUANTITY`。新收货会在同一事务中创建收货单、库存批次、汇总余额和库存流水，并把仍属于该销售订单的到货数量自动锁定；同仓库分批到货扩展既有预留，避免已到货配件被其他订单占用。完整契约见 [库存与收发货业务 API](./BUSINESS-INVENTORY-API-CONTRACT.md)。
 
 ## 后续接入
 
