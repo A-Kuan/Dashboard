@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 
 const partnerTypes = new Set(['customer', 'supplier', 'both'])
@@ -136,6 +136,125 @@ async function resolveVehicleMaster(client, vehicle) {
     return { ...vehicle, platformCode: platform.platform_code, vehicleLabel: vehicle.vehicleLabel || [platform.brand_label, platform.series_label].filter(Boolean).join(' ') }
   }
   return vehicle
+}
+
+function normalizedOnboardingInput(rawInput = {}) {
+  const customer = normalizeBusinessPartnerInput({ ...(rawInput.customer || {}), partnerType: 'customer' })
+  const customerPhone = phoneDigits(customer.phone)
+  if (customerPhone.length < 7) throw problem('QUICK_QUOTE_CUSTOMER_PHONE_REQUIRED', '首次快速报价建档需要有效联系电话')
+  const contact = clean(rawInput.customer?.contactName) ? normalizeContact({
+    name: rawInput.customer.contactName,
+    roleTitle: rawInput.customer.contactRoleTitle,
+    phone: rawInput.customer.contactPhone || customer.phone,
+    wechat: rawInput.customer.wechat,
+    email: rawInput.customer.contactEmail,
+    isPrimary: true,
+  }) : null
+  return {
+    customer,
+    customerPhone,
+    contact,
+    vehicleDraft: normalizeVehicle(rawInput.vehicle || {}),
+    selectedPartnerId: clean(rawInput.customerPartnerId || rawInput.customer?.partnerId),
+    confirmCreateNewCustomer: rawInput.confirmCreateNewCustomer === true,
+  }
+}
+
+function onboardingPartner(row) {
+  if (!row) return null
+  return { id: row.id, partnerNo: row.partner_no, name: row.name, shortName: row.short_name, phone: row.phone, taxId: row.tax_id, status: row.status, version: row.version }
+}
+
+function onboardingVehicle(row) {
+  if (!row) return null
+  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, version: row.version }
+}
+
+function uniqueRows(rows) {
+  return [...new Map(rows.filter(Boolean).map((row) => [row.id, row])).values()]
+}
+
+function onboardingFingerprint(snapshot) {
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')
+}
+
+async function buildOnboardingPreflight(client, rawInput = {}, { lock = false } = {}) {
+  const input = normalizedOnboardingInput(rawInput)
+  const vehicle = await resolveVehicleMaster(client, input.vehicleDraft)
+  if (!vehicle.platformMasterId) throw problem('CUSTOMER_VEHICLE_NOT_STANDARDIZED', '首次快速报价车辆必须关联标准车型平台', 409)
+  const partnerLock = lock ? ' FOR UPDATE OF p' : ''
+  const vehicleLock = lock ? ' FOR UPDATE OF v,p' : ''
+  const vinMatches = vehicle.vin ? (await client.query(`SELECT v.*,p.partner_no,p.name,p.short_name,p.phone,p.tax_id,p.partner_type,p.status partner_status,p.version partner_version
+    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE v.vin=$1 ORDER BY v.id${vehicleLock}`, [vehicle.vin])).rows : []
+  const plateMatches = vehicle.licensePlate ? (await client.query(`SELECT v.*,p.partner_no,p.name,p.short_name,p.phone,p.tax_id,p.partner_type,p.status partner_status,p.version partner_version
+    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE upper(v.license_plate)=upper($1) ORDER BY v.id${vehicleLock}`, [vehicle.licensePlate])).rows : []
+  const phoneMatches = (await client.query(`SELECT p.* FROM business_partner p
+    WHERE p.partner_type IN ('customer','both') AND (regexp_replace(p.phone,'[^0-9]','','g')=$1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND regexp_replace(c.phone,'[^0-9]','','g')=$1))
+    ORDER BY p.updated_at DESC,p.id${partnerLock}`, [input.customerPhone])).rows
+  const taxMatches = input.customer.taxId ? (await client.query(`SELECT p.* FROM business_partner p
+    WHERE p.partner_type IN ('customer','both') AND upper(trim(p.tax_id))=upper(trim($1)) ORDER BY p.updated_at DESC,p.id${partnerLock}`, [input.customer.taxId])).rows : []
+  const nameMatches = (await client.query(`SELECT p.* FROM business_partner p
+    WHERE p.partner_type IN ('customer','both') AND (lower(trim(p.name))=lower(trim($1)) OR ($2<>'' AND lower(trim(p.short_name))=lower(trim($2))))
+    ORDER BY p.updated_at DESC,p.id${partnerLock}`, [input.customer.name, input.customer.shortName])).rows
+  const selectedPartner = input.selectedPartnerId ? (await client.query(`SELECT p.* FROM business_partner p WHERE p.id=$1 OR p.partner_no=upper(trim($1)) LIMIT 1${partnerLock}`, [input.selectedPartnerId])).rows[0] : null
+
+  const conflicts = []
+  const warnings = []
+  const matchedVehicles = uniqueRows([...vinMatches, ...plateMatches])
+  if (vinMatches.length > 1) conflicts.push({ code: 'duplicate_vin', message: '同一 VIN 关联了多条客户车辆，必须先整理车辆资料', vehicleIds: vinMatches.map((row) => row.id) })
+  if (plateMatches.length > 1) conflicts.push({ code: 'duplicate_license_plate', message: '同一车牌关联了多条客户车辆，必须先整理车辆资料', vehicleIds: plateMatches.map((row) => row.id) })
+  if (matchedVehicles.length > 1) conflicts.push({ code: 'vehicle_identity_conflict', message: 'VIN 与车牌指向不同客户车辆，必须先复核', vehicleIds: matchedVehicles.map((row) => row.id) })
+  const matchedVehicle = matchedVehicles.length === 1 ? matchedVehicles[0] : null
+  if (matchedVehicle && (matchedVehicle.platform_master_id !== vehicle.platformMasterId || (vehicle.variantMasterId && matchedVehicle.variant_master_id !== vehicle.variantMasterId))) {
+    conflicts.push({ code: 'vehicle_master_conflict', message: '已建档车辆关联的标准车型与本次选择不同', vehicleId: matchedVehicle.id, currentPlatformMasterId: matchedVehicle.platform_master_id, requestedPlatformMasterId: vehicle.platformMasterId })
+  }
+
+  const identityMatches = uniqueRows([...phoneMatches, ...taxMatches])
+  if (input.selectedPartnerId && !selectedPartner) conflicts.push({ code: 'selected_customer_not_found', message: '指定客户不存在', partnerId: input.selectedPartnerId })
+
+  let targetPartner = selectedPartner || null
+  let matchedBy = selectedPartner ? 'selected_customer' : ''
+  if (!targetPartner && matchedVehicle) {
+    targetPartner = { id: matchedVehicle.partner_id, partner_no: matchedVehicle.partner_no, name: matchedVehicle.name, short_name: matchedVehicle.short_name, phone: matchedVehicle.phone, tax_id: matchedVehicle.tax_id, status: matchedVehicle.partner_status, version: matchedVehicle.partner_version, partner_type: matchedVehicle.partner_type }
+    matchedBy = vinMatches.length ? 'vin' : 'license_plate'
+  }
+  if (!targetPartner && identityMatches.length === 1) {
+    targetPartner = identityMatches[0]
+    matchedBy = taxMatches.some((row) => row.id === targetPartner.id) ? 'tax_id' : 'phone'
+  }
+  if (!targetPartner && phoneMatches.length > 1) conflicts.push({ code: 'duplicate_phone', message: '联系电话匹配多个客户，必须明确选择或合并客户资料', partnerIds: phoneMatches.map((row) => row.id) })
+  if (!targetPartner && taxMatches.length > 1) conflicts.push({ code: 'duplicate_tax_id', message: '税号匹配多个客户，必须明确选择或整理客户资料', partnerIds: taxMatches.map((row) => row.id) })
+  if (!targetPartner && identityMatches.length > 1) conflicts.push({ code: 'customer_identity_conflict', message: '电话与税号指向不同客户，必须先复核', partnerIds: identityMatches.map((row) => row.id) })
+  if (targetPartner && (!['customer', 'both'].includes(targetPartner.partner_type) || targetPartner.status !== 'active')) conflicts.push({ code: 'customer_unavailable', message: '匹配或指定的客户当前不可用于快速报价', partnerId: targetPartner.id, status: targetPartner.status })
+  if (matchedVehicle && targetPartner && matchedVehicle.partner_id !== targetPartner.id) conflicts.push({ code: 'vehicle_customer_conflict', message: '车辆归属与本次客户选择不一致', vehiclePartnerId: matchedVehicle.partner_id, selectedPartnerId: targetPartner.id })
+  if (targetPartner && phoneMatches.length && !phoneMatches.some((row) => row.id === targetPartner.id)) conflicts.push({ code: 'input_phone_customer_conflict', message: '本次联系电话指向另一客户', partnerIds: phoneMatches.map((row) => row.id), selectedPartnerId: targetPartner.id })
+  if (targetPartner && taxMatches.length && !taxMatches.some((row) => row.id === targetPartner.id)) conflicts.push({ code: 'input_tax_customer_conflict', message: '本次税号指向另一客户', partnerIds: taxMatches.map((row) => row.id), selectedPartnerId: targetPartner.id })
+  if (targetPartner && phoneMatches.length > 1 && phoneMatches.some((row) => row.id === targetPartner.id)) warnings.push({ code: 'shared_phone_resolved_by_customer', message: '联系电话由多个客户共用，已按明确客户或车辆归属处理', partnerIds: phoneMatches.map((row) => row.id) })
+  if (targetPartner && taxMatches.length > 1 && taxMatches.some((row) => row.id === targetPartner.id)) warnings.push({ code: 'shared_tax_id_resolved_by_customer', message: '税号存在多条候选，已按明确客户或车辆归属处理', partnerIds: taxMatches.map((row) => row.id) })
+
+  const nameCandidates = uniqueRows(nameMatches).filter((row) => !targetPartner || row.id !== targetPartner.id)
+  const pendingNameReview = !targetPartner && nameCandidates.length > 0 && !input.confirmCreateNewCustomer
+  if (pendingNameReview) warnings.push({ code: 'same_name_customer_review', message: '存在同名客户，请选择已有客户或明确确认新建', partnerIds: nameCandidates.map((row) => row.id) })
+  if (!targetPartner && nameCandidates.length > 0 && input.confirmCreateNewCustomer) warnings.push({ code: 'same_name_customer_confirmed', message: '已确认同名但仍新建独立客户', partnerIds: nameCandidates.map((row) => row.id) })
+
+  const action = matchedVehicle ? 'reuse_vehicle' : targetPartner ? 'add_vehicle' : 'create_customer'
+  if (!matchedBy) matchedBy = 'created'
+  const snapshot = {
+    input: { customer: input.customer, contact: input.contact, vehicle, selectedPartnerId: input.selectedPartnerId, confirmCreateNewCustomer: input.confirmCreateNewCustomer },
+    action,
+    matchedBy,
+    targetPartner: onboardingPartner(targetPartner),
+    targetVehicle: onboardingVehicle(matchedVehicle),
+    candidates: {
+      phone: phoneMatches.map(onboardingPartner),
+      taxId: taxMatches.map(onboardingPartner),
+      name: nameCandidates.map(onboardingPartner),
+      vehicles: matchedVehicles.map(onboardingVehicle),
+    },
+    conflicts,
+    warnings,
+  }
+  return { ready: conflicts.length === 0 && !pendingNameReview, action, matchedBy, targetCustomer: snapshot.targetPartner, targetVehicle: snapshot.targetVehicle, candidates: snapshot.candidates, conflicts, warnings, normalized: snapshot.input, fingerprint: onboardingFingerprint(snapshot), _snapshot: snapshot }
 }
 
 export function createBusinessPartnerRepository(pool) {
@@ -295,64 +414,49 @@ export function createBusinessPartnerRepository(pool) {
 
     customer360,
 
+    async previewQuickQuoteCustomerOnboarding(rawInput = {}) {
+      const preflight = await buildOnboardingPreflight(pool, rawInput)
+      const { _snapshot, ...result } = preflight
+      return result
+    },
+
     async onboardQuickQuoteCustomer(rawInput = {}, actor) {
       const key = requestKey(rawInput.requestKey)
-      const customerInput = normalizeBusinessPartnerInput({ ...(rawInput.customer || {}), partnerType: 'customer' })
-      const customerPhone = phoneDigits(customerInput.phone)
-      if (customerPhone.length < 7) throw problem('QUICK_QUOTE_CUSTOMER_PHONE_REQUIRED', '首次快速报价建档需要有效联系电话')
-      const contact = clean(rawInput.customer?.contactName) ? normalizeContact({
-        name: rawInput.customer.contactName,
-        roleTitle: rawInput.customer.contactRoleTitle,
-        phone: rawInput.customer.contactPhone || customerInput.phone,
-        wechat: rawInput.customer.wechat,
-        email: rawInput.customer.contactEmail,
-        isPrimary: true,
-      }) : null
-      const vehicleDraft = normalizeVehicle(rawInput.vehicle || {})
       const result = await withTransaction(pool, async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-onboarding:${key}`])
         const existingRequest = (await client.query('SELECT * FROM business_customer_onboarding_request WHERE request_key=$1', [key])).rows[0]
-        if (existingRequest) return { partnerId: existingRequest.partner_id, vehicleId: existingRequest.customer_vehicle_id, createdPartner: existingRequest.created_partner, createdVehicle: existingRequest.created_vehicle, matchedBy: existingRequest.matched_by, created: false }
-        const vehicle = await resolveVehicleMaster(client, vehicleDraft)
-        if (!vehicle.platformMasterId) throw problem('CUSTOMER_VEHICLE_NOT_STANDARDIZED', '首次快速报价车辆必须关联标准车型平台', 409)
-        const identities = [`phone:${customerPhone}`]
-        if (vehicle.vin) identities.push(`vin:${vehicle.vin}`)
-        else if (vehicle.licensePlate) identities.push(`plate:${vehicle.licensePlate}`)
+        if (existingRequest) return { partnerId: existingRequest.partner_id, vehicleId: existingRequest.customer_vehicle_id, createdPartner: existingRequest.created_partner, createdVehicle: existingRequest.created_vehicle, matchedBy: existingRequest.matched_by, decisionFingerprint: existingRequest.decision_fingerprint, created: false }
+        const input = normalizedOnboardingInput(rawInput)
+        const identities = [`phone:${input.customerPhone}`]
+        if (input.customer.taxId) identities.push(`tax:${input.customer.taxId.toUpperCase()}`)
+        if (input.vehicleDraft.vin) identities.push(`vin:${input.vehicleDraft.vin}`)
+        if (input.vehicleDraft.licensePlate) identities.push(`plate:${input.vehicleDraft.licensePlate}`)
+        if (input.selectedPartnerId) identities.push(`partner:${input.selectedPartnerId}`)
         for (const identity of identities.sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-identity:${identity}`])
 
-        let partner = null; let customerVehicle = null; let matchedBy = 'created'; let createdPartner = false; let createdVehicle = false
-        if (vehicle.vin) {
-          const match = (await client.query(`SELECT v.*,p.partner_type,p.status partner_status FROM business_customer_vehicle v
-            JOIN business_partner p ON p.id=v.partner_id WHERE v.vin=$1 FOR UPDATE OF v,p`, [vehicle.vin])).rows[0]
-          if (match) { customerVehicle = match; partner = match; matchedBy = 'vin' }
+        const preflight = await buildOnboardingPreflight(client, rawInput, { lock: true })
+        const submittedFingerprint = clean(rawInput.previewFingerprint)
+        const publicPreflight = Object.fromEntries(Object.entries(preflight).filter(([key]) => key !== '_snapshot'))
+        if (!submittedFingerprint) throw problem('CUSTOMER_ONBOARDING_PREVIEW_REQUIRED', '首次报价建档必须先完成客户与车辆预检', 409, { preflight: publicPreflight })
+        if (submittedFingerprint !== preflight.fingerprint) throw problem('CUSTOMER_ONBOARDING_PREVIEW_STALE', '客户或车辆资料已变化，请刷新预检结果后再提交', 409, { preflight: publicPreflight })
+        if (!preflight.ready) throw problem('CUSTOMER_ONBOARDING_REVIEW_REQUIRED', '客户与车辆预检存在冲突或待确认候选，不能直接建档', 409, { preflight: publicPreflight })
+
+        const customerInput = preflight.normalized.customer
+        const contact = preflight.normalized.contact
+        const vehicle = preflight.normalized.vehicle
+        let partner = preflight.targetCustomer ? { id: preflight.targetCustomer.id } : null
+        let customerVehicle = preflight.targetVehicle ? { id: preflight.targetVehicle.id } : null
+        let createdPartner = false; let createdVehicle = false
+        if (preflight.action === 'create_customer') {
+          const by = actorDetails(actor); const partnerNo = generatedNumber(); partner = { id: randomUUID() }
+          await client.query(`INSERT INTO business_partner (id,partner_no,partner_type,name,short_name,tax_id,phone,email,address,status,payment_terms_days,credit_limit,notes,created_by_id,created_by_name,updated_by_id,updated_by_name)
+            VALUES ($1,$2,'customer',$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,$12,$13,$12,$13)`, [partner.id, partnerNo, customerInput.name, customerInput.shortName, customerInput.taxId, customerInput.phone, customerInput.email, customerInput.address, customerInput.paymentTermsDays, customerInput.creditLimit, customerInput.notes, by.id, by.name])
+          if (contact) await client.query(`INSERT INTO business_partner_contact (id,partner_id,name,role_title,phone,wechat,email,is_primary,notes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)`, [randomUUID(), partner.id, contact.name, contact.roleTitle, contact.phone, contact.wechat, contact.email, contact.notes])
+          await insertEvent(client, partner.id, 'quick_quote_customer_created', actor, { partnerNo, requestKey: key, phone: customerInput.phone, decisionFingerprint: preflight.fingerprint }, customerInput.notes)
+          createdPartner = true
         }
-        if (!customerVehicle && vehicle.licensePlate) {
-          const matches = (await client.query(`SELECT v.*,p.partner_type,p.status partner_status FROM business_customer_vehicle v
-            JOIN business_partner p ON p.id=v.partner_id WHERE upper(v.license_plate)=upper($1) FOR UPDATE OF v,p`, [vehicle.licensePlate])).rows
-          if (matches.length > 1) throw problem('CUSTOMER_VEHICLE_MATCH_AMBIGUOUS', '该车牌关联了多条客户车辆，请先整理客户资料', 409, { vehicleIds: matches.map((item) => item.id) })
-          if (matches.length === 1) { customerVehicle = matches[0]; partner = matches[0]; matchedBy = 'license_plate' }
-        }
-        if (customerVehicle) {
-          if (!['customer', 'both'].includes(partner.partner_type) || partner.partner_status !== 'active') throw problem('QUICK_QUOTE_CUSTOMER_UNAVAILABLE', '匹配到的客户当前不可用于快速报价', 409, { partnerId: partner.partner_id })
-          if (customerVehicle.platform_master_id !== vehicle.platformMasterId || (vehicle.variantMasterId && customerVehicle.variant_master_id !== vehicle.variantMasterId)) throw problem('CUSTOMER_VEHICLE_MASTER_CONFLICT', 'VIN 或车牌已建档，但关联的标准车型不同，请先复核车辆资料', 409, { partnerId: partner.partner_id, customerVehicleId: customerVehicle.id })
-          partner = { id: partner.partner_id }
-        } else {
-          const candidates = (await client.query(`SELECT p.* FROM business_partner p
-            WHERE p.partner_type IN ('customer','both') AND (regexp_replace(p.phone,'[^0-9]','','g')=$1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND regexp_replace(c.phone,'[^0-9]','','g')=$1))
-            ORDER BY p.updated_at DESC FOR UPDATE OF p`, [customerPhone])).rows
-          if (candidates.length > 1) throw problem('QUICK_QUOTE_CUSTOMER_MATCH_AMBIGUOUS', '该联系电话匹配多个客户，请先选择或合并客户资料', 409, { partnerIds: candidates.map((item) => item.id) })
-          if (candidates.length === 1) {
-            partner = candidates[0]; matchedBy = 'phone'
-            if (partner.status !== 'active') throw problem('QUICK_QUOTE_CUSTOMER_UNAVAILABLE', '联系电话匹配到的客户当前不可用', 409, { partnerId: partner.id })
-          } else {
-            const by = actorDetails(actor); const partnerNo = generatedNumber(); partner = { id: randomUUID() }
-            await client.query(`INSERT INTO business_partner (id,partner_no,partner_type,name,short_name,tax_id,phone,email,address,status,payment_terms_days,credit_limit,notes,created_by_id,created_by_name,updated_by_id,updated_by_name)
-              VALUES ($1,$2,'customer',$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,$12,$13,$12,$13)`, [partner.id, partnerNo, customerInput.name, customerInput.shortName, customerInput.taxId, customerInput.phone, customerInput.email, customerInput.address, customerInput.paymentTermsDays, customerInput.creditLimit, customerInput.notes, by.id, by.name])
-            if (contact) await client.query(`INSERT INTO business_partner_contact (id,partner_id,name,role_title,phone,wechat,email,is_primary,notes)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)`, [randomUUID(), partner.id, contact.name, contact.roleTitle, contact.phone, contact.wechat, contact.email, contact.notes])
-            await insertEvent(client, partner.id, 'quick_quote_customer_created', actor, { partnerNo, requestKey: key, phone: customerInput.phone }, customerInput.notes)
-            createdPartner = true
-          }
+        if (preflight.action !== 'reuse_vehicle') {
           customerVehicle = { id: randomUUID() }
           await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,platform_master_id,variant_master_id,engine_code,model_year,notes)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [customerVehicle.id, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.platformMasterId, vehicle.variantMasterId, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
@@ -360,14 +464,14 @@ export function createBusinessPartnerRepository(pool) {
             const by = actorDetails(actor)
             await client.query('UPDATE business_partner SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1', [partner.id, by.id, by.name])
           }
-          await insertEvent(client, partner.id, 'quick_quote_vehicle_added', actor, { vehicleId: customerVehicle.id, requestKey: key, matchedBy, vin: vehicle.vin, licensePlate: vehicle.licensePlate, platformMasterId: vehicle.platformMasterId, variantMasterId: vehicle.variantMasterId })
+          await insertEvent(client, partner.id, 'quick_quote_vehicle_added', actor, { vehicleId: customerVehicle.id, requestKey: key, matchedBy: preflight.matchedBy, vin: vehicle.vin, licensePlate: vehicle.licensePlate, platformMasterId: vehicle.platformMasterId, variantMasterId: vehicle.variantMasterId, decisionFingerprint: preflight.fingerprint })
           createdVehicle = true
         }
         const by = actorDetails(actor)
         await client.query(`INSERT INTO business_customer_onboarding_request
-          (request_key,partner_id,customer_vehicle_id,created_partner,created_vehicle,matched_by,actor_id,actor_name)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [key, partner.id, customerVehicle.id, createdPartner, createdVehicle, matchedBy, by.id, by.name])
-        return { partnerId: partner.id, vehicleId: customerVehicle.id, createdPartner, createdVehicle, matchedBy, created: true }
+          (request_key,partner_id,customer_vehicle_id,created_partner,created_vehicle,matched_by,decision_fingerprint,decision_snapshot,actor_id,actor_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)`, [key, partner.id, customerVehicle.id, createdPartner, createdVehicle, preflight.matchedBy, preflight.fingerprint, JSON.stringify(preflight._snapshot), by.id, by.name])
+        return { partnerId: partner.id, vehicleId: customerVehicle.id, createdPartner, createdVehicle, matchedBy: preflight.matchedBy, decisionFingerprint: preflight.fingerprint, created: true }
       })
       const partner = await get(result.partnerId)
       return { ...result, customer: partner, vehicle: partner.vehicles.find((item) => item.id === result.vehicleId) }

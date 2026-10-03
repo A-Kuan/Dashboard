@@ -882,11 +882,21 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   }
   expect(selectedSku).toBeTruthy()
   const selectedFitment = selectedSku.fitments.find((fitment) => fitment.verificationStatus === 'verified' && fitment.platformMasterId)
-  const customerResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: {
+  const customerOnboardingPayload = {
     requestKey: 'quick-quote-customer-e2e-0001',
-    customer: { name: '快速报价闭环客户', phone: '13800000118', contactName: '陈师傅' },
+    customer: { name: '快速报价闭环客户', phone: '13800000118', taxId: '91330100QUICKQUOTE01', contactName: '陈师傅' },
     vehicle: { platformMasterId: selectedFitment.platformMasterId, vehicleLabel: selectedFitment.vehicleLabel, modelYear: selectedFitment.yearFrom || 2020, vin: 'WP1ZZZ95ZMLB11888' },
-  } })
+  }
+  const customerPreviewResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: customerOnboardingPayload })
+  expect(customerPreviewResponse.status()).toBe(200)
+  const customerPreview = await customerPreviewResponse.json()
+  expect(customerPreview.ready).toBe(true)
+  expect(customerPreview.action).toBe('create_customer')
+  expect(customerPreview.fingerprint).toMatch(/^[a-f0-9]{64}$/)
+  const missingPreviewResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: customerOnboardingPayload })
+  expect(missingPreviewResponse.status()).toBe(409)
+  expect((await missingPreviewResponse.json()).error).toBe('CUSTOMER_ONBOARDING_PREVIEW_REQUIRED')
+  const customerResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: { ...customerOnboardingPayload, previewFingerprint: customerPreview.fingerprint } })
   expect(customerResponse.status()).toBe(201)
   const onboarding = await customerResponse.json()
   expect(onboarding.createdPartner).toBe(true)
@@ -906,6 +916,9 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   const vinMatchedResponse = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: {
     requestKey: 'quick-quote-customer-e2e-0002', customer: { name: '重复车辆线索', phone: '13900000118' },
     vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11888' },
+    previewFingerprint: (await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+      customer: { name: '重复车辆线索', phone: '13900000118' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11888' },
+    } })).json()).fingerprint,
   } })
   expect(vinMatchedResponse.status()).toBe(201)
   const vinMatched = await vinMatchedResponse.json()
@@ -917,12 +930,60 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
     { requestKey: 'quick-quote-customer-concurrent-1', customer: { name: '并发首次客户', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11889' } },
     { requestKey: 'quick-quote-customer-concurrent-2', customer: { name: '并发首次客户', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11890' } },
   ]
-  const concurrentOnboardingResponses = await Promise.all(concurrentOnboardingPayloads.map((data) => page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data })))
-  expect(concurrentOnboardingResponses.every((response) => response.status() === 201)).toBeTruthy()
-  const concurrentOnboardings = await Promise.all(concurrentOnboardingResponses.map((response) => response.json()))
+  const concurrentPreviews = await Promise.all(concurrentOnboardingPayloads.map((data) => page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data }).then((response) => response.json())))
+  const concurrentOnboardingResponses = await Promise.all(concurrentOnboardingPayloads.map((data, index) => page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: { ...data, previewFingerprint: concurrentPreviews[index].fingerprint } })))
+  expect(concurrentOnboardingResponses.map((response) => response.status()).sort()).toEqual([201, 409])
+  const concurrentOnboardings = []
+  for (let index = 0; index < concurrentOnboardingResponses.length; index += 1) {
+    const response = concurrentOnboardingResponses[index]
+    const body = await response.json()
+    if (response.status() === 201) concurrentOnboardings.push(body)
+    else {
+      expect(body.error).toBe('CUSTOMER_ONBOARDING_PREVIEW_STALE')
+      const retry = await page.request.post('/api/v2/business/quick-quote/customer-onboarding', { headers: editorHeaders, data: { ...concurrentOnboardingPayloads[index], previewFingerprint: body.details.preflight.fingerprint } })
+      expect(retry.status()).toBe(201)
+      concurrentOnboardings.push(await retry.json())
+    }
+  }
   expect(new Set(concurrentOnboardings.map((item) => item.customer.id)).size).toBe(1)
   expect(concurrentOnboardings.filter((item) => item.createdPartner)).toHaveLength(1)
   expect(new Set(concurrentOnboardings.map((item) => item.vehicle.id)).size).toBe(2)
+  const taxReusePreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+    customer: { name: '税号复用线索', phone: '13600000118', taxId: '91330100QUICKQUOTE01' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11892' },
+  } })).json()
+  expect(taxReusePreview.ready).toBe(true)
+  expect(taxReusePreview.action).toBe('add_vehicle')
+  expect(taxReusePreview.matchedBy).toBe('tax_id')
+  expect(taxReusePreview.targetCustomer.id).toBe(customer.id)
+  const sharedPhonePartnerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
+    partnerType: 'customer', name: '共用联系电话客户', phone: '13800000119',
+  } })
+  expect(sharedPhonePartnerResponse.status()).toBe(201)
+  const sharedPhonePayload = { customer: { name: '共用电话新车', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11893' } }
+  const ambiguousPhonePreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: sharedPhonePayload })).json()
+  expect(ambiguousPhonePreview.ready).toBe(false)
+  expect(ambiguousPhonePreview.conflicts.map((item) => item.code)).toContain('duplicate_phone')
+  const selectedPhonePreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+    ...sharedPhonePayload, customerPartnerId: concurrentOnboardings[0].customer.id,
+  } })).json()
+  expect(selectedPhonePreview.ready).toBe(true)
+  expect(selectedPhonePreview.matchedBy).toBe('selected_customer')
+  expect(selectedPhonePreview.warnings.map((item) => item.code)).toContain('shared_phone_resolved_by_customer')
+  const sameNamePreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+    customer: { name: '快速报价闭环客户', phone: '13700000118' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11891' },
+  } })).json()
+  expect(sameNamePreview.ready).toBe(false)
+  expect(sameNamePreview.warnings.map((item) => item.code)).toContain('same_name_customer_review')
+  const confirmedSameNamePreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+    confirmCreateNewCustomer: true, customer: { name: '快速报价闭环客户', phone: '13700000118' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11891' },
+  } })).json()
+  expect(confirmedSameNamePreview.ready).toBe(true)
+  expect(confirmedSameNamePreview.action).toBe('create_customer')
+  const ownershipConflictPreview = await (await page.request.post('/api/v2/business/quick-quote/customer-onboarding/preview', { headers: editorHeaders, data: {
+    customer: { name: '车辆归属冲突', phone: '13800000119' }, vehicle: { platformMasterId: selectedFitment.platformMasterId, vin: 'WP1ZZZ95ZMLB11888' },
+  } })).json()
+  expect(ownershipConflictPreview.ready).toBe(false)
+  expect(ownershipConflictPreview.conflicts.map((item) => item.code)).toContain('input_phone_customer_conflict')
   const supplierResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
     partnerType: 'supplier', name: '快速报价采购供应商', phone: '057188801188',
     contacts: [{ name: '周经理', phone: '13700000118', isPrimary: true }],
