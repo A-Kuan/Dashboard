@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, businessOperationsRepository, businessControlsRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, businessOperationsRepository, businessMasterDataQualityRepository, businessControlsRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -133,6 +133,26 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       page: request.query?.page,
       pageSize: request.query?.pageSize,
     })
+  })
+  app.get('/api/v2/business/master-data-quality', async (request, reply) => {
+    if (!businessMasterDataQualityRepository) return reply.code(503).send({ error: 'BUSINESS_MASTER_DATA_QUALITY_UNAVAILABLE', message: '业务主数据质量服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessMasterDataQualityRepository.list({
+      kind: request.query?.kind,
+      status: request.query?.status,
+      severity: request.query?.severity,
+      query: request.query?.q,
+      page: request.query?.page,
+      pageSize: request.query?.pageSize,
+    })
+  })
+  app.post('/api/v2/business/master-data-quality/:issueKey/decisions', async (request, reply) => {
+    if (!businessMasterDataQualityRepository) return reply.code(503).send({ error: 'BUSINESS_MASTER_DATA_QUALITY_UNAVAILABLE', message: '业务主数据质量服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.data_quality.review')
+    if (!actor) return
+    const result = await businessMasterDataQualityRepository.decide(request.params.issueKey, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
   })
   app.get('/api/v2/business/controls', async (request, reply) => {
     if (!businessControlsRepository) return reply.code(503).send({ error: 'BUSINESS_CONTROLS_UNAVAILABLE', message: '业务控制规则服务未配置' })
