@@ -1,6 +1,7 @@
 const workItemKinds = new Set([
   'inquiry_follow_up',
   'quote_approval',
+  'quote_integrity',
   'quote_expiry',
   'sales_order',
   'purchase_order',
@@ -127,6 +128,43 @@ const workItemsCte = `WITH work_items AS (
   FROM business_quote q
   JOIN business_inquiry i ON i.id=q.inquiry_id
   WHERE q.state IN ('draft','accepted') AND q.approval_status='pending'
+
+  UNION ALL
+
+  SELECT
+    'quote-integrity:'||q.id,
+    'quote_integrity',
+    'quote',
+    q.id,
+    q.quote_no,
+    q.integrity_status,
+    '复核报价资料：'||i.customer_name,
+    i.customer_name,
+    i.customer_partner_id,
+    NULL::text,
+    i.assigned_to,
+    '车型、SKU 适配、货源或库存证据已变化，复核来源并在必要时创建修订版本',
+    'business.quote',
+    '/business/inquiries/'||i.id,
+    ((((q.updated_at AT TIME ZONE 'Asia/Shanghai')::date)+time '23:59:59') AT TIME ZONE 'Asia/Shanghai'),
+    q.total_amount,
+    q.currency,
+    jsonb_build_object(
+      'inquiryId',i.id,
+      'inquiryNo',i.inquiry_no,
+      'lineageId',q.lineage_id,
+      'versionNo',q.version_no,
+      'revision',q.revision,
+      'integrityReasons',q.integrity_reasons,
+      'integritySnapshot',q.integrity_snapshot,
+      'validatedAt',q.integrity_validated_at,
+      'validatedAction',q.integrity_validated_action
+    ),
+    q.updated_at,
+    -5
+  FROM business_quote q
+  JOIN business_inquiry i ON i.id=q.inquiry_id
+  WHERE q.state IN ('draft','accepted') AND q.integrity_status='blocked'
 
   UNION ALL
 

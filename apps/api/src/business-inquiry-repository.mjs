@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { evaluateQuoteRisk } from './business-quote-policy.mjs'
+import { evaluateAndRecordQuoteIntegrity } from './business-quote-integrity.mjs'
 
 const inquiryStatuses = new Set(['new', 'sourcing', 'quoting', 'quoted', 'follow_up', 'won', 'lost', 'cancelled'])
 const terminalStatuses = new Set(['won', 'lost', 'cancelled'])
@@ -107,7 +108,7 @@ function mapOffer(row) {
   return { id: row.id, inquiryId: row.inquiry_id, inquiryItemId: row.inquiry_item_id, supplierName: row.supplier_name, supplierPartnerId: row.supplier_partner_id, brandLabel: row.brand_label, unitPrice: Number(row.unit_price), freightAmount: Number(row.freight_amount), availability: row.availability, leadTimeDays: row.lead_time_days, validUntil: row.valid_until, sourceNote: row.source_note, selected: row.selected, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at }
 }
 function mapQuote(row) {
-  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, lineageId: row.lineage_id, versionNo: row.version_no, predecessorQuoteId: row.predecessor_quote_id, supersededByQuoteId: row.superseded_by_quote_id, changeReason: row.change_reason, state: row.state, creationMode: row.creation_mode, requestKey: row.request_key, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), marginRate: Number(row.margin_rate), approvalStatus: row.approval_status, riskReasons: row.risk_reasons || [], riskSnapshot: row.risk_snapshot || {}, approvalFingerprint: row.approval_fingerprint, approvedRevision: row.approved_revision, approvedById: row.approved_by_id, approvedByName: row.approved_by_name, approvedAt: row.approved_at, approvalNote: row.approval_note, note: row.note, sentAt: row.sent_at, supersededAt: row.superseded_at, acceptedAt: row.accepted_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, inquiryId: row.inquiry_id, quoteNo: row.quote_no, revision: row.revision, lineageId: row.lineage_id, versionNo: row.version_no, predecessorQuoteId: row.predecessor_quote_id, supersededByQuoteId: row.superseded_by_quote_id, changeReason: row.change_reason, state: row.state, creationMode: row.creation_mode, requestKey: row.request_key, currency: row.currency, validUntil: row.valid_until, subtotal: Number(row.subtotal), discountAmount: Number(row.discount_amount), freightAmount: Number(row.freight_amount), totalAmount: Number(row.total_amount), marginAmount: Number(row.margin_amount), marginRate: Number(row.margin_rate), approvalStatus: row.approval_status, riskReasons: row.risk_reasons || [], riskSnapshot: row.risk_snapshot || {}, approvalFingerprint: row.approval_fingerprint, approvedRevision: row.approved_revision, approvedById: row.approved_by_id, approvedByName: row.approved_by_name, approvedAt: row.approved_at, approvalNote: row.approval_note, integrityStatus: row.integrity_status, integrityReasons: row.integrity_reasons || [], integritySnapshot: row.integrity_snapshot || {}, integrityFingerprint: row.integrity_fingerprint, integrityValidatedAt: row.integrity_validated_at, integrityValidatedAction: row.integrity_validated_action, note: row.note, sentAt: row.sent_at, supersededAt: row.superseded_at, acceptedAt: row.accepted_at, createdById: row.created_by_id, createdByName: row.created_by_name, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 
 function quoteSnapshot(quote, items = []) {
@@ -164,7 +165,7 @@ export function createBusinessInquiryRepository(pool) {
       FROM business_inquiry i WHERE i.id=$1 OR i.inquiry_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!inquiryRow) return null
     const inquiry = mapInquiry(inquiryRow)
-    const [items, offers, quotes, quoteItems, events, approvalEvents, revisionEvents] = await Promise.all([
+    const [items, offers, quotes, quoteItems, events, approvalEvents, revisionEvents, integrityEvents] = await Promise.all([
       client.query('SELECT * FROM business_inquiry_item WHERE inquiry_id=$1 ORDER BY line_no', [inquiry.id]),
       client.query('SELECT * FROM business_supplier_offer WHERE inquiry_id=$1 ORDER BY inquiry_item_id,selected DESC,unit_price,created_at', [inquiry.id]),
       client.query('SELECT * FROM business_quote WHERE inquiry_id=$1 ORDER BY created_at DESC', [inquiry.id]),
@@ -172,12 +173,13 @@ export function createBusinessInquiryRepository(pool) {
       client.query('SELECT * FROM business_inquiry_event WHERE inquiry_id=$1 ORDER BY created_at DESC,id DESC', [inquiry.id]),
       client.query(`SELECT e.* FROM business_quote_approval_event e JOIN business_quote q ON q.id=e.quote_id WHERE q.inquiry_id=$1 ORDER BY e.created_at DESC,e.id DESC`, [inquiry.id]),
       client.query('SELECT * FROM business_quote_revision_event WHERE inquiry_id=$1 ORDER BY created_at DESC,id DESC', [inquiry.id]),
+      client.query(`SELECT e.* FROM business_quote_integrity_event e JOIN business_quote q ON q.id=e.quote_id WHERE q.inquiry_id=$1 ORDER BY e.created_at DESC,e.id DESC`, [inquiry.id]),
     ])
     const quoteItemRows = quoteItems.rows
     return {
       ...inquiry,
       items: items.rows.map((row) => ({ ...mapItem(row), offers: offers.rows.filter((offer) => offer.inquiry_item_id === row.id).map(mapOffer) })),
-      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, fulfillmentSource: item.fulfillment_source, fulfillmentWarehouseId: item.fulfillment_warehouse_id, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })), approvalEvents: approvalEvents.rows.filter((event) => event.quote_id === row.id).map((event) => ({ id: event.id, action: event.action, fromStatus: event.from_status, toStatus: event.to_status, actorId: event.actor_id, actorName: event.actor_name, note: event.note, riskReasons: event.risk_reasons, riskSnapshot: event.risk_snapshot, fingerprint: event.fingerprint, createdAt: event.created_at })) })),
+      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, fulfillmentSource: item.fulfillment_source, fulfillmentWarehouseId: item.fulfillment_warehouse_id, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })), approvalEvents: approvalEvents.rows.filter((event) => event.quote_id === row.id).map((event) => ({ id: event.id, action: event.action, fromStatus: event.from_status, toStatus: event.to_status, actorId: event.actor_id, actorName: event.actor_name, note: event.note, riskReasons: event.risk_reasons, riskSnapshot: event.risk_snapshot, fingerprint: event.fingerprint, createdAt: event.created_at })), integrityEvents: integrityEvents.rows.filter((event) => event.quote_id === row.id).map((event) => ({ id: event.id, action: event.action, result: event.result, fromStatus: event.from_status, toStatus: event.to_status, actorId: event.actor_id, actorName: event.actor_name, reasons: event.reasons, snapshot: event.snapshot, fingerprint: event.fingerprint, createdAt: event.created_at })) })),
       quoteRevisionEvents: revisionEvents.rows.map((event) => ({ id: event.id, lineageId: event.lineage_id, fromQuoteId: event.from_quote_id, toQuoteId: event.to_quote_id, action: event.action, actorId: event.actor_id, actorName: event.actor_name, reason: event.reason, beforeSnapshot: event.before_snapshot, afterSnapshot: event.after_snapshot, changeSet: event.change_set, createdAt: event.created_at })),
       events: events.rows.map((row) => ({ id: row.id, action: row.action, fromStatus: row.from_status, toStatus: row.to_status, actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, createdAt: row.created_at })),
     }
@@ -349,6 +351,7 @@ export function createBusinessInquiryRepository(pool) {
         }
         const createdQuote = (await client.query('SELECT * FROM business_quote WHERE id=$1', [quoteId])).rows[0]
         const createdItems = (await client.query('SELECT * FROM business_quote_item WHERE quote_id=$1 ORDER BY line_no', [quoteId])).rows
+        await evaluateAndRecordQuoteIntegrity(client, createdQuote, 'created', actor)
         await insertQuoteRevisionEvent(client, createdQuote, 'created', actor, { reason: clean(rawInput.note), afterSnapshot: quoteSnapshot(createdQuote, createdItems) })
         if (risk.required) await insertQuoteApprovalEvent(client, quoteId, 'requested', actor, { toStatus: 'pending', note: clean(rawInput.note), risk })
         await insertEvent(client, inquiryId, 'quick_quote_created', actor, { toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, requestKey: key, customerPartnerId: customer.id, customerVehicleId: vehicle.id, vehiclePlatformId: vehicle.platform_master_id, vehicleVariantId: vehicle.variant_master_id, itemCount: normalized.length, totalAmount } })
@@ -486,6 +489,7 @@ export function createBusinessInquiryRepository(pool) {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.fulfillmentSource, entry.fulfillmentWarehouse?.id || null, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
         const createdQuote = (await client.query('SELECT * FROM business_quote WHERE id=$1', [quoteId])).rows[0]
         const createdItems = (await client.query('SELECT * FROM business_quote_item WHERE quote_id=$1 ORDER BY line_no', [quoteId])).rows
+        await evaluateAndRecordQuoteIntegrity(client, createdQuote, 'created', actor)
         await insertQuoteRevisionEvent(client, createdQuote, 'created', actor, { reason: clean(rawInput.note), afterSnapshot: quoteSnapshot(createdQuote, createdItems) })
         await client.query(`UPDATE business_inquiry SET status='quoting',quote_amount=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [inquiryId, totalAmount, by.id, by.name])
         if (risk.required) await insertQuoteApprovalEvent(client, quoteId, 'requested', actor, { toStatus: 'pending', note: clean(rawInput.note), risk })
@@ -513,18 +517,54 @@ export function createBusinessInquiryRepository(pool) {
         if (!sourceItems.length) throw problem('QUOTE_ITEMS_NOT_FOUND', '报价单没有明细，不能修订', 409)
         const requested = Array.isArray(rawInput.items) ? rawInput.items : []
         if (requested.length && requested.length !== sourceItems.length) throw problem('INVALID_QUOTE_REVISION_ITEMS', '报价修订必须保留并覆盖原报价全部明细')
-        const normalized = sourceItems.map((item) => {
+        const liveVehicle = inquiry.customer_vehicle_id ? (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR SHARE', [inquiry.customer_vehicle_id, inquiry.customer_partner_id])).rows[0] : null
+        if (inquiry.customer_vehicle_id && !liveVehicle) throw problem('CUSTOMER_VEHICLE_UNAVAILABLE', '客户车辆已不存在或不再属于当前客户，不能修订报价', 409)
+        if (liveVehicle && (liveVehicle.platform_master_id !== inquiry.vehicle_platform_id || liveVehicle.variant_master_id !== inquiry.vehicle_variant_id || clean(liveVehicle.vin) !== clean(inquiry.vin))) {
+          await client.query(`UPDATE business_inquiry SET vehicle_label=$2,vin=$3,vehicle_platform_id=$4,vehicle_variant_id=$5,version=version+1,updated_at=now() WHERE id=$1`, [inquiry.id, liveVehicle.vehicle_label, liveVehicle.vin, liveVehicle.platform_master_id, liveVehicle.variant_master_id])
+          inquiry.vehicle_label = liveVehicle.vehicle_label; inquiry.vin = liveVehicle.vin; inquiry.vehicle_platform_id = liveVehicle.platform_master_id; inquiry.vehicle_variant_id = liveVehicle.variant_master_id
+        }
+        const revisionVehicle = liveVehicle || { platform_master_id: inquiry.vehicle_platform_id, variant_master_id: inquiry.vehicle_variant_id, engine_code: '', model_year: null }
+        const normalized = []
+        for (const item of sourceItems) {
           const override = requested.length ? requested.find((candidate) => clean(candidate.sourceQuoteItemId) === item.id || Number(candidate.lineNo) === item.line_no) : null
           if (requested.length && !override) throw problem('INVALID_QUOTE_REVISION_ITEMS', `第 ${item.line_no} 项缺少修订内容`)
           const nextQuantity = override && Object.hasOwn(override, 'quantity') ? quantity(override.quantity) : Number(item.quantity)
           const nextSalePrice = override && Object.hasOwn(override, 'saleUnitPrice') ? money(override.saleUnitPrice, `第 ${item.line_no} 项销售单价`) : Number(item.sale_unit_price)
-          const nextCostPrice = override && Object.hasOwn(override, 'costUnitPrice') ? money(override.costUnitPrice, `第 ${item.line_no} 项成本价`) : Number(item.cost_unit_price)
-          return {
-            source: item, id: randomUUID(), quantity: nextQuantity, saleUnitPrice: nextSalePrice, costUnitPrice: nextCostPrice,
+          const fulfillmentSource = clean(override?.fulfillmentSource) || item.fulfillment_source
+          if (!['stock', 'purchase'].includes(fulfillmentSource)) throw problem('INVALID_QUOTE_FULFILLMENT_SOURCE', `第 ${item.line_no} 项履约来源无效`)
+          let supplierOffer = null; let fulfillmentWarehouse = null
+          if (fulfillmentSource === 'purchase') {
+            const supplierOfferId = clean(override?.supplierOfferId) || (item.fulfillment_source === 'purchase' ? item.supplier_offer_id : '')
+            supplierOffer = supplierOfferId ? (await client.query(`SELECT *,(valid_until IS NOT NULL AND valid_until<(now() AT TIME ZONE 'Asia/Shanghai')::date) expired
+              FROM business_supplier_offer WHERE id=$1 AND inquiry_id=$2 AND inquiry_item_id=$3 FOR SHARE`, [supplierOfferId, inquiry.id, item.inquiry_item_id])).rows[0] : null
+            if (!supplierOffer) throw problem('QUOTE_SUPPLIER_SOURCE_REQUIRED', `第 ${item.line_no} 项修订为采购来源时必须选择有效供应商报价`)
+            if (supplierOffer.expired) throw problem('QUOTE_SUPPLIER_OFFER_EXPIRED', `第 ${item.line_no} 项供应商报价已过期，请选择新的货源`, 409, { supplierOfferId: supplierOffer.id, validUntil: supplierOffer.valid_until })
+          } else {
+            const warehouseId = clean(override?.fulfillmentWarehouseId) || (item.fulfillment_source === 'stock' ? item.fulfillment_warehouse_id : '')
+            fulfillmentWarehouse = warehouseId ? (await client.query("SELECT * FROM business_warehouse WHERE id=$1 AND status='active' FOR SHARE", [warehouseId])).rows[0] : null
+            if (!fulfillmentWarehouse) throw problem('QUOTE_WAREHOUSE_REQUIRED', `第 ${item.line_no} 项修订为现货来源时必须选择有效仓库`)
+            const available = Number((await client.query('SELECT COALESCE(on_hand_quantity-reserved_quantity,0)::numeric quantity FROM business_inventory_balance WHERE warehouse_id=$1 AND stock_key=$2', [fulfillmentWarehouse.id, businessStockKey(item)])).rows[0]?.quantity || 0)
+            if (available < nextQuantity) throw problem('QUOTE_STOCK_INSUFFICIENT', `第 ${item.line_no} 项所选仓库可用库存不足`, 409, { fulfillmentWarehouseId: fulfillmentWarehouse.id, requestedQuantity: nextQuantity, availableQuantity: available })
+          }
+          const nextCostPrice = supplierOffer ? Number(supplierOffer.unit_price) : override && Object.hasOwn(override, 'costUnitPrice') ? money(override.costUnitPrice, `第 ${item.line_no} 项成本价`) : Number(item.cost_unit_price)
+          let catalogSkuVersion = item.catalog_sku_version; let skuCodeSnapshot = item.sku_code_snapshot; let skuNameSnapshot = item.sku_name_snapshot; let brandSnapshot = item.brand_snapshot; let currentFitmentSnapshot = item.fitment_snapshot || {}
+          if (item.catalog_sku_id) {
+            const sku = (await client.query('SELECT * FROM catalog_sku WHERE id=$1 FOR SHARE', [item.catalog_sku_id])).rows[0]
+            if (!sku || sku.lifecycle_status !== 'verified' || sku.verification_level !== 'verified') throw problem('QUOTE_REVISION_SKU_UNAVAILABLE', `第 ${item.line_no} 项 SKU 已停用或不再是已核验状态`, 409, { catalogSkuId: item.catalog_sku_id })
+            catalogSkuVersion = sku.version; skuCodeSnapshot = sku.sku_code; skuNameSnapshot = sku.canonical_name_zh || sku.canonical_name_en; brandSnapshot = sku.brand_label || sku.brand_code
+            const fitments = (await client.query("SELECT * FROM catalog_fitment WHERE sku_id=$1 AND verification_status='verified' ORDER BY sort_order,created_at", [sku.id])).rows
+            const matchedFitment = fitments.find((candidate) => fitmentMatchesVehicle(candidate, revisionVehicle)) || null
+            const overrideReason = clean(override?.fitmentOverrideReason) || clean(item.fitment_snapshot?.overrideReason)
+            if (!matchedFitment && overrideReason.length < 8) throw problem('QUOTE_REVISION_FITMENT_REVIEW_REQUIRED', `第 ${item.line_no} 项 SKU 与当前客户车辆没有已核验适配，请停止或填写明确的人工复核原因`, 409, { catalogSkuId: sku.id, customerVehicleId: inquiry.customer_vehicle_id })
+            currentFitmentSnapshot = fitmentSnapshot(matchedFitment, { overridden: !matchedFitment, overrideReason })
+          }
+          normalized.push({
+            source: item, id: randomUUID(), quantity: nextQuantity, saleUnitPrice: nextSalePrice, costUnitPrice: nextCostPrice, fulfillmentSource, supplierOffer, fulfillmentWarehouse,
+            catalogSkuVersion, skuCodeSnapshot, skuNameSnapshot, brandSnapshot, fitmentSnapshot: currentFitmentSnapshot,
             description: override && Object.hasOwn(override, 'description') ? clean(override.description) || item.description : item.description,
             lineTotal: Math.round(nextQuantity * nextSalePrice * 100) / 100,
-          }
-        })
+          })
+        }
         const subtotal = Math.round(normalized.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100
         const discountAmount = Object.hasOwn(rawInput, 'discountAmount') ? money(rawInput.discountAmount, '优惠金额', { optional: true }) : Number(source.discount_amount)
         const freightAmount = Object.hasOwn(rawInput, 'freightAmount') ? money(rawInput.freightAmount, '报价运费', { optional: true }) : Number(source.freight_amount)
@@ -541,12 +581,13 @@ export function createBusinessInquiryRepository(pool) {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20,$21,$22,$23)`, [newQuoteId, source.inquiry_id, newQuoteNo, source.lineage_id, versionNo, source.id, reason, source.creation_mode, source.currency, validUntil, subtotal, discountAmount, freightAmount, totalAmount, marginAmount, risk.marginRate, risk.required ? 'pending' : 'not_required', JSON.stringify(risk.reasons), JSON.stringify(risk.snapshot), risk.fingerprint, Object.hasOwn(rawInput, 'note') ? clean(rawInput.note) : source.note, by.id, by.name])
         for (const item of normalized) await client.query(`INSERT INTO business_quote_item
           (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,fulfillment_warehouse_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, [item.id, newQuoteId, item.source.inquiry_item_id, item.source.supplier_offer_id, item.source.fulfillment_source, item.source.fulfillment_warehouse_id, item.source.catalog_sku_id, item.source.catalog_sku_version, item.source.sku_code_snapshot, item.source.sku_name_snapshot, item.source.brand_snapshot, JSON.stringify(item.source.fitment_snapshot || {}), item.source.line_no, item.description, item.source.oe_number, item.quantity, item.source.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, [item.id, newQuoteId, item.source.inquiry_item_id, item.supplierOffer?.id || null, item.fulfillmentSource, item.fulfillmentWarehouse?.id || null, item.source.catalog_sku_id, item.catalogSkuVersion, item.skuCodeSnapshot, item.skuNameSnapshot, item.brandSnapshot, JSON.stringify(item.fitmentSnapshot), item.source.line_no, item.description, item.source.oe_number, item.quantity, item.source.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
         await client.query("UPDATE business_quote SET state='superseded',superseded_by_quote_id=$2,superseded_at=now(),revision=revision+1,updated_at=now() WHERE id=$1", [source.id, newQuoteId])
         const createdQuote = (await client.query('SELECT * FROM business_quote WHERE id=$1', [newQuoteId])).rows[0]
         const createdItems = (await client.query('SELECT * FROM business_quote_item WHERE quote_id=$1 ORDER BY line_no', [newQuoteId])).rows
+        await evaluateAndRecordQuoteIntegrity(client, createdQuote, 'revised', actor)
         const beforeSnapshot = quoteSnapshot(source, sourceItems); const afterSnapshot = quoteSnapshot(createdQuote, createdItems)
-        const changeSet = { totalAmount: { from: Number(source.total_amount), to: totalAmount }, marginAmount: { from: Number(source.margin_amount), to: marginAmount }, validUntil: { from: source.valid_until, to: validUntil }, changedLines: normalized.filter((entry) => Number(entry.source.quantity) !== entry.quantity || Number(entry.source.sale_unit_price) !== entry.saleUnitPrice || Number(entry.source.cost_unit_price) !== entry.costUnitPrice || entry.source.description !== entry.description).map((entry) => entry.source.line_no) }
+        const changeSet = { totalAmount: { from: Number(source.total_amount), to: totalAmount }, marginAmount: { from: Number(source.margin_amount), to: marginAmount }, validUntil: { from: source.valid_until, to: validUntil }, changedLines: normalized.filter((entry) => Number(entry.source.quantity) !== entry.quantity || Number(entry.source.sale_unit_price) !== entry.saleUnitPrice || Number(entry.source.cost_unit_price) !== entry.costUnitPrice || entry.source.description !== entry.description || entry.source.fulfillment_source !== entry.fulfillmentSource || entry.source.supplier_offer_id !== (entry.supplierOffer?.id || null) || entry.source.fulfillment_warehouse_id !== (entry.fulfillmentWarehouse?.id || null) || Number(entry.source.catalog_sku_version) !== Number(entry.catalogSkuVersion) || JSON.stringify(entry.source.fitment_snapshot || {}) !== JSON.stringify(entry.fitmentSnapshot)).map((entry) => entry.source.line_no) }
         await insertQuoteRevisionEvent(client, createdQuote, 'revised', actor, { fromQuote: source, reason, beforeSnapshot, afterSnapshot, changeSet })
         if (risk.required) await insertQuoteApprovalEvent(client, newQuoteId, 'requested', actor, { toStatus: 'pending', note: reason, risk })
         await client.query(`UPDATE business_inquiry SET status='quoting',quote_amount=$2,next_action='复核并发送修订报价',version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [inquiry.id, totalAmount, by.id, by.name])
@@ -577,6 +618,8 @@ export function createBusinessInquiryRepository(pool) {
           await insertQuoteRevisionEvent(client, expiredQuote, 'expired', actor, { fromQuote: quote, reason: '报价有效期已过', beforeSnapshot: quoteSnapshot(quote, quoteItems), afterSnapshot: quoteSnapshot(expiredQuote, quoteItems) })
           return { blocked: false, expired: true, validUntil: quote.valid_until }
         }
+        const integrity = await evaluateAndRecordQuoteIntegrity(client, quote, 'send', actor, { incrementRevisionWhenBlocked: true })
+        if (integrity.status === 'blocked') return { blocked: false, integrityBlocked: true, integrity }
         const risk = await evaluateQuoteRisk(client, { customerPartnerId: inquiry.customer_partner_id, currency: quote.currency, totalAmount: quote.total_amount, marginAmount: quote.margin_amount })
         if (risk.required && (quote.approval_status !== 'approved' || quote.approval_fingerprint !== risk.fingerprint)) {
           const changed = quote.approval_status !== 'pending' || quote.approval_fingerprint !== risk.fingerprint
@@ -607,6 +650,7 @@ export function createBusinessInquiryRepository(pool) {
         return { blocked: false }
       })
       if (outcome.expired) throw problem('QUOTE_EXPIRED', '报价有效期已过，请先创建修订版本', 409, { validUntil: outcome.validUntil })
+      if (outcome.integrityBlocked) throw problem('QUOTE_INTEGRITY_BLOCKED', '车型、SKU 适配、货源或库存证据已变化，请复核并在必要时修订报价', 409, { currentRevision: outcome.integrity.currentRevision, integrityReasons: outcome.integrity.reasons, integritySnapshot: outcome.integrity.snapshot })
       if (outcome.blocked) throw problem('QUOTE_APPROVAL_REQUIRED', '报价触发毛利或信用额度风控，需独立审批后才能发送', 409, { currentRevision: outcome.currentRevision, riskReasons: outcome.risk.reasons, riskSnapshot: outcome.risk.snapshot })
       return get(inquiryId)
     },
@@ -637,7 +681,7 @@ export function createBusinessInquiryRepository(pool) {
     async transition(id, rawInput = {}, actor) {
       const nextStatus = clean(rawInput?.status)
       if (!inquiryStatuses.has(nextStatus)) throw problem('INVALID_INQUIRY_STATUS', '询价状态无效')
-      await withTransaction(pool, async (client) => {
+      const outcome = await withTransaction(pool, async (client) => {
         const inquiry = (await client.query('SELECT * FROM business_inquiry WHERE id=$1 FOR UPDATE', [id])).rows[0]
         if (!inquiry) throw problem('INQUIRY_NOT_FOUND', '询价不存在', 404)
         if (Number(rawInput?.expectedVersion) !== inquiry.version) throw problem('INQUIRY_VERSION_CONFLICT', '询价已被其他操作更新，请刷新后重试', 409, { currentVersion: inquiry.version })
@@ -651,6 +695,10 @@ export function createBusinessInquiryRepository(pool) {
           if (clean(rawInput.quoteId) && clean(rawInput.quoteId) !== decidedQuote.id) throw problem('QUOTE_NOT_LATEST', '只能确认当前最新已发送报价', 409, { latestQuoteId: decidedQuote.id })
           const expired = Boolean((await client.query("SELECT valid_until IS NOT NULL AND valid_until<(now() AT TIME ZONE 'Asia/Shanghai')::date expired FROM business_quote WHERE id=$1", [decidedQuote.id])).rows[0].expired)
           if (expired) throw problem('QUOTE_EXPIRED', '最新报价已过有效期，请先创建修订版本', 409, { quoteId: decidedQuote.id, validUntil: decidedQuote.valid_until })
+          if (nextStatus === 'won') {
+            const integrity = await evaluateAndRecordQuoteIntegrity(client, decidedQuote, 'decision', actor, { incrementRevisionWhenBlocked: true })
+            if (integrity.status === 'blocked') return { integrityBlocked: true, integrity }
+          }
         }
         await client.query(`UPDATE business_inquiry SET status=$2,next_action=$3,next_action_at=$4,version=version+1,updated_by_id=$5,updated_by_name=$6,updated_at=now() WHERE id=$1`, [id, nextStatus, clean(rawInput.nextAction), nextActionAt, by.id, by.name])
         if (decidedQuote) {
@@ -662,6 +710,7 @@ export function createBusinessInquiryRepository(pool) {
         }
         await insertEvent(client, id, 'status_changed', actor, { fromStatus: inquiry.status, toStatus: nextStatus, note: clean(rawInput.note), snapshot: { nextAction: clean(rawInput.nextAction), nextActionAt, quoteId: decidedQuote?.id || '' } })
       })
+      if (outcome?.integrityBlocked) throw problem('QUOTE_INTEGRITY_BLOCKED', '车型、SKU 适配、货源或库存证据已变化，请复核并在必要时修订报价后再确认成交', 409, { currentRevision: outcome.integrity.currentRevision, integrityReasons: outcome.integrity.reasons, integritySnapshot: outcome.integrity.snapshot })
       return get(id)
     },
   }
