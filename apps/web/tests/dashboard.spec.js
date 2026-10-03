@@ -1000,6 +1000,16 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(conversion.salesOrder.items[0].fulfillmentSource).toBe('purchase')
   expect(conversion.purchaseOrders).toHaveLength(1)
   expect(conversion.purchaseOrders[0].supplierPartnerId).toBe(supplier.id)
+  expect(conversion.salesOrder.receivable.status).toBe('open')
+  const depositResponse = await page.request.post(`/api/v2/business/receivables/${conversion.salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'quick-quote-deposit-e2e', amount: 100, paymentMethod: 'wechat', note: '客户订金',
+  } })
+  expect(depositResponse.status()).toBe(201)
+  const cancelPaidOrderResponse = await page.request.post(`/api/v2/business/sales-orders/${conversion.salesOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: conversion.salesOrder.version, status: 'cancelled', note: '不应越过退款处理',
+  } })
+  expect(cancelPaidOrderResponse.status()).toBe(409)
+  expect((await cancelPaidOrderResponse.json()).error).toBe('RECEIVABLE_HAS_PAYMENTS')
 })
 
 test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
@@ -1321,6 +1331,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(cancelledStockOrderResponse.ok()).toBeTruthy()
   const cancelledStockOrder = await cancelledStockOrderResponse.json()
   expect(cancelledStockOrder.status).toBe('cancelled')
+  expect(cancelledStockOrder.receivable.status).toBe('void')
   expect(cancelledStockOrder.stockReservations[0].status).toBe('released')
   expect(cancelledStockOrder.events.map((event) => event.action)).toContain('stock_reservations_released')
   const balancesAfterAutomaticRelease = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
@@ -1388,6 +1399,40 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(purchaseListResponse.ok()).toBeTruthy()
   expect((await purchaseListResponse.json()).items.map((order) => order.id)).toContain(purchaseOrder.id)
 
+  expect(salesOrder.receivable.originalAmount).toBe(3200)
+  expect(salesOrder.receivable.status).toBe('open')
+  const partialPaymentResponse = await page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-payment-first', amount: 1000, paymentMethod: 'bank_transfer', referenceNo: 'BANK-20261003-001', note: '客户首笔转账',
+  } })
+  expect(partialPaymentResponse.status()).toBe(201)
+  const partialPayment = await partialPaymentResponse.json()
+  expect(partialPayment.receivable.status).toBe('partial')
+  expect(partialPayment.receivable.paidAmount).toBe(1000)
+  expect(partialPayment.receivable.outstandingAmount).toBe(2200)
+  const repeatedPaymentResponse = await page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-payment-first', amount: 9999, paymentMethod: 'cash',
+  } })
+  expect(repeatedPaymentResponse.status()).toBe(200)
+  expect((await repeatedPaymentResponse.json()).receivable.paidAmount).toBe(1000)
+  const finalPaymentPayload = { requestKey: 'e2e-payment-final', amount: 2200, paymentMethod: 'wechat', note: '客户结清尾款' }
+  const concurrentPaymentResponses = await Promise.all([
+    page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: finalPaymentPayload }),
+    page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: finalPaymentPayload }),
+  ])
+  expect(concurrentPaymentResponses.map((response) => response.status()).sort()).toEqual([200, 201])
+  const finalReceivable = await (await page.request.get(`/api/v2/business/receivables/${salesOrder.receivable.id}`, { headers: editorHeaders })).json()
+  expect(finalReceivable.status).toBe('paid')
+  expect(finalReceivable.paidAmount).toBe(3200)
+  expect(finalReceivable.outstandingAmount).toBe(0)
+  expect(finalReceivable.payments).toHaveLength(2)
+  const overpaymentResponse = await page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-payment-over', amount: 1, paymentMethod: 'cash',
+  } })
+  expect(overpaymentResponse.status()).toBe(409)
+  expect((await overpaymentResponse.json()).error).toBe('PAYMENT_EXCEEDS_OUTSTANDING')
+  const receivableList = await (await page.request.get(`/api/v2/business/receivables?customerPartnerId=${customer.id}`, { headers: editorHeaders })).json()
+  expect(receivableList.items.map((item) => item.id)).toContain(finalReceivable.id)
+
   const customer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
   expect(customer360Response.ok()).toBeTruthy()
   const customer360 = await customer360Response.json()
@@ -1397,7 +1442,9 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(customer360.summary.completedSalesOrderCount).toBeGreaterThanOrEqual(1)
   expect(customer360.summary.completedSalesAmount).toBeGreaterThanOrEqual(3200)
   expect(customer360.summary.shipmentCount).toBeGreaterThanOrEqual(2)
-  expect(customer360.timeline.items.map((item) => item.entityType)).toEqual(expect.arrayContaining(['inquiry', 'sales_order', 'purchase_order', 'goods_receipt', 'shipment']))
+  expect(customer360.summary.collectedAmount).toBe(3200)
+  expect(customer360.summary.outstandingAmount).toBe(0)
+  expect(customer360.timeline.items.map((item) => item.entityType)).toEqual(expect.arrayContaining(['inquiry', 'sales_order', 'purchase_order', 'goods_receipt', 'shipment', 'receivable']))
   const timelinePageResponse = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=12`, { headers: editorHeaders })
   const timelinePage = await timelinePageResponse.json()
   expect(timelinePage.timeline.items).toHaveLength(12)

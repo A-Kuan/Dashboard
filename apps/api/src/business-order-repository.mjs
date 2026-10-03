@@ -61,6 +61,7 @@ function mapSalesOrder(row) {
     notes: row.notes, version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
     updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
     itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count), stockReservationCount: number(row.stock_reservation_count),
+    receivable: row.receivable_id ? { id: row.receivable_id, receivableNo: row.receivable_no, status: row.receivable_status, originalAmount: number(row.receivable_original_amount), paidAmount: number(row.receivable_paid_amount), outstandingAmount: Math.round((number(row.receivable_original_amount) - number(row.receivable_paid_amount)) * 100) / 100, dueAt: row.receivable_due_at, version: row.receivable_version } : null,
   }
 }
 function mapSalesItem(row) {
@@ -107,6 +108,13 @@ async function insertEvent(client, orderType, orderId, action, actor, { fromStat
     randomUUID(), orderType, orderType === 'sales' ? orderId : null, orderType === 'purchase' ? orderId : null,
     action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot),
   ])
+}
+
+async function insertReceivableEvent(client, receivableId, action, actor, { fromStatus = '', toStatus = '', note = '', snapshot = {} } = {}) {
+  const by = actorDetails(actor)
+  await client.query(`INSERT INTO business_receivable_event
+    (id,receivable_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), receivableId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
 }
 
 async function insertInventoryMovement(client, { warehouseId, stockKey, lotId, type, reservedDelta, referenceId, actor, note = '', snapshot = {} }) {
@@ -181,8 +189,11 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_sales_order_item x WHERE x.sales_order_id=so.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
-      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count
-      FROM business_sales_order so WHERE so.id=$1 OR so.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
+      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
+      r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
+      r.paid_amount receivable_paid_amount,r.due_at receivable_due_at,r.version receivable_version
+      FROM business_sales_order so LEFT JOIN business_receivable r ON r.sales_order_id=so.id
+      WHERE so.id=$1 OR so.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
     const [items, purchaseOrders, stockReservations, events] = await Promise.all([
       client.query('SELECT * FROM business_sales_order_item WHERE sales_order_id=$1 ORDER BY line_no', [row.id]),
@@ -224,8 +235,11 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_sales_order_item x WHERE x.sales_order_id=so.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id) purchase_order_count,
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
-      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count
-      FROM business_sales_order so ${clause} ORDER BY so.updated_at DESC,so.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
+      (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
+      r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
+      r.paid_amount receivable_paid_amount,r.due_at receivable_due_at,r.version receivable_version
+      FROM business_sales_order so LEFT JOIN business_receivable r ON r.sales_order_id=so.id ${clause}
+      ORDER BY so.updated_at DESC,so.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
     const summaryRows = (await pool.query('SELECT status,count(*)::int count,COALESCE(sum(total_amount),0)::numeric amount FROM business_sales_order GROUP BY status')).rows
     return { items: rows.map(mapSalesOrder), total, page: currentPage, pageSize: size, summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), amount: number(item.amount) }])) }
   }
@@ -297,6 +311,12 @@ export function createBusinessOrderRepository(pool) {
         inquiry.contact_phone, inquiry.customer_vehicle_id, inquiry.vehicle_label, inquiry.vin, quote.currency, quote.subtotal,
         quote.discount_amount, quote.freight_amount, quote.total_amount, quote.note, by.id, by.name,
       ])
+      const paymentTermsDays = inquiry.customer_partner_id ? number((await client.query('SELECT payment_terms_days FROM business_partner WHERE id=$1', [inquiry.customer_partner_id])).rows[0]?.payment_terms_days) : 0
+      const receivableId = randomUUID(); const receivableNo = generatedNumber('AR'); const receivableStatus = number(quote.total_amount) === 0 ? 'paid' : 'open'; const dueAt = futureDate(paymentTermsDays)
+      await client.query(`INSERT INTO business_receivable
+        (id,receivable_no,sales_order_id,customer_partner_id,customer_name,status,currency,original_amount,paid_amount,payment_terms_days,due_at,created_by_id,created_by_name,updated_by_id,updated_by_name)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10,$11,$12,$11,$12)`, [receivableId, receivableNo, salesOrderId, inquiry.customer_partner_id, inquiry.customer_name, receivableStatus, quote.currency, quote.total_amount, paymentTermsDays, dueAt, by.id, by.name])
+      await insertReceivableEvent(client, receivableId, 'created_from_sales_order', actor, { toStatus: receivableStatus, snapshot: { salesOrderId, salesOrderNo, originalAmount: number(quote.total_amount), paymentTermsDays, dueAt } })
       const stockReservationEntries = []
       for (const item of quoteItems) {
         const salesOrderItemId = randomUUID()
@@ -367,12 +387,18 @@ export function createBusinessOrderRepository(pool) {
         if (received > 0) throw problem('ORDER_HAS_RECEIPTS', '已有到货记录的订单不能直接取消，请先处理退货', 409)
         const shipped = number((await client.query('SELECT COALESCE(sum(si.quantity),0) quantity FROM business_shipment_item si JOIN business_shipment s ON s.id=si.shipment_id WHERE s.sales_order_id=$1', [order.id])).rows[0]?.quantity)
         if (shipped > 0) throw problem('ORDER_HAS_SHIPMENTS', '已有出库记录的订单不能直接取消，请先处理退货', 409)
+        const receivable = (await client.query('SELECT * FROM business_receivable WHERE sales_order_id=$1 FOR UPDATE', [order.id])).rows[0]
+        if (receivable && number(receivable.paid_amount) > 0) throw problem('RECEIVABLE_HAS_PAYMENTS', '订单已有收款，不能直接取消，请先处理退款或冲销', 409, { receivableId: receivable.id, paidAmount: number(receivable.paid_amount) })
         for (const purchase of purchaseRows.filter((item) => item.status !== 'cancelled')) {
           await client.query("UPDATE business_purchase_order SET status='cancelled',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [purchase.id, actorDetails(actor).id, actorDetails(actor).name])
           await insertEvent(client, 'purchase', purchase.id, 'cancelled_with_sales_order', actor, { fromStatus: purchase.status, toStatus: 'cancelled', note: clean(rawInput.note) })
         }
         const releasedReservationIds = await releaseActiveStockReservations(client, order.id, actor, clean(rawInput.note) || '销售订单取消，自动释放库存')
         if (releasedReservationIds.length) await insertEvent(client, 'sales', order.id, 'stock_reservations_released', actor, { fromStatus: order.status, toStatus: order.status, note: clean(rawInput.note), snapshot: { releasedReservationIds } })
+        if (receivable && receivable.status !== 'void') {
+          await client.query("UPDATE business_receivable SET status='void',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [receivable.id, actorDetails(actor).id, actorDetails(actor).name])
+          await insertReceivableEvent(client, receivable.id, 'voided_with_sales_order', actor, { fromStatus: receivable.status, toStatus: 'void', note: clean(rawInput.note), snapshot: { salesOrderId: order.id } })
+        }
       }
       const by = actorDetails(actor)
       await client.query('UPDATE business_sales_order SET status=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [order.id, nextStatus, by.id, by.name])
