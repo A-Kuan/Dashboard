@@ -9,6 +9,12 @@ function problem(errorCode, message, statusCode = 400, details) {
   return Object.assign(new Error(message), { errorCode, statusCode, ...(details ? { details } : {}) })
 }
 function actorDetails(actor) { return { id: clean(actor?.id), name: clean(actor?.name) || '系统操作员' } }
+function requestKey(value) {
+  const normalized = clean(value)
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/.test(normalized)) throw problem('INVALID_REQUEST_KEY', 'requestKey 必须是 1 至 128 位安全字符')
+  return normalized
+}
+function phoneDigits(value) { return clean(value).replace(/\D/g, '') }
 function money(value, label) {
   const number = Number(value ?? 0)
   if (!Number.isFinite(number) || number < 0) throw problem('INVALID_PARTNER_AMOUNT', `${label}必须是大于等于 0 的金额`)
@@ -155,6 +161,84 @@ export function createBusinessPartnerRepository(pool) {
     },
 
     get,
+
+    async onboardQuickQuoteCustomer(rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey)
+      const customerInput = normalizeBusinessPartnerInput({ ...(rawInput.customer || {}), partnerType: 'customer' })
+      const customerPhone = phoneDigits(customerInput.phone)
+      if (customerPhone.length < 7) throw problem('QUICK_QUOTE_CUSTOMER_PHONE_REQUIRED', '首次快速报价建档需要有效联系电话')
+      const contact = clean(rawInput.customer?.contactName) ? normalizeContact({
+        name: rawInput.customer.contactName,
+        roleTitle: rawInput.customer.contactRoleTitle,
+        phone: rawInput.customer.contactPhone || customerInput.phone,
+        wechat: rawInput.customer.wechat,
+        email: rawInput.customer.contactEmail,
+        isPrimary: true,
+      }) : null
+      const vehicleDraft = normalizeVehicle(rawInput.vehicle || {})
+      const result = await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-onboarding:${key}`])
+        const existingRequest = (await client.query('SELECT * FROM business_customer_onboarding_request WHERE request_key=$1', [key])).rows[0]
+        if (existingRequest) return { partnerId: existingRequest.partner_id, vehicleId: existingRequest.customer_vehicle_id, createdPartner: existingRequest.created_partner, createdVehicle: existingRequest.created_vehicle, matchedBy: existingRequest.matched_by, created: false }
+        const vehicle = await resolveVehicleMaster(client, vehicleDraft)
+        if (!vehicle.platformMasterId) throw problem('CUSTOMER_VEHICLE_NOT_STANDARDIZED', '首次快速报价车辆必须关联标准车型平台', 409)
+        const identities = [`phone:${customerPhone}`]
+        if (vehicle.vin) identities.push(`vin:${vehicle.vin}`)
+        else if (vehicle.licensePlate) identities.push(`plate:${vehicle.licensePlate}`)
+        for (const identity of identities.sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-identity:${identity}`])
+
+        let partner = null; let customerVehicle = null; let matchedBy = 'created'; let createdPartner = false; let createdVehicle = false
+        if (vehicle.vin) {
+          const match = (await client.query(`SELECT v.*,p.partner_type,p.status partner_status FROM business_customer_vehicle v
+            JOIN business_partner p ON p.id=v.partner_id WHERE v.vin=$1 FOR UPDATE OF v,p`, [vehicle.vin])).rows[0]
+          if (match) { customerVehicle = match; partner = match; matchedBy = 'vin' }
+        }
+        if (!customerVehicle && vehicle.licensePlate) {
+          const matches = (await client.query(`SELECT v.*,p.partner_type,p.status partner_status FROM business_customer_vehicle v
+            JOIN business_partner p ON p.id=v.partner_id WHERE upper(v.license_plate)=upper($1) FOR UPDATE OF v,p`, [vehicle.licensePlate])).rows
+          if (matches.length > 1) throw problem('CUSTOMER_VEHICLE_MATCH_AMBIGUOUS', '该车牌关联了多条客户车辆，请先整理客户资料', 409, { vehicleIds: matches.map((item) => item.id) })
+          if (matches.length === 1) { customerVehicle = matches[0]; partner = matches[0]; matchedBy = 'license_plate' }
+        }
+        if (customerVehicle) {
+          if (!['customer', 'both'].includes(partner.partner_type) || partner.partner_status !== 'active') throw problem('QUICK_QUOTE_CUSTOMER_UNAVAILABLE', '匹配到的客户当前不可用于快速报价', 409, { partnerId: partner.partner_id })
+          if (customerVehicle.platform_master_id !== vehicle.platformMasterId || (vehicle.variantMasterId && customerVehicle.variant_master_id !== vehicle.variantMasterId)) throw problem('CUSTOMER_VEHICLE_MASTER_CONFLICT', 'VIN 或车牌已建档，但关联的标准车型不同，请先复核车辆资料', 409, { partnerId: partner.partner_id, customerVehicleId: customerVehicle.id })
+          partner = { id: partner.partner_id }
+        } else {
+          const candidates = (await client.query(`SELECT p.* FROM business_partner p
+            WHERE p.partner_type IN ('customer','both') AND (regexp_replace(p.phone,'[^0-9]','','g')=$1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND regexp_replace(c.phone,'[^0-9]','','g')=$1))
+            ORDER BY p.updated_at DESC FOR UPDATE OF p`, [customerPhone])).rows
+          if (candidates.length > 1) throw problem('QUICK_QUOTE_CUSTOMER_MATCH_AMBIGUOUS', '该联系电话匹配多个客户，请先选择或合并客户资料', 409, { partnerIds: candidates.map((item) => item.id) })
+          if (candidates.length === 1) {
+            partner = candidates[0]; matchedBy = 'phone'
+            if (partner.status !== 'active') throw problem('QUICK_QUOTE_CUSTOMER_UNAVAILABLE', '联系电话匹配到的客户当前不可用', 409, { partnerId: partner.id })
+          } else {
+            const by = actorDetails(actor); const partnerNo = generatedNumber(); partner = { id: randomUUID() }
+            await client.query(`INSERT INTO business_partner (id,partner_no,partner_type,name,short_name,tax_id,phone,email,address,status,payment_terms_days,credit_limit,notes,created_by_id,created_by_name,updated_by_id,updated_by_name)
+              VALUES ($1,$2,'customer',$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,$12,$13,$12,$13)`, [partner.id, partnerNo, customerInput.name, customerInput.shortName, customerInput.taxId, customerInput.phone, customerInput.email, customerInput.address, customerInput.paymentTermsDays, customerInput.creditLimit, customerInput.notes, by.id, by.name])
+            if (contact) await client.query(`INSERT INTO business_partner_contact (id,partner_id,name,role_title,phone,wechat,email,is_primary,notes)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)`, [randomUUID(), partner.id, contact.name, contact.roleTitle, contact.phone, contact.wechat, contact.email, contact.notes])
+            await insertEvent(client, partner.id, 'quick_quote_customer_created', actor, { partnerNo, requestKey: key, phone: customerInput.phone }, customerInput.notes)
+            createdPartner = true
+          }
+          customerVehicle = { id: randomUUID() }
+          await client.query(`INSERT INTO business_customer_vehicle (id,partner_id,vehicle_label,vin,license_plate,platform_code,platform_master_id,variant_master_id,engine_code,model_year,notes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [customerVehicle.id, partner.id, vehicle.vehicleLabel, vehicle.vin, vehicle.licensePlate, vehicle.platformCode, vehicle.platformMasterId, vehicle.variantMasterId, vehicle.engineCode, vehicle.modelYear, vehicle.notes])
+          if (!createdPartner) {
+            const by = actorDetails(actor)
+            await client.query('UPDATE business_partner SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1', [partner.id, by.id, by.name])
+          }
+          await insertEvent(client, partner.id, 'quick_quote_vehicle_added', actor, { vehicleId: customerVehicle.id, requestKey: key, matchedBy, vin: vehicle.vin, licensePlate: vehicle.licensePlate, platformMasterId: vehicle.platformMasterId, variantMasterId: vehicle.variantMasterId })
+          createdVehicle = true
+        }
+        const by = actorDetails(actor)
+        await client.query(`INSERT INTO business_customer_onboarding_request
+          (request_key,partner_id,customer_vehicle_id,created_partner,created_vehicle,matched_by,actor_id,actor_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [key, partner.id, customerVehicle.id, createdPartner, createdVehicle, matchedBy, by.id, by.name])
+        return { partnerId: partner.id, vehicleId: customerVehicle.id, createdPartner, createdVehicle, matchedBy, created: true }
+      })
+      const partner = await get(result.partnerId)
+      return { ...result, customer: partner, vehicle: partner.vehicles.find((item) => item.id === result.vehicleId) }
+    },
 
     async create(rawInput = {}, actor) {
       const input = normalizeBusinessPartnerInput(rawInput); const contacts = Array.isArray(rawInput.contacts) ? rawInput.contacts.map(normalizeContact) : []; const vehicles = Array.isArray(rawInput.vehicles) ? rawInput.vehicles.map(normalizeVehicle) : []
