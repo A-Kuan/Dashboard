@@ -284,6 +284,26 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const result = await businessFinanceRepository.recordPayment(request.params.id, request.body, actor)
     return reply.code(result.created ? 201 : 200).send(result)
   })
+  app.get('/api/v2/business/payables', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应付与付款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessFinanceRepository.listPayables({ query: request.query?.q, status: request.query?.status, supplierPartnerId: request.query?.supplierPartnerId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/payables/:id', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应付与付款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const payable = await businessFinanceRepository.getPayable(request.params.id)
+    return payable || reply.code(404).send({ error: 'PAYABLE_NOT_FOUND', message: '应付单不存在' })
+  })
+  app.post('/api/v2/business/payables/:id/payments', async (request, reply) => {
+    if (!businessFinanceRepository) return reply.code(503).send({ error: 'BUSINESS_FINANCE_UNAVAILABLE', message: '应付与付款服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.finance')
+    if (!actor) return
+    const result = await businessFinanceRepository.recordSupplierPayment(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
   app.get('/api/v2/business/after-sales', async (request, reply) => {
     if (!businessAfterSalesRepository) return reply.code(503).send({ error: 'BUSINESS_AFTER_SALES_UNAVAILABLE', message: '售后服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.read')

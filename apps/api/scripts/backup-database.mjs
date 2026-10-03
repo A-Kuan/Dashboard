@@ -39,6 +39,10 @@ try {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
+  for (const table of ['business_payable', 'business_supplier_payment', 'business_payable_event']) {
+    const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
+    counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
+  }
   if (counts.schema_migration) schemaMigrations = (await pool.query('SELECT filename,checksum,applied_at FROM schema_migration ORDER BY filename')).rows
 } finally {
   await pool.end()

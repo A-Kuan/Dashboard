@@ -52,6 +52,9 @@ function orderStockKey(row) {
 }
 
 function mapSalesOrder(row) {
+  const netSalesAmount = number(row.net_sales_amount)
+  const realizedCostAmount = number(row.realized_cost_amount)
+  const realizedGrossProfit = Math.round((netSalesAmount - realizedCostAmount) * 100) / 100
   return {
     id: row.id, orderNo: row.order_no, inquiryId: row.inquiry_id, quoteId: row.quote_id,
     customerPartnerId: row.customer_partner_id, customerName: row.customer_name, contactName: row.contact_name,
@@ -61,6 +64,15 @@ function mapSalesOrder(row) {
     notes: row.notes, version: row.version, createdById: row.created_by_id, createdByName: row.created_by_name,
     updatedById: row.updated_by_id, updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
     itemCount: number(row.item_count), purchaseOrderCount: number(row.purchase_order_count), receivedPurchaseOrderCount: number(row.received_purchase_order_count), stockReservationCount: number(row.stock_reservation_count), afterSalesCount: number(row.after_sales_count),
+    profitability: {
+      netSalesAmount,
+      realizedCostAmount,
+      realizedGrossProfit,
+      realizedGrossMarginRate: netSalesAmount > 0 ? Math.round(realizedGrossProfit / netSalesAmount * 10000) / 100 : null,
+      supplierPayableAmount: number(row.supplier_payable_amount),
+      supplierPaidAmount: number(row.supplier_paid_amount),
+      supplierOutstandingAmount: Math.max(0, Math.round((number(row.supplier_payable_amount) - number(row.supplier_paid_amount)) * 100) / 100),
+    },
     receivable: row.receivable_id ? (() => {
       const originalAmount = number(row.receivable_original_amount); const creditedAmount = number(row.receivable_credited_amount)
       const paidAmount = number(row.receivable_paid_amount); const refundedAmount = number(row.receivable_refunded_amount)
@@ -86,6 +98,7 @@ function mapPurchaseOrder(row) {
     createdById: row.created_by_id, createdByName: row.created_by_name, updatedById: row.updated_by_id,
     updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
     itemCount: number(row.item_count), receivedItemCount: number(row.received_item_count),
+    payable: row.payable_id ? { id: row.payable_id, payableNo: row.payable_no, status: row.payable_status, originalAmount: number(row.payable_original_amount), paidAmount: number(row.payable_paid_amount), outstandingAmount: Math.max(0, Math.round((number(row.payable_original_amount) - number(row.payable_paid_amount)) * 100) / 100), dueAt: row.payable_due_at, version: row.payable_version } : null,
   }
 }
 function mapPurchaseItem(row) {
@@ -121,6 +134,13 @@ async function insertReceivableEvent(client, receivableId, action, actor, { from
   await client.query(`INSERT INTO business_receivable_event
     (id,receivable_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), receivableId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
+}
+
+async function insertPayableEvent(client, payableId, action, actor, { fromStatus = '', toStatus = '', note = '', snapshot = {} } = {}) {
+  const by = actorDetails(actor)
+  await client.query(`INSERT INTO business_payable_event
+    (id,payable_id,action,from_status,to_status,actor_id,actor_name,note,snapshot)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [randomUUID(), payableId, action, fromStatus, toStatus, by.id, by.name, clean(note), JSON.stringify(snapshot)])
 }
 
 async function insertInventoryMovement(client, { warehouseId, stockKey, lotId, type, reservedDelta, referenceId, actor, note = '', snapshot = {} }) {
@@ -197,6 +217,11 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
       (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
       (SELECT count(*)::int FROM business_after_sales_case x WHERE x.sales_order_id=so.id) after_sales_count,
+      COALESCE(r.original_amount-r.credited_amount,so.total_amount) net_sales_amount,
+      COALESCE((SELECT sum(si.quantity*l.unit_cost) FROM business_shipment_item si JOIN business_shipment sh ON sh.id=si.shipment_id JOIN business_inventory_lot l ON l.id=si.inventory_lot_id WHERE sh.sales_order_id=so.id),0)
+        - COALESCE((SELECT sum(rri.quantity*l.unit_cost) FROM business_return_receipt_item rri JOIN business_after_sales_item ai ON ai.id=rri.after_sales_item_id JOIN business_after_sales_case ac ON ac.id=ai.case_id JOIN business_inventory_lot l ON l.id=rri.inventory_lot_id WHERE ac.sales_order_id=so.id),0) realized_cost_amount,
+      COALESCE((SELECT sum(a.original_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
+      COALESCE((SELECT sum(a.paid_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
       r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
       r.due_at receivable_due_at,r.version receivable_version
@@ -207,8 +232,9 @@ export function createBusinessOrderRepository(pool) {
       client.query('SELECT * FROM business_sales_order_item WHERE sales_order_id=$1 ORDER BY line_no', [row.id]),
       client.query(`SELECT po.*,so.order_no sales_order_no,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
-        (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count
-        FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id WHERE po.sales_order_id=$1 ORDER BY po.created_at,po.id`, [row.id]),
+        (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
+        a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+        FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id WHERE po.sales_order_id=$1 ORDER BY po.created_at,po.id`, [row.id]),
       client.query(`SELECT r.id,r.reservation_no,r.warehouse_id,w.warehouse_code,w.name warehouse_name,r.status,r.version,r.created_at,r.updated_at
         FROM business_stock_reservation r JOIN business_warehouse w ON w.id=r.warehouse_id WHERE r.sales_order_id=$1 ORDER BY r.created_at,r.id`, [row.id]),
       client.query('SELECT id,case_no,status,reason_code,credited_amount,refunded_amount,version,created_at,updated_at FROM business_after_sales_case WHERE sales_order_id=$1 ORDER BY created_at,id', [row.id]),
@@ -220,8 +246,9 @@ export function createBusinessOrderRepository(pool) {
   async function getPurchaseOrder(id, client = pool) {
     const row = (await client.query(`SELECT po.*,so.order_no sales_order_no,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
-      (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count
-      FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id
+      (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
+      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+      FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id
       WHERE po.id=$1 OR po.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
     const [items, events] = await Promise.all([
@@ -246,6 +273,11 @@ export function createBusinessOrderRepository(pool) {
       (SELECT count(*)::int FROM business_purchase_order x WHERE x.sales_order_id=so.id AND x.status='received') received_purchase_order_count,
       (SELECT count(*)::int FROM business_stock_reservation x WHERE x.sales_order_id=so.id) stock_reservation_count,
       (SELECT count(*)::int FROM business_after_sales_case x WHERE x.sales_order_id=so.id) after_sales_count,
+      COALESCE(r.original_amount-r.credited_amount,so.total_amount) net_sales_amount,
+      COALESCE((SELECT sum(si.quantity*l.unit_cost) FROM business_shipment_item si JOIN business_shipment sh ON sh.id=si.shipment_id JOIN business_inventory_lot l ON l.id=si.inventory_lot_id WHERE sh.sales_order_id=so.id),0)
+        - COALESCE((SELECT sum(rri.quantity*l.unit_cost) FROM business_return_receipt_item rri JOIN business_after_sales_item ai ON ai.id=rri.after_sales_item_id JOIN business_after_sales_case ac ON ac.id=ai.case_id JOIN business_inventory_lot l ON l.id=rri.inventory_lot_id WHERE ac.sales_order_id=so.id),0) realized_cost_amount,
+      COALESCE((SELECT sum(a.original_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
+      COALESCE((SELECT sum(a.paid_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
       r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
       r.due_at receivable_due_at,r.version receivable_version
@@ -267,8 +299,9 @@ export function createBusinessOrderRepository(pool) {
     values.push(size, (currentPage - 1) * size)
     const rows = (await pool.query(`SELECT po.*,so.order_no sales_order_no,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
-      (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count
-      FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id ${clause}
+      (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
+      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+      FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id ${clause}
       ORDER BY po.updated_at DESC,po.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
     const summaryRows = (await pool.query('SELECT status,count(*)::int count,COALESCE(sum(total_amount),0)::numeric amount FROM business_purchase_order GROUP BY status')).rows
     return { items: rows.map(mapPurchaseOrder), total, page: currentPage, pageSize: size, summary: Object.fromEntries(summaryRows.map((item) => [item.status, { count: number(item.count), amount: number(item.amount) }])) }
@@ -360,6 +393,12 @@ export function createBusinessOrderRepository(pool) {
           purchaseOrderId, purchaseOrderNo, inquiry.id, salesOrderId, group.supplierPartnerId, group.supplierName,
           quote.currency, subtotal, freightAmount, subtotal + freightAmount, expectedAt, `由 ${inquiry.inquiry_no} 成交自动生成`, by.id, by.name,
         ])
+        const paymentTermsDays = group.supplierPartnerId ? number((await client.query('SELECT payment_terms_days FROM business_partner WHERE id=$1', [group.supplierPartnerId])).rows[0]?.payment_terms_days) : 0
+        const payableId = randomUUID(); const payableNo = generatedNumber('AP'); const payableTotal = subtotal + freightAmount; const payableStatus = payableTotal === 0 ? 'paid' : 'open'; const payableDueAt = futureDate(paymentTermsDays)
+        await client.query(`INSERT INTO business_payable
+          (id,payable_no,purchase_order_id,sales_order_id,supplier_partner_id,supplier_name,status,currency,original_amount,paid_amount,payment_terms_days,due_at,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,$13,$12,$13)`, [payableId, payableNo, purchaseOrderId, salesOrderId, group.supplierPartnerId, group.supplierName, payableStatus, quote.currency, payableTotal, paymentTermsDays, payableDueAt, by.id, by.name])
+        await insertPayableEvent(client, payableId, 'created_from_purchase_order', actor, { toStatus: payableStatus, snapshot: { purchaseOrderId, purchaseOrderNo, salesOrderId, originalAmount: payableTotal, paymentTermsDays, dueAt: payableDueAt } })
         for (const [index, item] of group.items.entries()) await client.query(`INSERT INTO business_purchase_order_item
           (id,purchase_order_id,inquiry_item_id,supplier_offer_id,catalog_sku_id,line_no,description,oe_number,quantity,unit,cost_unit_price,line_total)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [
@@ -400,9 +439,16 @@ export function createBusinessOrderRepository(pool) {
         if (shipped > 0) throw problem('ORDER_HAS_SHIPMENTS', '已有出库记录的订单不能直接取消，请先处理退货', 409)
         const receivable = (await client.query('SELECT * FROM business_receivable WHERE sales_order_id=$1 FOR UPDATE', [order.id])).rows[0]
         if (receivable && number(receivable.paid_amount) > 0) throw problem('RECEIVABLE_HAS_PAYMENTS', '订单已有收款，不能直接取消，请先处理退款或冲销', 409, { receivableId: receivable.id, paidAmount: number(receivable.paid_amount) })
+        const payables = (await client.query('SELECT * FROM business_payable WHERE sales_order_id=$1 FOR UPDATE', [order.id])).rows
+        const paidPayable = payables.find((item) => number(item.paid_amount) > 0)
+        if (paidPayable) throw problem('PAYABLE_HAS_PAYMENTS', '关联采购单已有付款，不能直接取消，请先处理退款或冲销', 409, { payableId: paidPayable.id, paidAmount: number(paidPayable.paid_amount) })
         for (const purchase of purchaseRows.filter((item) => item.status !== 'cancelled')) {
           await client.query("UPDATE business_purchase_order SET status='cancelled',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [purchase.id, actorDetails(actor).id, actorDetails(actor).name])
           await insertEvent(client, 'purchase', purchase.id, 'cancelled_with_sales_order', actor, { fromStatus: purchase.status, toStatus: 'cancelled', note: clean(rawInput.note) })
+        }
+        for (const payable of payables.filter((item) => item.status !== 'void')) {
+          await client.query("UPDATE business_payable SET status='void',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [payable.id, actorDetails(actor).id, actorDetails(actor).name])
+          await insertPayableEvent(client, payable.id, 'voided_with_sales_order', actor, { fromStatus: payable.status, toStatus: 'void', note: clean(rawInput.note), snapshot: { salesOrderId: order.id, purchaseOrderId: payable.purchase_order_id } })
         }
         const releasedReservationIds = await releaseActiveStockReservations(client, order.id, actor, clean(rawInput.note) || '销售订单取消，自动释放库存')
         if (releasedReservationIds.length) await insertEvent(client, 'sales', order.id, 'stock_reservations_released', actor, { fromStatus: order.status, toStatus: order.status, note: clean(rawInput.note), snapshot: { releasedReservationIds } })
@@ -433,6 +479,13 @@ export function createBusinessOrderRepository(pool) {
       if (nextStatus === 'cancelled') {
         const received = number((await client.query('SELECT COALESCE(sum(received_quantity),0) quantity FROM business_purchase_order_item WHERE purchase_order_id=$1', [order.id])).rows[0].quantity)
         if (received > 0) throw problem('PURCHASE_ORDER_HAS_RECEIPTS', '已有到货记录的采购单不能直接取消', 409)
+        const payable = (await client.query('SELECT * FROM business_payable WHERE purchase_order_id=$1 FOR UPDATE', [order.id])).rows[0]
+        if (payable && number(payable.paid_amount) > 0) throw problem('PAYABLE_HAS_PAYMENTS', '采购单已有付款，不能直接取消，请先处理退款或冲销', 409, { payableId: payable.id, paidAmount: number(payable.paid_amount) })
+        if (payable && payable.status !== 'void') {
+          const by = actorDetails(actor)
+          await client.query("UPDATE business_payable SET status='void',version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1", [payable.id, by.id, by.name])
+          await insertPayableEvent(client, payable.id, 'voided_with_purchase_order', actor, { fromStatus: payable.status, toStatus: 'void', note: clean(rawInput.note), snapshot: { purchaseOrderId: order.id } })
+        }
       }
       const by = actorDetails(actor)
       await client.query('UPDATE business_purchase_order SET status=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [order.id, nextStatus, by.id, by.name])

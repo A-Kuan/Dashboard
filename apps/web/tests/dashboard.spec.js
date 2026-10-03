@@ -1400,7 +1400,40 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(purchaseListResponse.ok()).toBeTruthy()
   expect((await purchaseListResponse.json()).items.map((order) => order.id)).toContain(purchaseOrder.id)
 
+  expect(purchaseOrder.payable.status).toBe('open')
+  expect(purchaseOrder.payable.originalAmount).toBe(2400)
+  const supplierPartialPaymentResponse = await page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-supplier-payment-first', amount: 1000, paymentMethod: 'bank_transfer', referenceNo: 'SUPPLIER-BANK-001', note: '供应商首笔货款',
+  } })
+  expect(supplierPartialPaymentResponse.status()).toBe(201)
+  expect((await supplierPartialPaymentResponse.json()).payable.outstandingAmount).toBe(1400)
+  const repeatedSupplierPaymentResponse = await page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-supplier-payment-first', amount: 9999, paymentMethod: 'cash',
+  } })
+  expect(repeatedSupplierPaymentResponse.status()).toBe(200)
+  expect((await repeatedSupplierPaymentResponse.json()).payable.paidAmount).toBe(1000)
+  const finalSupplierPaymentPayload = { requestKey: 'e2e-supplier-payment-final', amount: 1400, paymentMethod: 'bank_transfer', note: '供应商货款结清' }
+  const concurrentSupplierPaymentResponses = await Promise.all([
+    page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: finalSupplierPaymentPayload }),
+    page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: finalSupplierPaymentPayload }),
+  ])
+  expect(concurrentSupplierPaymentResponses.map((response) => response.status()).sort()).toEqual([200, 201])
+  const finalPayable = await (await page.request.get(`/api/v2/business/payables/${purchaseOrder.payable.id}`, { headers: editorHeaders })).json()
+  expect(finalPayable.status).toBe('paid')
+  expect(finalPayable.paidAmount).toBe(2400)
+  expect(finalPayable.payments).toHaveLength(2)
+  const overSupplierPaymentResponse = await page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: { requestKey: 'e2e-supplier-payment-over', amount: 1, paymentMethod: 'cash' } })
+  expect(overSupplierPaymentResponse.status()).toBe(409)
+  expect((await overSupplierPaymentResponse.json()).error).toBe('SUPPLIER_PAYMENT_EXCEEDS_OUTSTANDING')
+  const payableList = await (await page.request.get(`/api/v2/business/payables?supplierPartnerId=${supplier.id}`, { headers: editorHeaders })).json()
+  expect(payableList.items.map((item) => item.id)).toContain(finalPayable.id)
+
+  salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
   expect(salesOrder.receivable.originalAmount).toBe(3200)
+  expect(salesOrder.profitability.netSalesAmount).toBe(3200)
+  expect(salesOrder.profitability.realizedCostAmount).toBe(2400)
+  expect(salesOrder.profitability.realizedGrossProfit).toBe(800)
+  expect(salesOrder.profitability.supplierPaidAmount).toBe(2400)
   expect(salesOrder.receivable.status).toBe('open')
   const partialPaymentResponse = await page.request.post(`/api/v2/business/receivables/${salesOrder.receivable.id}/payments`, { headers: editorHeaders, data: {
     requestKey: 'e2e-payment-first', amount: 1000, paymentMethod: 'bank_transfer', referenceNo: 'BANK-20261003-001', note: '客户首笔转账',
@@ -1514,6 +1547,10 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
   expect(salesOrder.afterSalesCases.map((item) => item.id)).toContain(afterSales.id)
   expect(salesOrder.receivable.netCollectedAmount).toBe(2420)
+  expect(salesOrder.profitability.netSalesAmount).toBe(2420)
+  expect(salesOrder.profitability.realizedCostAmount).toBe(1800)
+  expect(salesOrder.profitability.realizedGrossProfit).toBe(620)
+  expect(salesOrder.profitability.realizedGrossMarginRate).toBeCloseTo(25.62, 2)
 
   const customer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
   expect(customer360Response.ok()).toBeTruthy()
