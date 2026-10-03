@@ -62,7 +62,14 @@ function shanghaiDayEnd(asOf, offsetDays = 0) {
 
 function qualityWorkItem(issue, asOf) {
   const highRisk = issue.severity === 'high'
-  const dueAt = shanghaiDayEnd(asOf, highRisk ? 0 : 3)
+  const unassigned = issue.assignmentStatus !== 'assigned'
+  const dueAt = issue.dueAt ? new Date(issue.dueAt) : shanghaiDayEnd(asOf, highRisk ? 0 : 3)
+  const todayEnd = shanghaiDayEnd(asOf)
+  const upcomingEnd = shanghaiDayEnd(asOf, 7)
+  const urgency = dueAt < asOf ? 'overdue' : dueAt <= todayEnd ? 'today' : dueAt <= upcomingEnd ? 'upcoming' : 'normal'
+  const overdueDays = urgency === 'overdue' ? Math.max(0, Math.floor((asOf.getTime() - dueAt.getTime()) / 86400000)) : 0
+  const baseRank = unassigned ? -9 : issue.escalationLevel >= 2 ? -12 : -7
+  const urgencyRank = urgency === 'overdue' ? 0 : urgency === 'today' ? 100 : urgency === 'upcoming' ? 200 : 300
   const candidateUpdatedAt = [issue.candidateA?.updatedAt, issue.candidateB?.updatedAt].filter(Boolean).sort().at(-1) || asOf.toISOString()
   const customerDuplicate = issue.kind === 'customer_duplicate'
   const counterpartName = customerDuplicate
@@ -82,13 +89,15 @@ function qualityWorkItem(issue, asOf) {
     counterpartName,
     customerPartnerId: customerDuplicate ? issue.previewRequest?.survivorPartnerId || '' : issue.sameOwner ? issue.candidateA?.partnerId || '' : '',
     supplierPartnerId: null,
-    assignedTo: '',
-    nextAction: highRisk ? '优先核对重复证据并进入安全合并预览' : '核对客户或车辆身份，确认合并或标记并非重复',
-    actionCapability: 'business.data_quality.review',
+    assignedTo: issue.assignedTo?.name || '',
+    nextAction: unassigned ? '先分配责任人与处理时限，再核对重复证据'
+      : issue.escalationLevel > 0 ? `已超期 ${issue.overdueHours} 小时，升级处理并完成资料核对`
+        : highRisk ? '优先核对重复证据并进入安全合并预览' : '核对客户或车辆身份，确认合并或标记并非重复',
+    actionCapability: unassigned ? 'business.data_quality.assign' : 'business.data_quality.review',
     routePath: `/business/master-data-quality?issueKey=${encodeURIComponent(issue.issueKey)}`,
     dueAt: dueAt.toISOString(),
-    urgency: highRisk ? 'today' : 'upcoming',
-    overdueDays: 0,
+    urgency,
+    overdueDays,
     amount: 0,
     currency: 'CNY',
     details: {
@@ -101,9 +110,15 @@ function qualityWorkItem(issue, asOf) {
       previewRequest: issue.previewRequest,
       candidateA: issue.candidateA,
       candidateB: issue.candidateB,
+      assignmentStatus: unassigned ? 'unassigned' : 'assigned',
+      assignedTo: issue.assignedTo,
+      taskVersion: issue.taskVersion,
+      slaStatus: issue.slaStatus,
+      overdueHours: issue.overdueHours,
+      escalationLevel: issue.escalationLevel,
     },
     updatedAt: candidateUpdatedAt,
-    sortRank: highRisk ? 93 : 215,
+    sortRank: baseRank + urgencyRank,
   }
 }
 
@@ -530,7 +545,7 @@ export function createBusinessOperationsRepository(pool, { masterDataQualityRepo
       const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
       const summaryValues = [...values]
       const qualityKind = masterDataQualityKinds.has(workKind)
-      const includeQuality = Boolean(masterDataQualityRepository?.listOpenForOperations) && !clean(assignedTo) && (!workKind || qualityKind)
+      const includeQuality = Boolean(masterDataQualityRepository?.listOpenForOperations) && (!workKind || qualityKind)
       const includeOperational = !qualityKind
       const itemQueryValues = [...values, boundary]
       const [itemsResult, summaryResult, qualityIssues] = await Promise.all([
@@ -543,7 +558,7 @@ export function createBusinessOperationsRepository(pool, { masterDataQualityRepo
           FROM classified ${clause}
           GROUP BY kind,urgency,currency
           ORDER BY kind,urgency,currency`, summaryValues) : { rows: [] },
-        includeQuality ? masterDataQualityRepository.listOpenForOperations({ kind: qualityKind ? workKind : '', query: term }) : [],
+        includeQuality ? masterDataQualityRepository.listOpenForOperations({ kind: qualityKind ? workKind : '', query: term, assignedTo: clean(assignedTo), now: asOf }) : [],
       ])
       const byKind = {}
       const byUrgency = Object.fromEntries([...urgencyLevels].map((value) => [value, 0]))

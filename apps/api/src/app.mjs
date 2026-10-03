@@ -143,9 +143,18 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       status: request.query?.status,
       severity: request.query?.severity,
       query: request.query?.q,
+      assignedTo: request.query?.assignedTo,
+      slaStatus: request.query?.slaStatus,
       page: request.query?.page,
       pageSize: request.query?.pageSize,
     })
+  })
+  app.put('/api/v2/business/master-data-quality/:issueKey/assignment', async (request, reply) => {
+    if (!businessMasterDataQualityRepository) return reply.code(503).send({ error: 'BUSINESS_MASTER_DATA_QUALITY_UNAVAILABLE', message: '业务主数据质量服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.data_quality.assign')
+    if (!actor) return
+    const result = await businessMasterDataQualityRepository.assign(request.params.issueKey, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
   })
   app.post('/api/v2/business/master-data-quality/:issueKey/decisions', async (request, reply) => {
     if (!businessMasterDataQualityRepository) return reply.code(503).send({ error: 'BUSINESS_MASTER_DATA_QUALITY_UNAVAILABLE', message: '业务主数据质量服务未配置' })

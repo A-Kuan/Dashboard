@@ -2086,10 +2086,33 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const vehicleQualityWorkItem = vehicleQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)
   expect(vehicleQualityWorkItem).toBeTruthy()
   expect(vehicleQualityWorkItem.urgency).toBe('today')
-  expect(vehicleQualityWorkItem.actionCapability).toBe('business.data_quality.review')
   expect(vehicleQualityWorkItem.details.fingerprint).toBe(vehicleIssue.fingerprint)
   expect(vehicleQualityWorkItem.details.previewRequest).toEqual(vehicleIssue.previewRequest)
   expect(vehicleQualityWorkQueue.summary.byKind.vehicle_duplicate.count).toBeGreaterThanOrEqual(1)
+  expect(vehicleQualityWorkItem.details.assignmentStatus).toBe('unassigned')
+  expect(vehicleQualityWorkItem.actionCapability).toBe('business.data_quality.assign')
+  const qualityDueAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
+  const qualityAssignmentPayload = {
+    requestKey: 'vehicle-quality-assignment-e2e-1', issueFingerprint: vehicleIssue.fingerprint, assignedToId: 'after-sales-reviewer',
+    assignedToName: '售后审核员', dueAt: qualityDueAt, expectedVersion: 0, reason: '指定资料复核责任人并约定处理时限',
+  }
+  const qualityAssignmentResponse = await page.request.put(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/assignment`, { headers: afterSalesReviewerHeaders, data: qualityAssignmentPayload })
+  expect(qualityAssignmentResponse.status()).toBe(201)
+  const qualityAssignment = await qualityAssignmentResponse.json()
+  expect(qualityAssignment.assignment.assignedToName).toBe('售后审核员')
+  expect(qualityAssignment.assignment.version).toBe(1)
+  const repeatedQualityAssignmentResponse = await page.request.put(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/assignment`, { headers: afterSalesReviewerHeaders, data: qualityAssignmentPayload })
+  expect(repeatedQualityAssignmentResponse.status()).toBe(200)
+  expect((await repeatedQualityAssignmentResponse.json()).event.id).toBe(qualityAssignment.event.id)
+  const staleQualityAssignmentResponse = await page.request.put(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/assignment`, { headers: afterSalesReviewerHeaders, data: {
+    ...qualityAssignmentPayload, requestKey: 'vehicle-quality-assignment-e2e-stale', assignedToId: 'reviewer-2', assignedToName: '另一位复核员',
+  } })
+  expect(staleQualityAssignmentResponse.status()).toBe(409)
+  expect((await staleQualityAssignmentResponse.json()).error).toBe('MASTER_DATA_QUALITY_TASK_STALE')
+  const assignedQuality = await (await page.request.get('/api/v2/business/master-data-quality?kind=vehicle_duplicate&assignedTo=after-sales-reviewer&slaStatus=on_track', { headers: editorHeaders })).json()
+  expect(assignedQuality.items.find((item) => item.issueKey === vehicleIssue.issueKey)?.assignedTo.name).toBe('售后审核员')
+  const assignedQualityWorkQueue = await (await page.request.get('/api/v2/business/operations-center?kind=vehicle_duplicate&assignedTo=%E5%94%AE%E5%90%8E%E5%AE%A1%E6%A0%B8%E5%91%98', { headers: editorHeaders })).json()
+  expect(assignedQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)?.details.taskVersion).toBe(1)
   const qualityDecisionResponse = await page.request.post(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/decisions`, { headers: afterSalesReviewerHeaders, data: {
     requestKey: 'vehicle-quality-decision-e2e-1', issueFingerprint: vehicleIssue.fingerprint, decision: 'not_duplicate', reason: '经人工核对暂时不是同一车辆',
   } })
@@ -2115,6 +2138,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const refreshedVehicleIssue = refreshedQuality.items.find((item) => item.issueKey === vehicleIssue.issueKey)
   expect(refreshedVehicleIssue).toBeTruthy()
   expect(refreshedVehicleIssue.fingerprint).not.toBe(vehicleIssue.fingerprint)
+  expect(refreshedVehicleIssue.assignedTo.name).toBe('售后审核员')
+  expect(refreshedVehicleIssue.taskVersion).toBe(1)
   const refreshedVehicleQualityWorkQueue = await (await page.request.get(`/api/v2/business/operations-center?kind=vehicle_duplicate&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
   expect(refreshedVehicleQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)?.details.fingerprint).toBe(refreshedVehicleIssue.fingerprint)
   const vehicleMergeInquiryResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {

@@ -73,14 +73,14 @@ test('operations center combines open master-data risks with the existing work q
   const result = await repository.listWorkItems({ now: '2026-10-03T06:00:00.000Z', pageSize: 10 })
   assert.equal(result.total, 2)
   assert.equal(result.items[0].kind, 'vehicle_duplicate')
-  assert.equal(result.items[0].actionCapability, 'business.data_quality.review')
+  assert.equal(result.items[0].actionCapability, 'business.data_quality.assign')
   assert.equal(result.items[0].details.fingerprint, 'a'.repeat(64))
   assert.equal(result.items[0].details.previewRequest.survivorVehicleId, 'vehicle-1')
   assert.equal('sortRank' in result.items[0], false)
   assert.equal(result.summary.byKind.vehicle_duplicate.count, 1)
   assert.equal(result.summary.byKind.inquiry_follow_up.count, 1)
   assert.equal(result.summary.byUrgency.today, 2)
-  assert.deepEqual(qualityCalls, [{ kind: '', query: '' }])
+  assert.deepEqual(qualityCalls, [{ kind: '', query: '', assignedTo: '', now: new Date('2026-10-03T06:00:00.000Z') }])
 })
 
 test('operations center can filter directly to one master-data quality kind', async () => {
@@ -91,5 +91,28 @@ test('operations center can filter directly to one master-data quality kind', as
   const result = await repository.listWorkItems({ kind: 'customer_duplicate', query: '虎山行', pageSize: 20, now: '2026-10-03T06:00:00.000Z' })
   assert.equal(result.total, 0)
   assert.deepEqual(result.items, [])
-  assert.deepEqual(calls, [{ kind: 'customer_duplicate', query: '虎山行' }])
+  assert.deepEqual(calls, [{ kind: 'customer_duplicate', query: '虎山行', assignedTo: '', now: new Date('2026-10-03T06:00:00.000Z') }])
+})
+
+test('operations center exposes assigned and escalated master-data work', async () => {
+  const calls = []
+  const issue = {
+    issueKey: 'customer_duplicate:customer-1:customer-2', kind: 'customer_duplicate', status: 'open', severity: 'high', score: 100,
+    title: '疑似重复客户：甲 / 乙', explanation: '税号完全一致', signals: [], fingerprint: 'b'.repeat(64),
+    assignmentStatus: 'assigned', assignedTo: { id: 'reviewer-1', name: '资料复核员' }, dueAt: '2026-09-30T08:00:00.000Z',
+    slaStatus: 'overdue', overdueHours: 94, escalationLevel: 2, taskVersion: 3,
+    recommendedAction: 'customer_merge_preview', previewRequest: { survivorPartnerId: 'customer-1', retiredPartnerId: 'customer-2' },
+    candidateA: { id: 'customer-1', partnerNo: 'CUS-1', name: '甲', updatedAt: '2026-10-01T08:00:00.000Z' },
+    candidateB: { id: 'customer-2', partnerNo: 'CUS-2', name: '乙', updatedAt: '2026-10-01T09:00:00.000Z' },
+  }
+  const repository = createBusinessOperationsRepository({ query: async () => { throw new Error('operational query should be skipped') } }, {
+    masterDataQualityRepository: { listOpenForOperations: async (input) => { calls.push(input); return [issue] } },
+  })
+  const result = await repository.listWorkItems({ kind: 'customer_duplicate', assignedTo: '资料复核员', urgency: 'overdue', now: '2026-10-04T06:00:00.000Z' })
+  assert.equal(result.items[0].assignedTo, '资料复核员')
+  assert.equal(result.items[0].urgency, 'overdue')
+  assert.equal(result.items[0].actionCapability, 'business.data_quality.review')
+  assert.equal(result.items[0].details.escalationLevel, 2)
+  assert.match(result.items[0].nextAction, /升级处理/)
+  assert.deepEqual(calls, [{ kind: 'customer_duplicate', query: '', assignedTo: '资料复核员', now: new Date('2026-10-04T06:00:00.000Z') }])
 })

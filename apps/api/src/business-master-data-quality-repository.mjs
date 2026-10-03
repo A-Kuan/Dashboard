@@ -3,6 +3,7 @@ import { withTransaction } from './db.mjs'
 
 const issueKinds = new Set(['customer_duplicate', 'vehicle_duplicate'])
 const issueStatuses = new Set(['open', 'suppressed', 'all'])
+const issueSlaStatuses = new Set(['unassigned', 'on_track', 'due_soon', 'overdue'])
 const decisions = new Set(['not_duplicate', 'deferred'])
 
 function clean(value) { return String(value ?? '').trim() }
@@ -18,6 +19,11 @@ function requestKey(value) {
   if (!result || result.length > 128 || /[\u0000-\u001f\u007f]/.test(result)) throw problem('INVALID_REQUEST_KEY', 'requestKey 必须是 1 至 128 位安全字符')
   return result
 }
+function identityValue(value, label, maximum) {
+  const result = clean(value)
+  if (!result || result.length > maximum || /[\u0000-\u001f\u007f]/.test(result)) throw problem('INVALID_MASTER_DATA_QUALITY_ASSIGNEE', `${label}必须是 1 至 ${maximum} 位安全字符`)
+  return result
+}
 function actorDetails(actor) { return { id: clean(actor?.id), name: clean(actor?.name) || '系统操作员' } }
 function fingerprint(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex') }
 function phoneDigits(value) { return clean(value).replace(/\D/g, '') }
@@ -27,6 +33,75 @@ function selectSurvivor(row) {
   const bActivity = Number(row.b_activity_count || 0)
   if (aActivity !== bActivity) return aActivity > bActivity ? row.a_id : row.b_id
   return new Date(row.a_created_at).getTime() <= new Date(row.b_created_at).getTime() ? row.a_id : row.b_id
+}
+
+function taskSnapshot(row) {
+  if (!row) return null
+  return {
+    issueKey: row.issue_key,
+    issueKind: row.issue_kind,
+    issueFingerprint: row.issue_fingerprint,
+    assignedToId: row.assigned_to_id,
+    assignedToName: row.assigned_to_name,
+    dueAt: row.due_at,
+    version: Number(row.version),
+    createdById: row.created_by_id,
+    createdByName: row.created_by_name,
+    updatedById: row.updated_by_id,
+    updatedByName: row.updated_by_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function taskWithSla(row, now = new Date()) {
+  const task = taskSnapshot(row)
+  if (!task) return { assignmentStatus: 'unassigned', assignedTo: null, dueAt: null, slaStatus: 'unassigned', overdueHours: 0, escalationLevel: 0, taskVersion: 0 }
+  const dueAt = new Date(task.dueAt)
+  const remainingMs = dueAt.getTime() - now.getTime()
+  const overdueHours = remainingMs < 0 ? Math.max(1, Math.ceil(Math.abs(remainingMs) / 3600000)) : 0
+  const slaStatus = overdueHours ? 'overdue' : remainingMs <= 24 * 3600000 ? 'due_soon' : 'on_track'
+  return {
+    assignmentStatus: 'assigned',
+    assignedTo: { id: task.assignedToId, name: task.assignedToName },
+    dueAt: task.dueAt,
+    slaStatus,
+    overdueHours,
+    escalationLevel: overdueHours >= 72 ? 2 : overdueHours ? 1 : 0,
+    taskVersion: task.version,
+    task,
+  }
+}
+
+function assignmentPayload(task, now = new Date()) {
+  if (!task) return null
+  const dueAt = new Date(task.dueAt)
+  const remainingMs = dueAt.getTime() - now.getTime()
+  const overdueHours = remainingMs < 0 ? Math.max(1, Math.ceil(Math.abs(remainingMs) / 3600000)) : 0
+  return {
+    ...task,
+    slaStatus: overdueHours ? 'overdue' : remainingMs <= 24 * 3600000 ? 'due_soon' : 'on_track',
+    overdueHours,
+    escalationLevel: overdueHours >= 72 ? 2 : overdueHours ? 1 : 0,
+  }
+}
+
+function mapTaskEvent(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    requestKey: row.request_key,
+    issueKey: row.issue_key,
+    issueKind: row.issue_kind,
+    issueFingerprint: row.issue_fingerprint,
+    action: row.action,
+    reason: row.reason,
+    before: row.before_snapshot,
+    after: row.after_snapshot,
+    actorId: row.actor_id,
+    actorName: row.actor_name,
+    createdAt: row.created_at,
+  }
 }
 
 function customerCandidate(row) {
@@ -138,38 +213,47 @@ export function createBusinessMasterDataQualityRepository(pool) {
     return [...customers.rows.map(customerCandidate), ...vehicles.rows.map(vehicleCandidate)]
   }
 
-  async function candidatesWithDecisions() {
-    const items = await scanCandidates()
+  async function candidatesWithDecisions(queryClient = pool, now = new Date()) {
+    const items = await scanCandidates(queryClient)
     if (!items.length) return items
-    const decisionRows = (await pool.query(`SELECT DISTINCT ON (issue_key) * FROM business_master_data_quality_decision
+    const issueKeys = items.map((item) => item.issueKey)
+    const decisionRows = (await queryClient.query(`SELECT DISTINCT ON (issue_key) * FROM business_master_data_quality_decision
       WHERE issue_key=ANY($1::text[]) ORDER BY issue_key,created_at DESC,id DESC`, [items.map((item) => item.issueKey)])).rows
+    const taskRows = (await queryClient.query('SELECT * FROM business_master_data_quality_task WHERE issue_key=ANY($1::text[])', [issueKeys])).rows
     const latest = new Map(decisionRows.map((row) => [row.issue_key, row]))
+    const tasks = new Map(taskRows.map((row) => [row.issue_key, row]))
     return items.map((item) => {
       const row = latest.get(item.issueKey)
       const decision = row && row.issue_fingerprint === item.fingerprint ? mapDecision(row) : null
-      const suppressed = Boolean(decision && (decision.decision === 'not_duplicate' || (decision.decision === 'deferred' && new Date(decision.deferredUntil).getTime() > Date.now())))
-      return { ...item, status: suppressed ? 'suppressed' : 'open', decision }
+      const suppressed = Boolean(decision && (decision.decision === 'not_duplicate' || (decision.decision === 'deferred' && new Date(decision.deferredUntil).getTime() > now.getTime())))
+      return { ...item, status: suppressed ? 'suppressed' : 'open', decision, ...taskWithSla(tasks.get(item.issueKey), now) }
     })
   }
 
-  async function filteredCandidates({ kind = '', severity = '', query = '' } = {}) {
+  async function filteredCandidates({ kind = '', severity = '', query = '', assignedTo = '', slaStatus = '', now = new Date() } = {}) {
     const normalizedKind = clean(kind)
     if (normalizedKind && !issueKinds.has(normalizedKind)) throw problem('INVALID_MASTER_DATA_QUALITY_KIND', '资料质量问题类型无效')
     if (severity && !['high', 'medium'].includes(clean(severity))) throw problem('INVALID_MASTER_DATA_QUALITY_SEVERITY', '资料质量风险等级无效')
+    const normalizedSlaStatus = clean(slaStatus)
+    if (normalizedSlaStatus && !issueSlaStatuses.has(normalizedSlaStatus)) throw problem('INVALID_MASTER_DATA_QUALITY_SLA_STATUS', '资料质量处理时限状态无效')
     const term = clean(query).toLocaleLowerCase('zh-CN')
-    let items = await candidatesWithDecisions()
+    let items = await candidatesWithDecisions(pool, now)
     if (normalizedKind) items = items.filter((item) => item.kind === normalizedKind)
     if (severity) items = items.filter((item) => item.severity === severity)
+    if (clean(assignedTo)) items = items.filter((item) => [item.assignedTo?.id, item.assignedTo?.name].includes(clean(assignedTo)))
+    if (normalizedSlaStatus) items = items.filter((item) => item.slaStatus === normalizedSlaStatus)
     if (term) items = items.filter((item) => JSON.stringify(item).toLocaleLowerCase('zh-CN').includes(term))
     items.sort((a, b) => b.score - a.score || a.issueKey.localeCompare(b.issueKey))
     return items
   }
 
   return {
-    async list({ kind = '', status = 'open', severity = '', query = '', page = 1, pageSize = 30 } = {}) {
+    async list({ kind = '', status = 'open', severity = '', query = '', assignedTo = '', slaStatus = '', page = 1, pageSize = 30, now = new Date() } = {}) {
       const normalizedStatus = clean(status) || 'open'
       if (!issueStatuses.has(normalizedStatus)) throw problem('INVALID_MASTER_DATA_QUALITY_STATUS', '资料质量问题状态无效')
-      let items = await filteredCandidates({ kind, severity, query })
+      const asOf = now instanceof Date ? now : new Date(now)
+      if (Number.isNaN(asOf.getTime())) throw problem('INVALID_MASTER_DATA_QUALITY_AS_OF', '资料质量统计时间无效')
+      let items = await filteredCandidates({ kind, severity, query, assignedTo, slaStatus, now: asOf })
       const summaryItems = items
       if (normalizedStatus !== 'all') items = items.filter((item) => item.status === normalizedStatus)
       const normalizedPage = boundedPage(page, 1, 100000)
@@ -180,14 +264,77 @@ export function createBusinessMasterDataQualityRepository(pool) {
         suppressed: summaryItems.filter((item) => item.status === 'suppressed').length,
         high: summaryItems.filter((item) => item.severity === 'high').length,
         medium: summaryItems.filter((item) => item.severity === 'medium').length,
+        assigned: summaryItems.filter((item) => item.assignmentStatus === 'assigned').length,
+        unassigned: summaryItems.filter((item) => item.assignmentStatus === 'unassigned').length,
+        overdue: summaryItems.filter((item) => item.slaStatus === 'overdue').length,
+        escalated: summaryItems.filter((item) => item.escalationLevel > 0).length,
         byKind: Object.fromEntries([...issueKinds].map((value) => [value, summaryItems.filter((item) => item.kind === value).length])),
       }
-      return { asOf: new Date().toISOString(), items: items.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize), total, page: normalizedPage, pageSize: normalizedPageSize, summary }
+      return { asOf: asOf.toISOString(), items: items.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize), total, page: normalizedPage, pageSize: normalizedPageSize, summary }
     },
 
-    async listOpenForOperations({ kind = '', query = '' } = {}) {
-      const items = await filteredCandidates({ kind, query })
+    async listOpenForOperations({ kind = '', query = '', assignedTo = '', now = new Date() } = {}) {
+      const items = await filteredCandidates({ kind, query, assignedTo, now })
       return items.filter((item) => item.status === 'open')
+    },
+
+    async assign(issueKey, rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey)
+      const normalizedIssueKey = clean(issueKey)
+      if (!normalizedIssueKey || normalizedIssueKey.length > 500 || !/^(customer|vehicle)_duplicate:[^:]+:[^:]+$/.test(normalizedIssueKey)) throw problem('INVALID_MASTER_DATA_QUALITY_ISSUE', '资料质量问题编号无效')
+      const submittedFingerprint = clean(rawInput.issueFingerprint)
+      if (!/^[a-f0-9]{64}$/.test(submittedFingerprint)) throw problem('MASTER_DATA_QUALITY_FINGERPRINT_REQUIRED', '分配前必须提交当前问题指纹', 409)
+      const assignedToId = identityValue(rawInput.assignedToId, '责任人编号', 128)
+      const assignedToName = identityValue(rawInput.assignedToName, '责任人姓名', 160)
+      const reason = clean(rawInput.reason)
+      if (reason.length < 8 || reason.length > 500) throw problem('INVALID_MASTER_DATA_QUALITY_ASSIGNMENT_REASON', '分配原因必须为 8 至 500 个字符')
+      const dueTimestamp = Date.parse(rawInput.dueAt)
+      const maximumDueAt = Date.now() + 180 * 24 * 60 * 60 * 1000
+      if (!Number.isFinite(dueTimestamp) || dueTimestamp <= Date.now() || dueTimestamp > maximumDueAt) throw problem('INVALID_MASTER_DATA_QUALITY_DUE_AT', '处理时限必须在未来 180 天内')
+      const dueAt = new Date(dueTimestamp).toISOString()
+      const expectedVersion = Number(rawInput.expectedVersion ?? 0)
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 0) throw problem('INVALID_MASTER_DATA_QUALITY_TASK_VERSION', 'expectedVersion 必须是非负整数')
+      const by = actorDetails(actor)
+      return withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-master-data-quality-assignment:${key}`])
+        const repeated = (await client.query('SELECT * FROM business_master_data_quality_task_event WHERE request_key=$1', [key])).rows[0]
+        if (repeated) {
+          const after = repeated.after_snapshot
+          if (repeated.issue_key !== normalizedIssueKey || repeated.issue_fingerprint !== submittedFingerprint || repeated.reason !== reason
+            || after.assignedToId !== assignedToId || after.assignedToName !== assignedToName || new Date(after.dueAt).toISOString() !== dueAt) {
+            throw problem('MASTER_DATA_QUALITY_ASSIGNMENT_REQUEST_KEY_CONFLICT', 'requestKey 已用于另一项资料质量分配', 409)
+          }
+          return { created: false, assignment: assignmentPayload(after), event: mapTaskEvent(repeated) }
+        }
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-master-data-quality-issue:${normalizedIssueKey}`])
+        const [prefix, firstId, secondId] = normalizedIssueKey.split(':')
+        const table = prefix === 'customer_duplicate' ? 'business_partner' : 'business_customer_vehicle'
+        await client.query(`SELECT id FROM ${table} WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, [[firstId, secondId]])
+        const current = (await candidatesWithDecisions(client)).find((item) => item.issueKey === normalizedIssueKey)
+        if (!current) throw problem('MASTER_DATA_QUALITY_ISSUE_NOT_FOUND', '该资料质量问题已不存在', 404)
+        if (current.status !== 'open') throw problem('MASTER_DATA_QUALITY_ISSUE_SUPPRESSED', '该资料质量问题当前已处理或延期', 409)
+        if (current.fingerprint !== submittedFingerprint) throw problem('MASTER_DATA_QUALITY_ISSUE_STALE', '候选资料已变化，请刷新质量队列', 409, { current })
+        const existing = (await client.query('SELECT * FROM business_master_data_quality_task WHERE issue_key=$1 FOR UPDATE', [normalizedIssueKey])).rows[0]
+        const currentVersion = Number(existing?.version || 0)
+        if (expectedVersion !== currentVersion) throw problem('MASTER_DATA_QUALITY_TASK_STALE', '责任分配已被其他操作更新，请刷新后重试', 409, { current: existing ? assignmentPayload(taskSnapshot(existing)) : null })
+        const action = !existing ? 'assigned'
+          : existing.assigned_to_id !== assignedToId || existing.assigned_to_name !== assignedToName ? 'reassigned'
+            : new Date(existing.due_at).toISOString() !== dueAt ? 'due_changed' : 'assignment_updated'
+        const row = (await client.query(`INSERT INTO business_master_data_quality_task
+          (issue_key,issue_kind,issue_fingerprint,assigned_to_id,assigned_to_name,due_at,version,created_by_id,created_by_name,updated_by_id,updated_by_name)
+          VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$7,$8)
+          ON CONFLICT (issue_key) DO UPDATE SET issue_fingerprint=EXCLUDED.issue_fingerprint,assigned_to_id=EXCLUDED.assigned_to_id,
+            assigned_to_name=EXCLUDED.assigned_to_name,due_at=EXCLUDED.due_at,version=business_master_data_quality_task.version+1,
+            updated_by_id=EXCLUDED.updated_by_id,updated_by_name=EXCLUDED.updated_by_name,updated_at=now()
+          RETURNING *`, [normalizedIssueKey, current.kind, current.fingerprint, assignedToId, assignedToName, dueAt, by.id, by.name])).rows[0]
+        const before = taskSnapshot(existing)
+        const after = taskSnapshot(row)
+        const event = (await client.query(`INSERT INTO business_master_data_quality_task_event
+          (id,request_key,issue_key,issue_kind,issue_fingerprint,action,reason,before_snapshot,after_snapshot,actor_id,actor_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11) RETURNING *`,
+        [randomUUID(), key, current.issueKey, current.kind, current.fingerprint, action, reason, before ? JSON.stringify(before) : null, JSON.stringify(after), by.id, by.name])).rows[0]
+        return { created: !existing, issue: current, assignment: assignmentPayload(after), event: mapTaskEvent(event) }
+      })
     },
 
     async decide(issueKey, rawInput = {}, actor) {
