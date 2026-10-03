@@ -865,7 +865,7 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
   await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
 })
 
-test('runs an inquiry through supplier comparison, quote and follow-up', async ({ page }) => {
+test('runs an inquiry through quote, conversion, purchasing, receipt and fulfilment', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
   const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
     partnerType: 'customer', name: '业务闭环测试汽修', shortName: '闭环汽修', phone: '13800000001', paymentTermsDays: 15, creditLimit: 20000,
@@ -972,6 +972,93 @@ test('runs an inquiry through supplier comparison, quote and follow-up', async (
   expect(inquiry.status).toBe('won')
   expect(inquiry.quotes[0].state).toBe('accepted')
   expect(inquiry.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created', 'supplier_offer_added', 'quote_created', 'quote_sent', 'status_changed']))
+
+  const convertResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(convertResponse.status()).toBe(201)
+  const conversion = await convertResponse.json()
+  expect(conversion.created).toBe(true)
+  expect(conversion.salesOrder.status).toBe('draft')
+  expect(conversion.salesOrder.totalAmount).toBe(3200)
+  expect(conversion.salesOrder.items).toHaveLength(2)
+  expect(conversion.purchaseOrders).toHaveLength(1)
+  expect(conversion.purchaseOrders[0].supplierPartnerId).toBe(supplier.id)
+  expect(conversion.purchaseOrders[0].subtotal).toBe(2400)
+  expect(conversion.purchaseOrders[0].items).toHaveLength(2)
+
+  const repeatedConvertResponse = await page.request.post(`/api/v2/business/inquiries/${inquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(repeatedConvertResponse.status()).toBe(200)
+  const repeatedConversion = await repeatedConvertResponse.json()
+  expect(repeatedConversion.created).toBe(false)
+  expect(repeatedConversion.salesOrder.id).toBe(conversion.salesOrder.id)
+  expect(repeatedConversion.purchaseOrders.map((order) => order.id)).toEqual(conversion.purchaseOrders.map((order) => order.id))
+
+  let salesOrder = conversion.salesOrder
+  const confirmedSalesResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: salesOrder.version, status: 'confirmed', note: '客户订单复核完成',
+  } })
+  expect(confirmedSalesResponse.ok()).toBeTruthy()
+  salesOrder = await confirmedSalesResponse.json()
+  expect(salesOrder.status).toBe('confirmed')
+
+  let purchaseOrder = conversion.purchaseOrders[0]
+  const submittedPurchaseResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: purchaseOrder.version, status: 'submitted', note: '采购单已发送供应商',
+  } })
+  expect(submittedPurchaseResponse.ok()).toBeTruthy()
+  purchaseOrder = await submittedPurchaseResponse.json()
+  const confirmedPurchaseResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: purchaseOrder.version, status: 'confirmed', note: '供应商已确认供货',
+  } })
+  expect(confirmedPurchaseResponse.ok()).toBeTruthy()
+  purchaseOrder = await confirmedPurchaseResponse.json()
+
+  const firstReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
+    expectedVersion: purchaseOrder.version, items: [{ itemId: purchaseOrder.items[0].id, quantity: 1 }], note: '首批到货',
+  } })
+  expect(firstReceiptResponse.ok()).toBeTruthy()
+  purchaseOrder = await firstReceiptResponse.json()
+  expect(purchaseOrder.status).toBe('partially_received')
+  expect(purchaseOrder.items[0].receivedQuantity).toBe(1)
+  expect(purchaseOrder.items[0].remainingQuantity).toBe(1)
+
+  const overReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
+    expectedVersion: purchaseOrder.version, items: [{ itemId: purchaseOrder.items[0].id, quantity: 2 }],
+  } })
+  expect(overReceiptResponse.status()).toBe(409)
+  expect((await overReceiptResponse.json()).error).toBe('RECEIPT_EXCEEDS_ORDERED_QUANTITY')
+
+  const finalReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
+    expectedVersion: purchaseOrder.version,
+    items: [
+      { itemId: purchaseOrder.items[0].id, quantity: 1 },
+      { itemId: purchaseOrder.items[1].id, quantity: 1 },
+    ],
+    note: '全部到货并核对数量',
+  } })
+  expect(finalReceiptResponse.ok()).toBeTruthy()
+  purchaseOrder = await finalReceiptResponse.json()
+  expect(purchaseOrder.status).toBe('received')
+  expect(purchaseOrder.items.every((item) => item.receivedQuantity === item.quantity)).toBeTruthy()
+
+  const refreshedSalesResponse = await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })
+  expect(refreshedSalesResponse.ok()).toBeTruthy()
+  salesOrder = await refreshedSalesResponse.json()
+  expect(salesOrder.status).toBe('fulfilling')
+  expect(salesOrder.receivedPurchaseOrderCount).toBe(1)
+  expect(salesOrder.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created_from_inquiry', 'status_changed', 'purchasing_completed']))
+  const completedSalesResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/transition`, { headers: editorHeaders, data: {
+    expectedVersion: salesOrder.version, status: 'completed', note: '客户交付完成',
+  } })
+  expect(completedSalesResponse.ok()).toBeTruthy()
+  salesOrder = await completedSalesResponse.json()
+  expect(salesOrder.status).toBe('completed')
+
+  const salesListResponse = await page.request.get('/api/v2/business/sales-orders?status=completed', { headers: editorHeaders })
+  expect(salesListResponse.ok()).toBeTruthy()
+  expect((await salesListResponse.json()).items.map((order) => order.id)).toContain(salesOrder.id)
+  const purchaseListResponse = await page.request.get(`/api/v2/business/purchase-orders?status=received&supplierPartnerId=${supplier.id}`, { headers: editorHeaders })
+  expect(purchaseListResponse.ok()).toBeTruthy()
+  expect((await purchaseListResponse.json()).items.map((order) => order.id)).toContain(purchaseOrder.id)
 })
 
 test('does not expose retired frontend business routes', async ({ page }) => {
