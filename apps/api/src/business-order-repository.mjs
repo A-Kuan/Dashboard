@@ -326,6 +326,10 @@ export function createBusinessOrderRepository(pool) {
       if (inquiry.status !== 'won') throw problem('INQUIRY_NOT_WON', '只有已成交的询价可以转为订单', 409)
       const quote = (await client.query("SELECT * FROM business_quote WHERE inquiry_id=$1 AND state='accepted' ORDER BY sent_at DESC NULLS LAST,created_at DESC LIMIT 1 FOR UPDATE", [inquiry.id])).rows[0]
       if (!quote) throw problem('ACCEPTED_QUOTE_NOT_FOUND', '未找到客户已接受的报价单', 409)
+      const latestLineageQuote = (await client.query('SELECT id,version_no FROM business_quote WHERE lineage_id=$1 ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [quote.lineage_id])).rows[0]
+      if (!latestLineageQuote || latestLineageQuote.id !== quote.id) throw problem('ACCEPTED_QUOTE_NOT_LATEST', '客户接受的报价不是当前最新版本，请重新确认', 409, { acceptedQuoteId: quote.id, latestQuoteId: latestLineageQuote?.id || '' })
+      const expired = Boolean((await client.query("SELECT valid_until IS NOT NULL AND valid_until<(now() AT TIME ZONE 'Asia/Shanghai')::date expired FROM business_quote WHERE id=$1", [quote.id])).rows[0].expired)
+      if (expired) throw problem('ACCEPTED_QUOTE_EXPIRED', '客户接受的报价已过有效期，请创建新版本并重新确认', 409, { quoteId: quote.id, validUntil: quote.valid_until })
       const risk = await evaluateQuoteRisk(client, { customerPartnerId: inquiry.customer_partner_id, currency: quote.currency, totalAmount: quote.total_amount, marginAmount: quote.margin_amount })
       if (risk.required && (quote.approval_status !== 'approved' || quote.approval_fingerprint !== risk.fingerprint)) {
         const changed = quote.approval_status !== 'pending' || quote.approval_fingerprint !== risk.fingerprint

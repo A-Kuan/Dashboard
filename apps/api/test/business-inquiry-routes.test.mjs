@@ -37,6 +37,7 @@ test('business inquiry routes expose reads while protecting operational writes',
     create: async (input, actor) => { calls.push(['create', input, actor]); return inquiry },
     addOffer: async (id, itemId, input, actor) => { calls.push(['addOffer', id, itemId, input, actor]); return { ...inquiry, status: 'sourcing' } },
     createQuote: async (id, input, actor) => { calls.push(['createQuote', id, input, actor]); return { ...inquiry, status: 'quoting', quotes: [{ id: 'quote-1' }] } },
+    reviseQuote: async (id, input, actor) => { calls.push(['reviseQuote', id, input, actor]); return { ...inquiry, status: 'quoting', quotes: [{ id: 'quote-2', predecessorQuoteId: id, versionNo: 2 }] } },
     sendQuote: async (id, input, actor) => { calls.push(['sendQuote', id, input, actor]); return { ...inquiry, status: 'quoted', version: 4 } },
     transition: async (id, input, actor) => { calls.push(['transition', id, input, actor]); return { ...inquiry, status: input.status } },
   }
@@ -76,6 +77,9 @@ test('business inquiry routes expose reads while protecting operational writes',
   assert.equal(quoted.statusCode, 201)
   const sent = await app.inject({ method: 'POST', url: '/api/v2/business/quotes/quote-1/send', headers: editor, payload: { expectedRevision: 1 } })
   assert.equal(sent.statusCode, 200)
+  const revised = await app.inject({ method: 'POST', url: '/api/v2/business/quotes/quote-1/revisions', headers: editor, payload: { expectedRevision: 2, reason: '客户要求调整价格' } })
+  assert.equal(revised.statusCode, 201)
+  assert.equal(calls.find((entry) => entry[0] === 'reviseQuote')[2].reason, '客户要求调整价格')
   const transitioned = await app.inject({ method: 'POST', url: `/api/v2/business/inquiries/${inquiry.id}/transition`, headers: editor, payload: { expectedVersion: 4, status: 'follow_up' } })
   assert.equal(transitioned.statusCode, 200)
   assert.equal(transitioned.json().status, 'follow_up')

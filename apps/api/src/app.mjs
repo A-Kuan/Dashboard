@@ -257,6 +257,12 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     if (!actor) return
     return businessInquiryRepository.sendQuote(request.params.id, request.body, actor)
   })
+  app.post('/api/v2/business/quotes/:id/revisions', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.quote')
+    if (!actor) return
+    return reply.code(201).send(await businessInquiryRepository.reviseQuote(request.params.id, request.body, actor))
+  })
   app.post('/api/v2/business/quotes/:id/approval', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.quote.approve')
