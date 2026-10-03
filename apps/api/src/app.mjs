@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, businessOperationsRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -120,6 +120,19 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.read')
     if (!actor) return
     return businessPartnerRepository.list({ query: request.query?.q, partnerType: request.query?.type, status: request.query?.status, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/operations-center', async (request, reply) => {
+    if (!businessOperationsRepository) return reply.code(503).send({ error: 'BUSINESS_OPERATIONS_UNAVAILABLE', message: '业务跟进中枢未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessOperationsRepository.listWorkItems({
+      query: request.query?.q,
+      kind: request.query?.kind,
+      urgency: request.query?.urgency,
+      assignedTo: request.query?.assignedTo,
+      page: request.query?.page,
+      pageSize: request.query?.pageSize,
+    })
   })
   app.post('/api/v2/business/partners', async (request, reply) => {
     if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })

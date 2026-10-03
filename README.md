@@ -5,6 +5,7 @@
 - [SKU 主数据](docs/SKU-MASTER-DATA.md)
 - [SKU 资料库 v2 接口](docs/SKU-V2-API-CONTRACT.md)
 - [车型库与快速选品](docs/VEHICLE-LIBRARY.md)
+- [客户、询价、报价、订单与业务跟进](docs/BUSINESS-INQUIRY-API-CONTRACT.md)
 - [本地测试与浏览器验收](docs/TESTING.md)
 
 SKU 主数据编辑模块的字段、组件和后端接口准备见 [docs/SKU-MASTER-DATA.md](docs/SKU-MASTER-DATA.md)。
