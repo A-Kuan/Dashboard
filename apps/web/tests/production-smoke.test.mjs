@@ -112,6 +112,13 @@ test('production workbench uses its real API without writing data', { skip: !bas
     assert.equal(typeof operationsCenter.summary?.byUrgency, 'object')
     assert.equal(typeof operationsCenter.summary?.byKind, 'object')
     assert.equal(typeof operationsCenter.summary?.exposure, 'object')
+    const businessControlsResponse = await page.request.get(new URL('api/v2/business/controls', baseUrl).toString())
+    assert.equal(businessControlsResponse.ok(), true)
+    const businessControls = await businessControlsResponse.json()
+    assert.equal(typeof businessControls.controls?.marginControlEnabled, 'boolean')
+    assert.equal(typeof businessControls.controls?.creditControlEnabled, 'boolean')
+    assert.equal(typeof businessControls.controls?.minimumMarginRate, 'number')
+    assert.ok(Number.isInteger(businessControls.version))
     const purchaseOrderListResponse = await page.request.get(new URL('api/v2/business/purchase-orders?page=1&pageSize=5', baseUrl).toString())
     assert.equal(purchaseOrderListResponse.ok(), true)
     const purchaseOrderList = await purchaseOrderListResponse.json()
@@ -135,6 +142,14 @@ test('production workbench uses its real API without writing data', { skip: !bas
     if (!session.capabilities.includes('business.quote')) {
       const quickQuoteDenied = await page.request.post(new URL('api/v2/business/quick-quotes', baseUrl).toString(), { data: { requestKey: 'read-only-quick-quote', customerPartnerId: 'none', customerVehicleId: 'none', items: [] } })
       assert.equal(quickQuoteDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.quote.approve')) {
+      const approvalDenied = await page.request.post(new URL('api/v2/business/quotes/read-only-smoke/approval', baseUrl).toString(), { data: { expectedRevision: 1, decision: 'approved' } })
+      assert.equal(approvalDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.policy')) {
+      const policyDenied = await page.request.patch(new URL('api/v2/business/controls', baseUrl).toString(), { data: { expectedVersion: businessControls.version, minimumMarginRate: 1 } })
+      assert.equal(policyDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.order')) {
       const conversionDenied = await page.request.post(new URL('api/v2/business/inquiries/read-only-smoke/convert-order', baseUrl).toString())
