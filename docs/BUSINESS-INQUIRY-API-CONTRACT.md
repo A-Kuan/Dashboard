@@ -99,6 +99,22 @@
 
 未审核 SKU 不进入快速报价候选，避免把草稿资料直接用于对客承诺。
 
+### 快速报价决策中心
+
+`GET /api/v2/business/quick-quote/decision?customerId=&customerVehicleId=&catalogSkuId=&quantity=1&costUnitPrice=&saleUnitPrice=&lookbackDays=365`
+
+选择客户、客户车辆和已审核 SKU 后，该接口把四个模块的事实汇聚为一次可解释的报价决策：
+
+- 客户账期、信用额度和资料版本；
+- 客户车辆、标准车型和当前已核验适配证据；
+- 各启用仓库的在库、锁定、可用数量和有批次依据的加权库存成本；
+- 近 30 至 730 天的采购单成本、供应商报价参考、该客户成交价和全体客户成交价分布；
+- 当前最低毛利规则、最低安全售价、建议参考价、拟定价格毛利和明确的风险提示。
+
+历史供应商报价和采购价始终标记为 `referenceOnly: true`，不能直接复用为当前供应承诺；创建报价时仍必须确认当前供应商、成本、仓库和适配证据。没有明确 `costUnitPrice` 时，系统可以展示客户或市场成交中位数，但返回 `cost_confirmation_required` 且 `pricingReady=false`，不会伪造毛利结论。建议价优先参考该客户历史成交中位数，其次参考市场中位数，并且不会低于按当前成本和最低毛利率反推的安全售价。
+
+响应同时返回证据来源编号、发生时间、统计样本数、资料版本和 `decisionFingerprint`。该指纹用于界面识别参考依据是否变化，不代替报价发送和成交转单时的服务端实时核验，也不会写入或修改客户、SKU、库存和报价数据。
+
 ### 一步生成快速报价
 
 `POST /api/v2/business/quick-quotes`

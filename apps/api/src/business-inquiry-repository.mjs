@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
-import { evaluateQuoteRisk } from './business-quote-policy.mjs'
+import { evaluateQuoteRisk, readBusinessControls } from './business-quote-policy.mjs'
 import { evaluateAndRecordQuoteIntegrity } from './business-quote-integrity.mjs'
+import { buildPricingDecision, decisionFingerprint, summarizePriceSamples } from './business-quote-decision.mjs'
 
 const inquiryStatuses = new Set(['new', 'sourcing', 'quoting', 'quoted', 'follow_up', 'won', 'lost', 'cancelled'])
 const terminalStatuses = new Set(['won', 'lost', 'cancelled'])
@@ -271,6 +272,90 @@ export function createBusinessInquiryRepository(pool) {
         return { id: row.id, skuCode: row.sku_code, name: row.canonical_name_zh || row.canonical_name_en, brandLabel: row.brand_label || row.brand_code, categoryLabel: row.category_label || row.category_code, unit: row.unit_label, primaryOe: row.primary_oe || '', version: row.version, onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity), inventoryByWarehouse: row.inventory_by_warehouse.map((item) => ({ ...item, onHandQuantity: Number(item.onHandQuantity), reservedQuantity: Number(item.reservedQuantity), availableQuantity: Number(item.availableQuantity) })), fitmentStatus: vehicleContext ? fitment ? 'matched' : 'not_matched' : 'vehicle_required', fitment: fitmentSnapshot(fitment) }
       })
       return { customers, suppliers, warehouses, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
+    },
+
+    async quoteDecision({ customerId = '', customerVehicleId = '', catalogSkuId = '', quantity: rawQuantity = 1, costUnitPrice: rawCost = null, saleUnitPrice: rawSale = null, lookbackDays: rawLookbackDays = 365 } = {}) {
+      const partnerId = clean(customerId); const vehicleId = clean(customerVehicleId); const skuId = clean(catalogSkuId)
+      if (!partnerId || !vehicleId || !skuId) throw problem('INVALID_QUOTE_DECISION_CONTEXT', '报价决策必须选择客户、客户车辆和 SKU')
+      const requestedQuantity = Number(rawQuantity)
+      if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0 || requestedQuantity > 10000) throw problem('INVALID_QUOTE_DECISION_QUANTITY', '报价决策数量必须大于 0 且不超过 10000')
+      const lookbackDays = Number(rawLookbackDays)
+      if (!Number.isInteger(lookbackDays) || lookbackDays < 30 || lookbackDays > 730) throw problem('INVALID_QUOTE_DECISION_LOOKBACK', '历史参考范围必须为 30 至 730 天')
+      const optionalMoney = (value, label) => {
+        if (value === '' || value == null) return null
+        const normalized = Number(value)
+        if (!Number.isFinite(normalized) || normalized < 0 || normalized > 99999999) throw problem('INVALID_BUSINESS_AMOUNT', `${label}必须是有效的非负金额`)
+        return Math.round(normalized * 100) / 100
+      }
+      const costUnitPrice = optionalMoney(rawCost, '参考成本价'); const saleUnitPrice = optionalMoney(rawSale, '拟定销售价')
+      const customer = (await pool.query("SELECT * FROM business_partner WHERE id=$1 AND status='active' AND partner_type IN ('customer','both')", [partnerId])).rows[0]
+      if (!customer) throw problem('INVALID_QUICK_QUOTE_CUSTOMER', '报价决策选择的客户不存在或不可用', 400)
+      const vehicle = (await pool.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2', [vehicleId, partnerId])).rows[0]
+      if (!vehicle) throw problem('INVALID_QUICK_QUOTE_VEHICLE', '报价决策选择的客户车辆不存在', 400)
+      const sku = (await pool.query(`SELECT s.*,
+        (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe,
+        COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.sort_order,f.created_at) FROM catalog_fitment f WHERE f.sku_id=s.id AND f.verification_status='verified'),'[]'::jsonb) fitments
+        FROM catalog_sku s WHERE s.id=$1 AND s.lifecycle_status='verified' AND s.verification_level='verified'`, [skuId])).rows[0]
+      if (!sku) throw problem('INVALID_QUICK_QUOTE_SKU', '报价决策选择的 SKU 不存在或尚未审核', 400)
+      const matchedFitment = sku.fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicle)) || null
+      const [configuration, inventoryRows, purchaseRows, offerRows, customerSaleRows, marketSaleRows] = await Promise.all([
+        readBusinessControls(pool),
+        pool.query(`SELECT b.id,b.warehouse_id,w.warehouse_code,w.name warehouse_name,w.is_default,b.on_hand_quantity,b.reserved_quantity,b.version,b.updated_at,
+          (SELECT round((sum(l.on_hand_quantity*l.unit_cost)/NULLIF(sum(l.on_hand_quantity),0))::numeric,2) FROM business_inventory_lot l WHERE l.warehouse_id=b.warehouse_id AND l.catalog_sku_id=b.catalog_sku_id AND l.on_hand_quantity>0) weighted_unit_cost
+          FROM business_inventory_balance b JOIN business_warehouse w ON w.id=b.warehouse_id
+          WHERE b.catalog_sku_id=$1 AND w.status='active' ORDER BY w.is_default DESC,w.name,b.warehouse_id`, [sku.id]),
+        pool.query(`SELECT poi.id reference_id,poi.cost_unit_price,po.order_no reference_no,po.supplier_partner_id,po.supplier_name,po.created_at reference_at
+          FROM business_purchase_order_item poi JOIN business_purchase_order po ON po.id=poi.purchase_order_id
+          WHERE poi.catalog_sku_id=$1 AND po.status<>'cancelled' AND po.created_at>=now()-($2::int*interval '1 day')
+          ORDER BY po.created_at DESC,poi.id DESC LIMIT 20`, [sku.id, lookbackDays]),
+        pool.query(`SELECT o.id reference_id,o.unit_price cost_unit_price,i.inquiry_no reference_no,o.supplier_partner_id,o.supplier_name,o.valid_until,o.created_at reference_at,p.status supplier_status
+          FROM business_supplier_offer o JOIN business_inquiry_item ii ON ii.id=o.inquiry_item_id JOIN business_inquiry i ON i.id=o.inquiry_id
+          LEFT JOIN business_partner p ON p.id=o.supplier_partner_id
+          WHERE ii.catalog_sku_id=$1 AND o.created_at>=now()-($2::int*interval '1 day')
+          ORDER BY o.created_at DESC,o.id DESC LIMIT 20`, [sku.id, lookbackDays]),
+        pool.query(`SELECT soi.id reference_id,so.order_no reference_no,soi.sale_unit_price,so.status,so.created_at reference_at
+          FROM business_sales_order_item soi JOIN business_sales_order so ON so.id=soi.sales_order_id
+          WHERE soi.catalog_sku_id=$1 AND so.customer_partner_id=$2 AND so.status<>'cancelled' AND so.created_at>=now()-($3::int*interval '1 day')
+          ORDER BY so.created_at DESC,soi.id DESC LIMIT 50`, [sku.id, customer.id, lookbackDays]),
+        pool.query(`SELECT soi.id reference_id,so.order_no reference_no,so.customer_partner_id,so.customer_name,soi.sale_unit_price,so.status,so.created_at reference_at
+          FROM business_sales_order_item soi JOIN business_sales_order so ON so.id=soi.sales_order_id
+          WHERE soi.catalog_sku_id=$1 AND so.status<>'cancelled' AND so.created_at>=now()-($2::int*interval '1 day')
+          ORDER BY so.created_at DESC,soi.id DESC LIMIT 100`, [sku.id, lookbackDays]),
+      ])
+      const inventoryOptions = inventoryRows.rows.map((row) => ({
+        inventoryBalanceId: row.id, warehouseId: row.warehouse_id, warehouseCode: row.warehouse_code, warehouseName: row.warehouse_name, isDefault: row.is_default,
+        onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity),
+        weightedUnitCost: row.weighted_unit_cost == null ? null : Number(row.weighted_unit_cost), canFulfillQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity) >= requestedQuantity,
+        balanceVersion: row.version, updatedAt: row.updated_at,
+      }))
+      const costReferences = [
+        ...purchaseRows.rows.map((row) => ({ referenceType: 'purchase_order', referenceId: row.reference_id, referenceNo: row.reference_no, supplierPartnerId: row.supplier_partner_id, supplierName: row.supplier_name, unitCost: Number(row.cost_unit_price), validUntil: null, supplierStatus: '', referenceAt: row.reference_at, referenceOnly: true })),
+        ...offerRows.rows.map((row) => ({ referenceType: 'supplier_offer', referenceId: row.reference_id, referenceNo: row.reference_no, supplierPartnerId: row.supplier_partner_id, supplierName: row.supplier_name, unitCost: Number(row.cost_unit_price), validUntil: row.valid_until, supplierStatus: row.supplier_status || '', referenceAt: row.reference_at, referenceOnly: true })),
+      ].sort((a, b) => new Date(b.referenceAt).valueOf() - new Date(a.referenceAt).valueOf()).slice(0, 20)
+      const customerSales = customerSaleRows.rows.map((row) => ({ referenceId: row.reference_id, orderNo: row.reference_no, unitPrice: Number(row.sale_unit_price), orderStatus: row.status, referenceAt: row.reference_at }))
+      const marketSales = marketSaleRows.rows.map((row) => ({ referenceId: row.reference_id, orderNo: row.reference_no, customerPartnerId: row.customer_partner_id, customerName: row.customer_name, unitPrice: Number(row.sale_unit_price), orderStatus: row.status, referenceAt: row.reference_at }))
+      const pricing = buildPricingDecision({ marginControlEnabled: configuration.controls.marginControlEnabled, minimumMarginRate: configuration.controls.minimumMarginRate, quantity: requestedQuantity, costUnitPrice, saleUnitPrice, customerPrices: customerSales.map((row) => row.unitPrice), marketPrices: marketSales.map((row) => row.unitPrice) })
+      const warnings = [...pricing.warnings]
+      if (!matchedFitment) warnings.unshift('fitment_review_required')
+      if (!inventoryOptions.some((option) => option.canFulfillQuantity)) warnings.push('stock_source_unavailable')
+      if (!costReferences.length && !inventoryOptions.some((option) => option.weightedUnitCost != null)) warnings.push('cost_history_unavailable')
+      const snapshot = {
+        customer: { id: customer.id, version: customer.version }, vehicle: { id: vehicle.id, version: vehicle.version, platformMasterId: vehicle.platform_master_id, variantMasterId: vehicle.variant_master_id },
+        sku: { id: sku.id, version: sku.version }, fitmentId: matchedFitment?.id || '', requestedQuantity, controlsVersion: configuration.version,
+        inventory: inventoryOptions.map((row) => ({ warehouseId: row.warehouseId, balanceVersion: row.balanceVersion, availableQuantity: row.availableQuantity, weightedUnitCost: row.weightedUnitCost })),
+        costReferenceIds: costReferences.map((row) => row.referenceId), customerHistory: pricing.customerHistory, marketHistory: pricing.marketHistory, pricing: { costUnitPrice: pricing.costUnitPrice, saleUnitPrice: pricing.saleUnitPrice, marginFloorUnitPrice: pricing.marginFloorUnitPrice, suggestedUnitPrice: pricing.suggestedUnitPrice },
+      }
+      return {
+        generatedAt: new Date().toISOString(), lookbackDays, decisionFingerprint: decisionFingerprint(snapshot),
+        customer: { id: customer.id, partnerNo: customer.partner_no, name: customer.name, paymentTermsDays: customer.payment_terms_days, creditLimit: Number(customer.credit_limit), version: customer.version },
+        vehicle: { id: vehicle.id, vehicleLabel: vehicle.vehicle_label, vin: vehicle.vin, licensePlate: vehicle.license_plate, platformCode: vehicle.platform_code, platformMasterId: vehicle.platform_master_id, variantMasterId: vehicle.variant_master_id, engineCode: vehicle.engine_code, modelYear: vehicle.model_year, version: vehicle.version },
+        sku: { id: sku.id, skuCode: sku.sku_code, name: sku.canonical_name_zh || sku.canonical_name_en, brandLabel: sku.brand_label || sku.brand_code, categoryLabel: sku.category_label || sku.category_code, unit: sku.unit_label, primaryOe: sku.primary_oe || '', version: sku.version },
+        fitment: { status: matchedFitment ? 'matched' : 'review_required', evidence: fitmentSnapshot(matchedFitment) },
+        fulfillment: { requestedQuantity, inventoryOptions, costReferences, costHistory: summarizePriceSamples(costReferences.map((row) => row.unitCost)), referencesAreReusable: false },
+        salesHistory: { customer: customerSales, market: marketSales }, pricing, warnings,
+        controls: { version: configuration.version, ...configuration.controls },
+        guidance: '历史价格和供应商报价仅作参考；创建报价时仍需确认当前成本、履约来源与适配证据。',
+      }
     },
 
     async createQuickQuote(rawInput = {}, actor) {
