@@ -1,0 +1,134 @@
+# 库存与收发货业务 API（v1）
+
+这组接口把「采购到货 → 库存入账 → 销售占用 → 分批出库 → 订单完成」接入现有询价、报价和订单闭环。所有数量变化在单个数据库事务内同时更新业务单据、库存批次、汇总余额和不可覆盖流水。
+
+## 核心原则
+
+- 仓库、库存批次、汇总余额、预留和出库均保存稳定 ID，不依赖页面文案。
+- 有 SKU 时库存按 `catalog_sku` 聚合；无 SKU 的临时业务按 OE 号或询价明细形成稳定库存键。
+- 采购收货按批次入账，保留采购单、采购明细、成本和操作人来源。
+- 可用库存等于在库数量减去预留数量；任何事务都不能让在库、预留或可用数量变为负数。
+- 预留按先进先出分配到具体批次；释放与出库使用原分配关系，不重新猜测批次。
+- 收货和出库要求调用方提供 `requestKey`，相同请求重试只返回原单据，不重复记账。
+- 出库数量不能超过预留，收货数量不能超过采购数量；旧版本操作返回 `409`。
+- 库存流水只新增不覆盖，汇总余额可以由流水重新核对。
+
+## 权限
+
+| 角色 | 查看仓库、余额、流水 | 收货、预留、释放、出库 | 维护仓库 |
+| --- | --- | --- | --- |
+| 只读查看 | 是 | 否 | 否 |
+| 资料录入 | 是 | 是 | 是 |
+| 资料审核 | 是 | 否 | 否 |
+| 资料管理员 | 是 | 是 | 是 |
+
+生产环境匿名身份仍然只有 `business.read`，所有库存写入需要可信身份提供 `business.inventory` 权限。
+
+## 仓库
+
+- `GET /api/v2/business/warehouses`
+- `POST /api/v2/business/warehouses`
+- `GET /api/v2/business/warehouses/:id`
+- `PATCH /api/v2/business/warehouses/:id`
+
+新建示例：
+
+```json
+{
+  "warehouseCode": "HZ-MAIN",
+  "name": "杭州主仓",
+  "address": "杭州市余杭区",
+  "isDefault": true
+}
+```
+
+系统同一时间只允许一个默认仓。仓库仍有在库或预留数量时不能停用；更新必须提交 `expectedVersion`。
+
+## 采购收货
+
+`POST /api/v2/business/purchase-orders/:id/receipts`
+
+兼容入口 `POST /api/v2/business/purchase-orders/:id/receive` 使用相同库存事务。新接入统一使用复数形式的收货单入口。
+
+```json
+{
+  "requestKey": "mobile-scan-20261003-0001",
+  "warehouseId": "仓库 ID",
+  "expectedVersion": 3,
+  "items": [
+    { "itemId": "采购明细 ID", "quantity": 1 }
+  ],
+  "note": "首批到货"
+}
+```
+
+首次成功返回 `201`、`created: true` 和收货单；相同 `requestKey` 重试返回原收货单、`200` 与 `created: false`。服务端在同一事务中：
+
+1. 校验采购单版本和剩余可收数量；
+2. 创建收货单及逐项库存批次；
+3. 增加库存余额并记录 `receipt` 流水；
+4. 累计采购明细到货数量并更新采购单状态；
+5. 全部采购单到货时推动销售订单进入履约。
+
+`GET /api/v2/business/goods-receipts/:id` 返回收货明细、库存批次和成本快照。
+
+## 库存余额与流水
+
+- `GET /api/v2/business/inventory-balances?warehouseId=&q=&page=1&pageSize=50`
+- `GET /api/v2/business/inventory-movements?warehouseId=&stockKey=&page=1&pageSize=50`
+
+余额返回 `onHandQuantity`、`reservedQuantity` 和计算后的 `availableQuantity`。流水类型包括：
+
+- `receipt`：采购收货，在库增加；
+- `reserve`：销售预留，预留增加；
+- `release`：释放销售预留，预留减少；
+- `ship`：销售出库，在库与预留同时减少；
+- `adjustment`：为后续经审批的盘点调整预留，当前版本不开放写入口。
+
+## 销售库存预留
+
+`POST /api/v2/business/sales-orders/:id/reservations`
+
+```json
+{
+  "warehouseId": "仓库 ID",
+  "items": [
+    { "itemId": "销售明细 ID", "quantity": 2 }
+  ],
+  "allowPartial": false,
+  "note": "锁定客户订单库存"
+}
+```
+
+默认要求全部满足；库存不足返回 `409 INSUFFICIENT_AVAILABLE_STOCK` 并整笔回滚。明确设置 `allowPartial: true` 时，响应分别记录预留数量与缺货数量。一个销售订单同一时间只允许一张生效预留，重复请求返回现有预留而不重复占用。
+
+- `GET /api/v2/business/reservations/:id`
+- `POST /api/v2/business/reservations/:id/release`
+
+释放必须提交 `expectedVersion`。已出库部分不会回补，未出库的批次占用原路释放并写入 `release` 流水。
+
+## 销售出库
+
+`POST /api/v2/business/sales-orders/:id/shipments`
+
+```json
+{
+  "requestKey": "delivery-20261003-0001",
+  "reservationId": "库存预留 ID",
+  "expectedReservationVersion": 1,
+  "items": [
+    { "itemId": "销售明细 ID", "quantity": 1 }
+  ],
+  "note": "首批交付"
+}
+```
+
+出库按原预留批次扣减在库与预留数量，并写入 `ship` 流水。首次成功返回 `201`，相同 `requestKey` 重试返回原出库单和 `200`。全部销售明细完成出库后，销售订单自动进入 `completed`；没有完整出库证据时，手工完成订单返回 `409 SALES_ORDER_NOT_FULLY_SHIPPED`。
+
+`GET /api/v2/business/shipments/:id` 返回出库单及逐批次明细。
+
+## 后续演进
+
+- 下一阶段增加经审批的盘点、报损、退货与调拨，不允许直接改库存余额。
+- 应收应付应引用销售订单、采购订单、收货单和出库单，不复制库存数量作为财务事实。
+- 前端接入时优先展示异常与待处理动作：缺货、部分到货、待出库、批次差异和版本冲突。

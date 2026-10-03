@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -253,10 +253,99 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     return businessOrderRepository.transitionPurchaseOrder(request.params.id, request.body, actor)
   })
   app.post('/api/v2/business/purchase-orders/:id/receive', async (request, reply) => {
-    if (!businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_ORDER_UNAVAILABLE', message: '订单业务服务未配置' })
-    const actor = requireCatalogCapability(request, reply, 'business.order')
+    if (!businessInventoryRepository && !businessOrderRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, businessInventoryRepository ? 'business.inventory' : 'business.order')
     if (!actor) return
+    if (businessInventoryRepository) {
+      const result = await businessInventoryRepository.receivePurchaseOrder(request.params.id, request.body, actor)
+      return reply.code(result.created ? 201 : 200).send(result)
+    }
     return businessOrderRepository.receivePurchaseOrder(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/purchase-orders/:id/receipts', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    const result = await businessInventoryRepository.receivePurchaseOrder(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/goods-receipts/:id', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const receipt = await businessInventoryRepository.getReceipt(request.params.id)
+    return receipt || reply.code(404).send({ error: 'GOODS_RECEIPT_NOT_FOUND', message: '采购收货单不存在' })
+  })
+  app.get('/api/v2/business/warehouses', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInventoryRepository.listWarehouses()
+  })
+  app.post('/api/v2/business/warehouses', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    return reply.code(201).send(await businessInventoryRepository.createWarehouse(request.body, actor))
+  })
+  app.get('/api/v2/business/warehouses/:id', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const warehouse = await businessInventoryRepository.getWarehouse(request.params.id)
+    return warehouse || reply.code(404).send({ error: 'WAREHOUSE_NOT_FOUND', message: '仓库不存在' })
+  })
+  app.patch('/api/v2/business/warehouses/:id', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    return businessInventoryRepository.updateWarehouse(request.params.id, request.body, actor)
+  })
+  app.get('/api/v2/business/inventory-balances', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInventoryRepository.listBalances({ warehouseId: request.query?.warehouseId, query: request.query?.q, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.get('/api/v2/business/inventory-movements', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInventoryRepository.listMovements({ warehouseId: request.query?.warehouseId, stockKey: request.query?.stockKey, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/business/sales-orders/:id/reservations', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    const result = await businessInventoryRepository.reserveSalesOrder(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/reservations/:id', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const reservation = await businessInventoryRepository.getReservation(request.params.id)
+    return reservation || reply.code(404).send({ error: 'RESERVATION_NOT_FOUND', message: '库存预留不存在' })
+  })
+  app.post('/api/v2/business/reservations/:id/release', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    return businessInventoryRepository.releaseReservation(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/sales-orders/:id/shipments', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    const result = await businessInventoryRepository.shipSalesOrder(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/shipments/:id', async (request, reply) => {
+    if (!businessInventoryRepository) return reply.code(503).send({ error: 'BUSINESS_INVENTORY_UNAVAILABLE', message: '库存业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const shipment = await businessInventoryRepository.getShipment(request.params.id)
+    return shipment || reply.code(404).send({ error: 'SHIPMENT_NOT_FOUND', message: '销售出库单不存在' })
   })
   app.get('/api/v2/catalog/legacy-migration-preview', async (request, reply) => {
     if (!catalogLegacyMigrationRepository) return reply.code(503).send({ error: 'LEGACY_MIGRATION_UNAVAILABLE', message: '旧资料迁移服务未配置' })

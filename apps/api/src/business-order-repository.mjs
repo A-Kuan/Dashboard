@@ -258,6 +258,11 @@ export function createBusinessOrderRepository(pool) {
       if (!salesTransitions[order.status]?.has(nextStatus)) throw problem('INVALID_SALES_ORDER_TRANSITION', `不能从 ${order.status} 变更为 ${nextStatus}`, 409)
       const purchaseRows = (await client.query('SELECT * FROM business_purchase_order WHERE sales_order_id=$1 FOR UPDATE', [order.id])).rows
       if (nextStatus === 'fulfilling' && purchaseRows.some((item) => item.status !== 'received')) throw problem('PURCHASE_NOT_RECEIVED', '全部采购单到货后才能进入履约交付', 409)
+      if (nextStatus === 'completed') {
+        const unshipped = number((await client.query(`SELECT count(*) FROM business_sales_order_item soi WHERE soi.sales_order_id=$1
+          AND soi.quantity>COALESCE((SELECT sum(si.quantity) FROM business_shipment_item si JOIN business_shipment s ON s.id=si.shipment_id WHERE si.sales_order_item_id=soi.id),0)`, [order.id])).rows[0].count)
+        if (unshipped > 0) throw problem('SALES_ORDER_NOT_FULLY_SHIPPED', '全部销售明细出库后才能完成订单', 409)
+      }
       if (nextStatus === 'cancelled') {
         const received = number((await client.query('SELECT COALESCE(sum(received_quantity),0) quantity FROM business_purchase_order_item WHERE purchase_order_id=ANY($1::text[])', [purchaseRows.map((item) => item.id)])).rows[0]?.quantity)
         if (received > 0) throw problem('ORDER_HAS_RECEIPTS', '已有到货记录的订单不能直接取消，请先处理退货', 409)
