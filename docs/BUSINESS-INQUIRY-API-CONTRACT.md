@@ -101,7 +101,7 @@
 
 ### 快速报价决策中心
 
-`GET /api/v2/business/quick-quote/decision?customerId=&customerVehicleId=&catalogSkuId=&quantity=1&costUnitPrice=&saleUnitPrice=&lookbackDays=365`
+`GET /api/v2/business/quick-quote/decision?customerId=&customerVehicleId=&catalogSkuId=&quantity=1&costUnitPrice=&saleUnitPrice=&lookbackDays=365&fulfillmentSource=purchase&supplierPartnerId=`
 
 选择客户、客户车辆和已审核 SKU 后，该接口把四个模块的事实汇聚为一次可解释的报价决策：
 
@@ -113,7 +113,9 @@
 
 历史供应商报价和采购价始终标记为 `referenceOnly: true`，不能直接复用为当前供应承诺；创建报价时仍必须确认当前供应商、成本、仓库和适配证据。没有明确 `costUnitPrice` 时，系统可以展示客户或市场成交中位数，但返回 `cost_confirmation_required` 且 `pricingReady=false`，不会伪造毛利结论。建议价优先参考该客户历史成交中位数，其次参考市场中位数，并且不会低于按当前成本和最低毛利率反推的安全售价。
 
-响应同时返回证据来源编号、发生时间、统计样本数、资料版本和 `decisionFingerprint`。该指纹用于识别参考依据是否变化；读取决策不会写入或修改客户、SKU、库存和报价数据。
+选择采购来源时同时传 `supplierPartnerId`，选择现货时传 `fulfillmentSource=stock` 与 `fulfillmentWarehouseId`。选定履约来源会进入指纹：供应商或仓库版本、所选仓库库存版本、可用量和加权成本变化都会使旧决策失效。未选择履约来源时仍可用于前期价格探索，但该指纹不能直接创建或修订快速报价。
+
+响应同时返回证据来源编号、发生时间、统计样本数、资料版本、选定履约证据和 `decisionFingerprint`。该指纹用于识别参考依据是否变化；读取决策不会写入或修改客户、SKU、库存和报价数据。
 
 ### 一步生成快速报价
 
@@ -249,13 +251,19 @@
       "saleUnitPrice": 850,
       "costUnitPrice": 600,
       "fulfillmentSource": "purchase",
-      "supplierOfferId": "新的供应商报价 ID"
+      "supplierOfferId": "新的供应商报价 ID",
+      "decisionFingerprint": "按修订后数量、价格和履约来源生成的新指纹",
+      "decisionLookbackDays": 365
     }
   ]
 }
 ```
 
-修订不会覆盖原报价，而是生成同一 `lineageId` 下递增的 `versionNo`。原版本进入 `superseded`，新版本回到 `draft` 并重新计算金额、毛利、信用风险与审批要求。修订时会刷新客户车辆、SKU 版本和已核验适配证据，并允许通过 `fulfillmentSource`、`supplierOfferId` 或 `fulfillmentWarehouseId` 改选有效货源；没有已核验适配时仍需提供不少于 8 个字符的 `fitmentOverrideReason`。`revision` 仍只用于并发控制，`versionNo` 才是客户报价的商业版本。只有血缘中的最新版本可以继续修订或发送；审批不会跨版本继承。
+修订不会覆盖原报价，而是生成同一 `lineageId` 下递增的 `versionNo`。原版本进入 `superseded`，新版本回到 `draft` 并重新计算金额、毛利、信用风险与审批要求。修订时会刷新客户车辆、SKU 版本和已核验适配证据，并允许通过 `fulfillmentSource`、`supplierOfferId` 或 `fulfillmentWarehouseId` 改选有效货源；没有已核验适配时仍需提供不少于 8 个字符的 `fitmentOverrideReason`。
+
+快速报价只要提交 `items` 修改数量、售价、成本、说明、仓库或供应商，每一行都必须携带按修订后内容生成的 `decisionFingerprint`；缺失或过期分别返回 `QUOTE_REVISION_DECISION_REQUIRED`、`QUOTE_REVISION_DECISION_STALE`，且不会替代原报价。仅因资料恢复而不改变商业条件时可以省略 `items`，服务端会自动按实时事实刷新并固化新决策快照。修订事件的 `changeSet.lineChanges` 返回每行字段级前后值，包含决策指纹变化，便于审计“为什么重新报价”。
+
+`revision` 仍只用于并发控制，`versionNo` 才是客户报价的商业版本。只有血缘中的最新版本可以继续修订或发送；审批不会跨版本继承。
 
 询价详情返回顶层 `quoteRevisionEvents`，每张报价返回自己的 `integrityEvents`。前者包含前后快照、修订原因与变更行；后者记录每次核验动作、结果、原因、快照与指纹。每张报价还返回 `integrityStatus`、`integrityReasons`、`integritySnapshot`、`integrityFingerprint`、`integrityValidatedAt` 和 `integrityValidatedAction`。
 

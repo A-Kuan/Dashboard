@@ -941,8 +941,11 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(context.warehouses.map((item) => item.id)).toContain(warehouse.id)
   expect(context.skus[0].inventoryByWarehouse).toEqual([])
 
-  const loadQuoteDecision = async ({ quantity = 1, costUnitPrice, saleUnitPrice }) => {
-    const response = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=${quantity}&costUnitPrice=${costUnitPrice}&saleUnitPrice=${saleUnitPrice}`, { headers: editorHeaders })
+  const loadQuoteDecision = async ({ quantity = 1, costUnitPrice, saleUnitPrice, fulfillmentSource = 'purchase', supplierPartnerId = supplier.id, fulfillmentWarehouseId = '' }) => {
+    const sourceQuery = fulfillmentSource === 'stock'
+      ? `&fulfillmentSource=stock&fulfillmentWarehouseId=${encodeURIComponent(fulfillmentWarehouseId)}`
+      : `&fulfillmentSource=purchase&supplierPartnerId=${encodeURIComponent(supplierPartnerId)}`
+    const response = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=${quantity}&costUnitPrice=${costUnitPrice}&saleUnitPrice=${saleUnitPrice}${sourceQuery}`, { headers: editorHeaders })
     expect(response.ok()).toBeTruthy()
     return response.json()
   }
@@ -953,6 +956,7 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(initialDecision.pricing.suggestedUnitPrice).toBe(705.89)
   expect(initialDecision.pricing.marginRate).toBe(32.4324)
   expect(initialDecision.pricing.pricingReady).toBe(true)
+  expect(initialDecision.fulfillment.selected.supplierPartnerId).toBe(supplier.id)
   expect(initialDecision.salesHistory.customer).toEqual([])
   expect(initialDecision.warnings).toEqual(expect.arrayContaining(['price_history_unavailable', 'stock_source_unavailable', 'cost_history_unavailable']))
   expect(initialDecision.decisionFingerprint).toMatch(/^[a-f0-9]{64}$/)
@@ -1054,6 +1058,11 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   const refreshedIntegrityQuote = integrityInquiry.quotes.find((quote) => quote.versionNo === 2)
   expect(refreshedIntegrityQuote.integrityStatus).toBe('valid')
   expect(refreshedIntegrityQuote.items[0].supplierOfferId).toBe(integrityQuote.items[0].supplierOfferId)
+  expect(refreshedIntegrityQuote.items[0].decisionFingerprint).toMatch(/^[a-f0-9]{64}$/)
+  expect(refreshedIntegrityQuote.items[0].decisionFingerprint).not.toBe(integrityQuote.items[0].decisionFingerprint)
+  const integrityRevisionEvent = integrityInquiry.quoteRevisionEvents.find((event) => event.toQuoteId === refreshedIntegrityQuote.id)
+  expect(integrityRevisionEvent.changeSet.lineChanges[0].changes.decisionFingerprint.from).toBe(integrityQuote.items[0].decisionFingerprint)
+  expect(integrityRevisionEvent.changeSet.lineChanges[0].changes.decisionFingerprint.to).toBe(refreshedIntegrityQuote.items[0].decisionFingerprint)
   expect(refreshedIntegrityQuote.integrityEvents.some((event) => event.action === 'revised' && event.result === 'valid')).toBeTruthy()
 
   const concurrentDecision = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 888 })
@@ -1066,9 +1075,11 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   const concurrentResults = await Promise.all(concurrentResponses.map((response) => response.json()))
   expect(new Set(concurrentResults.map((result) => result.quoteId)).size).toBe(1)
   const concurrentSource = concurrentResults[0].inquiry.quotes[0]
+  const concurrentRevisionDecisionA = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 980 })
+  const concurrentRevisionDecisionB = await loadQuoteDecision({ quantity: 2, costUnitPrice: 600, saleUnitPrice: 970 })
   const concurrentRevisionResponses = await Promise.all([
-    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求甲', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 980 }] } }),
-    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求乙', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 970 }] } }),
+    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求甲', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 980, decisionFingerprint: concurrentRevisionDecisionA.decisionFingerprint }] } }),
+    page.request.post(`/api/v2/business/quotes/${concurrentSource.id}/revisions`, { headers: editorHeaders, data: { expectedRevision: concurrentSource.revision, reason: '并发修订请求乙', items: [{ sourceQuoteItemId: concurrentSource.items[0].id, saleUnitPrice: 970, decisionFingerprint: concurrentRevisionDecisionB.decisionFingerprint }] } }),
   ])
   expect(concurrentRevisionResponses.map((response) => response.status()).sort()).toEqual([201, 409])
 
@@ -1161,9 +1172,28 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   const originalQuote = lowMarginInquiry.quotes[0]
   expect(originalQuote.versionNo).toBe(1)
   const nearExpiry = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)
+  const missingRevisionDecisionResponse = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/revisions`, { headers: editorHeaders, data: {
+    expectedRevision: originalQuote.revision, reason: '验证修订必须重新决策', validUntil: nearExpiry,
+    items: [{ sourceQuoteItemId: originalQuote.items[0].id, quantity: 1, saleUnitPrice: 650, costUnitPrice: 600 }],
+  } })
+  expect(missingRevisionDecisionResponse.status()).toBe(409)
+  expect((await missingRevisionDecisionResponse.json()).error).toBe('QUOTE_REVISION_DECISION_REQUIRED')
+  const staleRevisionDecision = await loadQuoteDecision({ quantity: 1, costUnitPrice: 600, saleUnitPrice: 650 })
+  const revisionCustomer = await (await page.request.get(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders })).json()
+  const changedRevisionCustomerResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}`, { headers: editorHeaders, data: {
+    expectedVersion: revisionCustomer.version, notes: '验证改价前客户资料变化会使修订决策失效',
+  } })
+  expect(changedRevisionCustomerResponse.ok()).toBeTruthy()
+  const staleRevisionResponse = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/revisions`, { headers: editorHeaders, data: {
+    expectedRevision: originalQuote.revision, reason: '验证过期修订决策阻断', validUntil: nearExpiry,
+    items: [{ sourceQuoteItemId: originalQuote.items[0].id, quantity: 1, saleUnitPrice: 650, costUnitPrice: 600, decisionFingerprint: staleRevisionDecision.decisionFingerprint }],
+  } })
+  expect(staleRevisionResponse.status()).toBe(409)
+  expect((await staleRevisionResponse.json()).error).toBe('QUOTE_REVISION_DECISION_STALE')
+  const currentRevisionDecision = await loadQuoteDecision({ quantity: 1, costUnitPrice: 600, saleUnitPrice: 650 })
   const revisionResponse = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/revisions`, { headers: editorHeaders, data: {
     expectedRevision: originalQuote.revision, reason: '客户要求调整成交价格', validUntil: nearExpiry,
-    items: [{ sourceQuoteItemId: originalQuote.items[0].id, quantity: 1, saleUnitPrice: 650, costUnitPrice: 600 }],
+    items: [{ sourceQuoteItemId: originalQuote.items[0].id, quantity: 1, saleUnitPrice: 650, costUnitPrice: 600, decisionFingerprint: currentRevisionDecision.decisionFingerprint }],
   } })
   expect(revisionResponse.status()).toBe(201)
   lowMarginInquiry = await revisionResponse.json()
@@ -1174,9 +1204,14 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(revisedQuote.approvalStatus).toBe('pending')
   expect(revisedQuote.approvedById).toBe('')
   expect(revisedQuote.totalAmount).toBe(650)
+  expect(revisedQuote.items[0].decisionFingerprint).toBe(currentRevisionDecision.decisionFingerprint)
+  expect(revisedQuote.items[0].decisionSnapshot.pricing.saleUnitPrice).toBe(650)
   expect(supersededQuote.state).toBe('superseded')
   expect(supersededQuote.supersededByQuoteId).toBe(revisedQuote.id)
-  expect(lowMarginInquiry.quoteRevisionEvents.some((event) => event.action === 'revised' && event.fromQuoteId === originalQuote.id && event.toQuoteId === revisedQuote.id && event.changeSet.changedLines.includes(1))).toBeTruthy()
+  const priceRevisionEvent = lowMarginInquiry.quoteRevisionEvents.find((event) => event.action === 'revised' && event.fromQuoteId === originalQuote.id && event.toQuoteId === revisedQuote.id)
+  expect(priceRevisionEvent.changeSet.changedLines).toContain(1)
+  expect(priceRevisionEvent.changeSet.lineChanges[0].changes.saleUnitPrice).toEqual({ from: 610, to: 650 })
+  expect(priceRevisionEvent.changeSet.lineChanges[0].changes.decisionFingerprint.to).toBe(currentRevisionDecision.decisionFingerprint)
 
   const staleSend = await page.request.post(`/api/v2/business/quotes/${originalQuote.id}/send`, { headers: editorHeaders, data: { expectedRevision: originalQuote.revision } })
   expect(staleSend.status()).toBe(409)
