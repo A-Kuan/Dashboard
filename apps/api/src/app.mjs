@@ -220,6 +220,7 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     return businessInquiryRepository.quoteDecision({
       customerId: request.query?.customerId, customerVehicleId: request.query?.customerVehicleId, catalogSkuId: request.query?.catalogSkuId,
       quantity: request.query?.quantity, costUnitPrice: request.query?.costUnitPrice, saleUnitPrice: request.query?.saleUnitPrice, lookbackDays: request.query?.lookbackDays,
+      fulfillmentSource: request.query?.fulfillmentSource, fulfillmentWarehouseId: request.query?.fulfillmentWarehouseId, supplierPartnerId: request.query?.supplierPartnerId,
     })
   })
   app.post('/api/v2/business/quick-quotes', async (request, reply) => {
