@@ -865,8 +865,15 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
   await expect(page.locator('.workbench-home')).not.toHaveClass(/sidebar-collapsed/)
 })
 
-test('runs an inquiry through quote, conversion, purchasing, receipt and fulfilment', async ({ page }) => {
+test('runs an inquiry through purchasing, inventory reservation and shipment', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-e2e-1' }
+  const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
+    warehouseCode: 'HZ-MAIN', name: '杭州主仓', address: '杭州市余杭区', isDefault: true,
+  } })
+  expect(warehouseResponse.status()).toBe(201)
+  const warehouse = await warehouseResponse.json()
+  expect(warehouse.warehouseCode).toBe('HZ-MAIN')
+  expect(warehouse.isDefault).toBe(true)
   const customerResponse = await page.request.post('/api/v2/business/partners', { headers: editorHeaders, data: {
     partnerType: 'customer', name: '业务闭环测试汽修', shortName: '闭环汽修', phone: '13800000001', paymentTermsDays: 15, creditLimit: 20000,
     contacts: [{ name: '王师傅', roleTitle: '店长', phone: '13800000001', wechat: 'wang-master', isPrimary: true }],
@@ -1012,33 +1019,54 @@ test('runs an inquiry through quote, conversion, purchasing, receipt and fulfilm
   expect(confirmedPurchaseResponse.ok()).toBeTruthy()
   purchaseOrder = await confirmedPurchaseResponse.json()
 
-  const firstReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
-    expectedVersion: purchaseOrder.version, items: [{ itemId: purchaseOrder.items[0].id, quantity: 1 }], note: '首批到货',
+  const firstReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receipts`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-receipt-first', warehouseId: warehouse.id, expectedVersion: purchaseOrder.version,
+    items: [{ itemId: purchaseOrder.items[0].id, quantity: 1 }], note: '首批到货',
   } })
-  expect(firstReceiptResponse.ok()).toBeTruthy()
-  purchaseOrder = await firstReceiptResponse.json()
+  expect(firstReceiptResponse.status()).toBe(201)
+  const firstReceipt = await firstReceiptResponse.json()
+  expect(firstReceipt.created).toBe(true)
+  expect(firstReceipt.receipt.warehouseId).toBe(warehouse.id)
+  expect(firstReceipt.receipt.items[0].receivedQuantity).toBe(1)
+  purchaseOrder = await (await page.request.get(`/api/v2/business/purchase-orders/${purchaseOrder.id}`, { headers: editorHeaders })).json()
   expect(purchaseOrder.status).toBe('partially_received')
   expect(purchaseOrder.items[0].receivedQuantity).toBe(1)
   expect(purchaseOrder.items[0].remainingQuantity).toBe(1)
 
-  const overReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
-    expectedVersion: purchaseOrder.version, items: [{ itemId: purchaseOrder.items[0].id, quantity: 2 }],
+  const overReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receipts`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-receipt-over', warehouseId: warehouse.id, expectedVersion: purchaseOrder.version,
+    items: [{ itemId: purchaseOrder.items[0].id, quantity: 2 }],
   } })
   expect(overReceiptResponse.status()).toBe(409)
   expect((await overReceiptResponse.json()).error).toBe('RECEIPT_EXCEEDS_ORDERED_QUANTITY')
 
-  const finalReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receive`, { headers: editorHeaders, data: {
-    expectedVersion: purchaseOrder.version,
+  const finalReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receipts`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-receipt-final', warehouseId: warehouse.id, expectedVersion: purchaseOrder.version,
     items: [
       { itemId: purchaseOrder.items[0].id, quantity: 1 },
       { itemId: purchaseOrder.items[1].id, quantity: 1 },
     ],
     note: '全部到货并核对数量',
   } })
-  expect(finalReceiptResponse.ok()).toBeTruthy()
-  purchaseOrder = await finalReceiptResponse.json()
+  expect(finalReceiptResponse.status()).toBe(201)
+  const finalReceipt = await finalReceiptResponse.json()
+  expect(finalReceipt.receipt.items).toHaveLength(2)
+  const repeatedReceiptResponse = await page.request.post(`/api/v2/business/purchase-orders/${purchaseOrder.id}/receipts`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-receipt-final', warehouseId: warehouse.id, expectedVersion: purchaseOrder.version,
+    items: [{ itemId: purchaseOrder.items[0].id, quantity: 1 }],
+  } })
+  expect(repeatedReceiptResponse.status()).toBe(200)
+  expect((await repeatedReceiptResponse.json()).receipt.id).toBe(finalReceipt.receipt.id)
+  purchaseOrder = await (await page.request.get(`/api/v2/business/purchase-orders/${purchaseOrder.id}`, { headers: editorHeaders })).json()
   expect(purchaseOrder.status).toBe('received')
   expect(purchaseOrder.items.every((item) => item.receivedQuantity === item.quantity)).toBeTruthy()
+
+  const stockedBalancesResponse = await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })
+  expect(stockedBalancesResponse.ok()).toBeTruthy()
+  const stockedBalances = await stockedBalancesResponse.json()
+  expect(stockedBalances.items).toHaveLength(2)
+  expect(stockedBalances.items.reduce((sum, item) => sum + item.onHandQuantity, 0)).toBe(3)
+  expect(stockedBalances.items.every((item) => item.reservedQuantity === 0)).toBeTruthy()
 
   const refreshedSalesResponse = await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })
   expect(refreshedSalesResponse.ok()).toBeTruthy()
@@ -1046,12 +1074,103 @@ test('runs an inquiry through quote, conversion, purchasing, receipt and fulfilm
   expect(salesOrder.status).toBe('fulfilling')
   expect(salesOrder.receivedPurchaseOrderCount).toBe(1)
   expect(salesOrder.events.map((event) => event.action)).toEqual(expect.arrayContaining(['created_from_inquiry', 'status_changed', 'purchasing_completed']))
-  const completedSalesResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/transition`, { headers: editorHeaders, data: {
+
+  const prematureCompletionResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/transition`, { headers: editorHeaders, data: {
     expectedVersion: salesOrder.version, status: 'completed', note: '客户交付完成',
   } })
-  expect(completedSalesResponse.ok()).toBeTruthy()
-  salesOrder = await completedSalesResponse.json()
+  expect(prematureCompletionResponse.status()).toBe(409)
+  expect((await prematureCompletionResponse.json()).error).toBe('SALES_ORDER_NOT_FULLY_SHIPPED')
+
+  const emptyWarehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
+    warehouseCode: 'HZ-EMPTY', name: '杭州空仓', address: '杭州市',
+  } })
+  expect(emptyWarehouseResponse.status()).toBe(201)
+  const emptyWarehouse = await emptyWarehouseResponse.json()
+  const insufficientReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
+    warehouseId: emptyWarehouse.id, items: [{ itemId: salesOrder.items[0].id, quantity: 1 }],
+  } })
+  expect(insufficientReservationResponse.status()).toBe(409)
+  expect((await insufficientReservationResponse.json()).error).toBe('INSUFFICIENT_AVAILABLE_STOCK')
+
+  const reservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
+    warehouseId: warehouse.id,
+    items: salesOrder.items.map((item) => ({ itemId: item.id, quantity: item.quantity })),
+    note: '为客户订单锁定全部库存',
+  } })
+  expect(reservationResponse.status()).toBe(201)
+  let reservation = (await reservationResponse.json()).reservation
+  expect(reservation.status).toBe('active')
+  expect(reservation.items).toHaveLength(2)
+  expect(reservation.items.every((item) => item.shortageQuantity === 0)).toBeTruthy()
+  expect(reservation.items.reduce((sum, item) => sum + item.reservedQuantity, 0)).toBe(3)
+  const repeatedReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
+    warehouseId: warehouse.id, items: [{ itemId: salesOrder.items[0].id, quantity: 1 }],
+  } })
+  expect(repeatedReservationResponse.status()).toBe(200)
+  expect((await repeatedReservationResponse.json()).reservation.id).toBe(reservation.id)
+
+  const releasedReservationResponse = await page.request.post(`/api/v2/business/reservations/${reservation.id}/release`, { headers: editorHeaders, data: {
+    expectedVersion: reservation.version, note: '演练释放后重新锁定',
+  } })
+  expect(releasedReservationResponse.ok()).toBeTruthy()
+  expect((await releasedReservationResponse.json()).status).toBe('released')
+  const balancesAfterRelease = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterRelease.items.every((item) => item.reservedQuantity === 0 && item.availableQuantity === item.onHandQuantity)).toBeTruthy()
+  const replacementReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
+    warehouseId: warehouse.id,
+    items: salesOrder.items.map((item) => ({ itemId: item.id, quantity: item.quantity })),
+    note: '正式锁定客户订单库存',
+  } })
+  expect(replacementReservationResponse.status()).toBe(201)
+  reservation = (await replacementReservationResponse.json()).reservation
+
+  const firstSalesItem = salesOrder.items.find((item) => item.quantity === 2)
+  const secondSalesItem = salesOrder.items.find((item) => item.quantity === 1)
+  const firstShipmentResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/shipments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-shipment-first', reservationId: reservation.id, expectedReservationVersion: reservation.version,
+    items: [{ itemId: firstSalesItem.id, quantity: 1 }], note: '首批交付客户',
+  } })
+  expect(firstShipmentResponse.status()).toBe(201)
+  const firstShipment = await firstShipmentResponse.json()
+  expect(firstShipment.shipment.items.reduce((sum, item) => sum + item.quantity, 0)).toBe(1)
+  reservation = await (await page.request.get(`/api/v2/business/reservations/${reservation.id}`, { headers: editorHeaders })).json()
+  expect(reservation.status).toBe('active')
+  expect(reservation.version).toBe(2)
+
+  const repeatedShipmentResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/shipments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-shipment-first', reservationId: reservation.id, expectedReservationVersion: reservation.version,
+    items: [{ itemId: firstSalesItem.id, quantity: 1 }],
+  } })
+  expect(repeatedShipmentResponse.status()).toBe(200)
+  expect((await repeatedShipmentResponse.json()).shipment.id).toBe(firstShipment.shipment.id)
+
+  const overShipmentResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/shipments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-shipment-over', reservationId: reservation.id, expectedReservationVersion: reservation.version,
+    items: [{ itemId: firstSalesItem.id, quantity: 2 }],
+  } })
+  expect(overShipmentResponse.status()).toBe(409)
+  expect((await overShipmentResponse.json()).error).toBe('SHIPMENT_EXCEEDS_RESERVED_QUANTITY')
+
+  const finalShipmentResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/shipments`, { headers: editorHeaders, data: {
+    requestKey: 'e2e-shipment-final', reservationId: reservation.id, expectedReservationVersion: reservation.version,
+    items: [{ itemId: firstSalesItem.id, quantity: 1 }, { itemId: secondSalesItem.id, quantity: 1 }], note: '全部交付完成',
+  } })
+  expect(finalShipmentResponse.status()).toBe(201)
+  reservation = await (await page.request.get(`/api/v2/business/reservations/${reservation.id}`, { headers: editorHeaders })).json()
+  expect(reservation.status).toBe('fulfilled')
+  salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
   expect(salesOrder.status).toBe('completed')
+  expect(salesOrder.events.map((event) => event.action)).toContain('shipment_completed')
+
+  const depletedBalances = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(depletedBalances.items.every((item) => item.onHandQuantity === 0 && item.reservedQuantity === 0 && item.availableQuantity === 0)).toBeTruthy()
+  const movements = await (await page.request.get(`/api/v2/business/inventory-movements?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(movements.items.map((item) => item.movementType)).toEqual(expect.arrayContaining(['receipt', 'reserve', 'release', 'ship']))
+  for (const balance of depletedBalances.items) {
+    const itemMovements = movements.items.filter((movement) => movement.stockKey === balance.stockKey)
+    expect(itemMovements.reduce((sum, movement) => sum + movement.onHandDelta, 0)).toBe(balance.onHandQuantity)
+    expect(itemMovements.reduce((sum, movement) => sum + movement.reservedDelta, 0)).toBe(balance.reservedQuantity)
+  }
 
   const salesListResponse = await page.request.get('/api/v2/business/sales-orders?status=completed', { headers: editorHeaders })
   expect(salesListResponse.ok()).toBeTruthy()

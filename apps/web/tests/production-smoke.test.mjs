@@ -84,6 +84,15 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const purchaseOrderList = await purchaseOrderListResponse.json()
     assert.ok(Array.isArray(purchaseOrderList.items))
     assert.ok(Number.isInteger(purchaseOrderList.total))
+    const warehouseListResponse = await page.request.get(new URL('api/v2/business/warehouses', baseUrl).toString())
+    assert.equal(warehouseListResponse.ok(), true)
+    assert.ok(Array.isArray((await warehouseListResponse.json()).items))
+    const inventoryListResponse = await page.request.get(new URL('api/v2/business/inventory-balances?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(inventoryListResponse.ok(), true)
+    assert.ok(Array.isArray((await inventoryListResponse.json()).items))
+    const movementListResponse = await page.request.get(new URL('api/v2/business/inventory-movements?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(movementListResponse.ok(), true)
+    assert.ok(Array.isArray((await movementListResponse.json()).items))
     if (!session.capabilities.includes('business.manage')) {
       const denied = await page.request.post(new URL('api/v2/business/inquiries', baseUrl).toString(), { data: { customerName: '只读冒烟', items: [{ requirementText: '不应写入' }] } })
       assert.equal(denied.status(), 403)
@@ -99,6 +108,16 @@ test('production workbench uses its real API without writing data', { skip: !bas
       assert.equal(purchaseTransitionDenied.status(), 403)
       const receiptDenied = await page.request.post(new URL('api/v2/business/purchase-orders/read-only-smoke/receive', baseUrl).toString(), { data: { expectedVersion: 1, items: [{ itemId: 'read-only-smoke', quantity: 1 }] } })
       assert.equal(receiptDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.inventory')) {
+      const warehouseDenied = await page.request.post(new URL('api/v2/business/warehouses', baseUrl).toString(), { data: { warehouseCode: 'SMOKE', name: '不应写入' } })
+      assert.equal(warehouseDenied.status(), 403)
+      const goodsReceiptDenied = await page.request.post(new URL('api/v2/business/purchase-orders/read-only-smoke/receipts', baseUrl).toString(), { data: { requestKey: 'read-only-smoke', warehouseId: 'none', items: [] } })
+      assert.equal(goodsReceiptDenied.status(), 403)
+      const reservationDenied = await page.request.post(new URL('api/v2/business/sales-orders/read-only-smoke/reservations', baseUrl).toString(), { data: { warehouseId: 'none', items: [] } })
+      assert.equal(reservationDenied.status(), 403)
+      const shipmentDenied = await page.request.post(new URL('api/v2/business/sales-orders/read-only-smoke/shipments', baseUrl).toString(), { data: { requestKey: 'read-only-smoke', reservationId: 'none', items: [] } })
+      assert.equal(shipmentDenied.status(), 403)
     }
 
     assert.ok(catalogRequests.length > 0)

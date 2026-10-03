@@ -109,7 +109,18 @@ SELECT json_build_object(
   'businessSalesOrderItem',pg_temp.exact_count('business_sales_order_item'),
   'businessPurchaseOrder',pg_temp.exact_count('business_purchase_order'),
   'businessPurchaseOrderItem',pg_temp.exact_count('business_purchase_order_item'),
-  'businessOrderEvent',pg_temp.exact_count('business_order_event')
+  'businessOrderEvent',pg_temp.exact_count('business_order_event'),
+  'businessWarehouse',pg_temp.exact_count('business_warehouse'),
+  'businessGoodsReceipt',pg_temp.exact_count('business_goods_receipt'),
+  'businessGoodsReceiptItem',pg_temp.exact_count('business_goods_receipt_item'),
+  'businessInventoryLot',pg_temp.exact_count('business_inventory_lot'),
+  'businessInventoryBalance',pg_temp.exact_count('business_inventory_balance'),
+  'businessStockReservation',pg_temp.exact_count('business_stock_reservation'),
+  'businessStockReservationItem',pg_temp.exact_count('business_stock_reservation_item'),
+  'businessStockReservationAllocation',pg_temp.exact_count('business_stock_reservation_allocation'),
+  'businessShipment',pg_temp.exact_count('business_shipment'),
+  'businessShipmentItem',pg_temp.exact_count('business_shipment_item'),
+  'businessInventoryMovement',pg_temp.exact_count('business_inventory_movement')
 )::text;
 SQL
 REMOTE
