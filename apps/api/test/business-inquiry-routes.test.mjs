@@ -31,6 +31,7 @@ test('business inquiry routes expose reads while protecting operational writes',
   const inquiry = { id: 'inquiry-1', inquiryNo: 'INQ-20261002-ABC123', status: 'new', version: 1, items: [{ id: 'item-1' }], quotes: [] }
   const repository = {
     quoteContext: async (input) => { calls.push(['quoteContext', input]); return { customers: [], vehicles: [], skus: [] } },
+    quoteDecision: async (input) => { calls.push(['quoteDecision', input]); return { decisionFingerprint: 'decision-1', pricing: { marginFloorUnitPrice: 705.89 } } },
     createQuickQuote: async (input, actor) => { calls.push(['createQuickQuote', input, actor]); return { created: true, quoteId: 'quote-quick-1', inquiry } },
     list: async (input) => { calls.push(['list', input]); return { items: [inquiry], total: 1, page: 1, pageSize: 30, summary: { new: { count: 1, amount: 0 } } } },
     get: async (id) => { calls.push(['get', id]); return id === inquiry.id ? inquiry : null },
@@ -55,6 +56,10 @@ test('business inquiry routes expose reads while protecting operational writes',
   const context = await app.inject({ method: 'GET', url: '/api/v2/business/quick-quote/context?customerQuery=%E7%8E%8B%E5%B8%88%E5%82%85&skuQuery=95B', headers: { 'x-operator-role': 'catalog_viewer' } })
   assert.equal(context.statusCode, 200)
   assert.equal(calls.find((entry) => entry[0] === 'quoteContext')[1].skuQuery, '95B')
+  const decision = await app.inject({ method: 'GET', url: '/api/v2/business/quick-quote/decision?customerId=partner-1&customerVehicleId=vehicle-1&catalogSkuId=sku-1&quantity=2&costUnitPrice=600&saleUnitPrice=888', headers: { 'x-operator-role': 'catalog_viewer' } })
+  assert.equal(decision.statusCode, 200)
+  assert.equal(decision.json().pricing.marginFloorUnitPrice, 705.89)
+  assert.equal(calls.find((entry) => entry[0] === 'quoteDecision')[1].quantity, '2')
 
   const denied = await app.inject({ method: 'POST', url: '/api/v2/business/inquiries', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { customerName: '无权限客户' } })
   assert.equal(denied.statusCode, 403)

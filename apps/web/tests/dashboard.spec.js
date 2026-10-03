@@ -941,6 +941,19 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(context.warehouses.map((item) => item.id)).toContain(warehouse.id)
   expect(context.skus[0].inventoryByWarehouse).toEqual([])
 
+  const initialDecisionResponse = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=2&costUnitPrice=600&saleUnitPrice=888`, { headers: editorHeaders })
+  expect(initialDecisionResponse.ok()).toBeTruthy()
+  const initialDecision = await initialDecisionResponse.json()
+  expect(initialDecision.fitment.status).toBe('matched')
+  expect(initialDecision.fitment.evidence.fitmentId).toBe(selectedFitment.id)
+  expect(initialDecision.pricing.marginFloorUnitPrice).toBe(705.89)
+  expect(initialDecision.pricing.suggestedUnitPrice).toBe(705.89)
+  expect(initialDecision.pricing.marginRate).toBe(32.4324)
+  expect(initialDecision.pricing.pricingReady).toBe(true)
+  expect(initialDecision.salesHistory.customer).toEqual([])
+  expect(initialDecision.warnings).toEqual(expect.arrayContaining(['price_history_unavailable', 'stock_source_unavailable', 'cost_history_unavailable']))
+  expect(initialDecision.decisionFingerprint).toMatch(/^[a-f0-9]{64}$/)
+
   const unavailableStockResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
     requestKey: 'quick-quote-stock-unavailable', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
     items: [{ catalogSkuId: selectedSku.id, quantity: 1, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'stock', fulfillmentWarehouseId: warehouse.id }],
@@ -1068,6 +1081,14 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(conversion.purchaseOrders).toHaveLength(1)
   expect(conversion.purchaseOrders[0].supplierPartnerId).toBe(supplier.id)
   expect(conversion.salesOrder.receivable.status).toBe('open')
+  const historicalDecisionResponse = await page.request.get(`/api/v2/business/quick-quote/decision?customerId=${customer.id}&customerVehicleId=${customer.vehicles[0].id}&catalogSkuId=${selectedSku.id}&quantity=1&costUnitPrice=600&saleUnitPrice=888`, { headers: editorHeaders })
+  expect(historicalDecisionResponse.ok()).toBeTruthy()
+  const historicalDecision = await historicalDecisionResponse.json()
+  expect(historicalDecision.pricing.customerHistory.count).toBe(1)
+  expect(historicalDecision.pricing.customerHistory.median).toBe(888)
+  expect(historicalDecision.pricing.suggestionBasis).toBe('customer_median')
+  expect(historicalDecision.pricing.suggestedUnitPrice).toBe(888)
+  expect(historicalDecision.fulfillment.costReferences.some((item) => item.referenceType === 'purchase_order' && item.unitCost === 600 && item.referenceOnly)).toBeTruthy()
   const convertedWorkQueueResponse = await page.request.get('/api/v2/business/operations-center?pageSize=100', { headers: editorHeaders })
   expect(convertedWorkQueueResponse.ok()).toBeTruthy()
   const convertedWorkQueue = await convertedWorkQueueResponse.json()

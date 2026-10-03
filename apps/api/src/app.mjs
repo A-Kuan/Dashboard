@@ -213,6 +213,15 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
       platformId: request.query?.platformId, variantId: request.query?.variantId, pageSize: request.query?.pageSize,
     })
   })
+  app.get('/api/v2/business/quick-quote/decision', async (request, reply) => {
+    if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessInquiryRepository.quoteDecision({
+      customerId: request.query?.customerId, customerVehicleId: request.query?.customerVehicleId, catalogSkuId: request.query?.catalogSkuId,
+      quantity: request.query?.quantity, costUnitPrice: request.query?.costUnitPrice, saleUnitPrice: request.query?.saleUnitPrice, lookbackDays: request.query?.lookbackDays,
+    })
+  })
   app.post('/api/v2/business/quick-quotes', async (request, reply) => {
     if (!businessInquiryRepository) return reply.code(503).send({ error: 'BUSINESS_INQUIRY_UNAVAILABLE', message: '询价业务服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.quote')
