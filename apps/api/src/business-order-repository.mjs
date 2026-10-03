@@ -44,6 +44,11 @@ function futureDate(days) {
   date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString().slice(0, 10)
 }
+function orderStockKey(row) {
+  if (clean(row.catalog_sku_id)) return `sku:${clean(row.catalog_sku_id)}`
+  const oe = clean(row.oe_number).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return oe ? `oe:${oe}` : `inquiry:${clean(row.inquiry_item_id)}`
+}
 
 function mapSalesOrder(row) {
   return {
@@ -60,7 +65,7 @@ function mapSalesOrder(row) {
 function mapSalesItem(row) {
   return {
     id: row.id, salesOrderId: row.sales_order_id, quoteItemId: row.quote_item_id, inquiryItemId: row.inquiry_item_id,
-    catalogSkuId: row.catalog_sku_id, fulfillmentSource: row.fulfillment_source, lineNo: row.line_no, description: row.description, oeNumber: row.oe_number,
+    catalogSkuId: row.catalog_sku_id, fulfillmentSource: row.fulfillment_source, fulfillmentWarehouseId: row.fulfillment_warehouse_id, lineNo: row.line_no, description: row.description, oeNumber: row.oe_number,
     quantity: number(row.quantity), unit: row.unit, saleUnitPrice: number(row.sale_unit_price), lineTotal: number(row.line_total),
   }
 }
@@ -195,6 +200,22 @@ export function createBusinessOrderRepository(pool) {
       if (!quoteItems.length) throw problem('QUOTE_ITEMS_NOT_FOUND', '成交报价单没有明细，无法生成订单', 409)
       const missingSource = quoteItems.find((item) => item.fulfillment_source === 'purchase' && (!item.supplier_offer_id || !item.supplier_name))
       if (missingSource) throw problem('ORDER_SUPPLIER_SOURCE_REQUIRED', `报价第 ${missingSource.line_no} 项未关联有效供应商报价，无法生成采购单`, 409, { lineNo: missingSource.line_no })
+      const stockDemand = new Map()
+      for (const item of quoteItems.filter((entry) => entry.fulfillment_source === 'stock')) {
+        if (!item.fulfillment_warehouse_id) throw problem('ORDER_STOCK_WAREHOUSE_REQUIRED', `报价第 ${item.line_no} 项未指定现货仓库`, 409, { lineNo: item.line_no })
+        const key = `${item.fulfillment_warehouse_id}:${orderStockKey(item)}`
+        const current = stockDemand.get(key) || { warehouseId: item.fulfillment_warehouse_id, stockKey: orderStockKey(item), quantity: 0, lineNos: [] }
+        current.quantity = Math.round((current.quantity + number(item.quantity)) * 1000) / 1000
+        current.lineNos.push(item.line_no)
+        stockDemand.set(key, current)
+      }
+      for (const demand of stockDemand.values()) {
+        const warehouse = (await client.query("SELECT id FROM business_warehouse WHERE id=$1 AND status='active' FOR SHARE", [demand.warehouseId])).rows[0]
+        if (!warehouse) throw problem('ORDER_STOCK_WAREHOUSE_UNAVAILABLE', '报价指定的现货仓库已停用或不存在', 409, { fulfillmentWarehouseId: demand.warehouseId, lineNos: demand.lineNos })
+        const balance = (await client.query('SELECT on_hand_quantity,reserved_quantity FROM business_inventory_balance WHERE warehouse_id=$1 AND stock_key=$2 FOR UPDATE', [demand.warehouseId, demand.stockKey])).rows[0]
+        const available = balance ? number(balance.on_hand_quantity) - number(balance.reserved_quantity) : 0
+        if (available < demand.quantity) throw problem('ORDER_STOCK_CHANGED', '成交转单前现货可用量已变化，请重新选择来源或调整数量', 409, { fulfillmentWarehouseId: demand.warehouseId, stockKey: demand.stockKey, lineNos: demand.lineNos, requestedQuantity: demand.quantity, availableQuantity: available })
+      }
 
       const salesOrderId = randomUUID(); const salesOrderNo = generatedNumber('SO')
       await client.query(`INSERT INTO business_sales_order
@@ -205,9 +226,9 @@ export function createBusinessOrderRepository(pool) {
         quote.discount_amount, quote.freight_amount, quote.total_amount, quote.note, by.id, by.name,
       ])
       for (const item of quoteItems) await client.query(`INSERT INTO business_sales_order_item
-        (id,sales_order_id,quote_item_id,inquiry_item_id,catalog_sku_id,fulfillment_source,line_no,description,oe_number,quantity,unit,sale_unit_price,line_total)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [
-        randomUUID(), salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.fulfillment_source, item.line_no, item.description,
+        (id,sales_order_id,quote_item_id,inquiry_item_id,catalog_sku_id,fulfillment_source,fulfillment_warehouse_id,line_no,description,oe_number,quantity,unit,sale_unit_price,line_total)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
+        randomUUID(), salesOrderId, item.id, item.inquiry_item_id, item.catalog_sku_id, item.fulfillment_source, item.fulfillment_warehouse_id, item.line_no, item.description,
         item.oe_number, item.quantity, item.unit, item.sale_unit_price, item.line_total,
       ])
 

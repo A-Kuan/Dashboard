@@ -867,6 +867,11 @@ test('collapses the navigation into a persistent icon rail', async ({ page }) =>
 
 test('connects customer vehicle, verified SKU and an idempotent quick quote', async ({ page }) => {
   const editorHeaders = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('快速报价员'), 'x-operator-id': 'quick-quote-e2e-1' }
+  const warehouseResponse = await page.request.post('/api/v2/business/warehouses', { headers: editorHeaders, data: {
+    warehouseCode: 'QQ-STOCK', name: '快速报价现货仓', address: '杭州市',
+  } })
+  expect(warehouseResponse.status()).toBe(201)
+  const warehouse = await warehouseResponse.json()
   const verifiedList = await (await page.request.get('/api/v2/catalog/skus?status=verified&pageSize=20', { headers: editorHeaders })).json()
   let selectedSku = null
   for (const item of verifiedList.items) {
@@ -898,10 +903,12 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(context.skus[0].id).toBe(selectedSku.id)
   expect(context.skus[0].fitmentStatus).toBe('matched')
   expect(context.suppliers.map((item) => item.id)).toContain(supplier.id)
+  expect(context.warehouses.map((item) => item.id)).toContain(warehouse.id)
+  expect(context.skus[0].inventoryByWarehouse).toEqual([])
 
   const unavailableStockResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
     requestKey: 'quick-quote-stock-unavailable', customerPartnerId: customer.id, customerVehicleId: customer.vehicles[0].id,
-    items: [{ catalogSkuId: selectedSku.id, quantity: 1, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'stock' }],
+    items: [{ catalogSkuId: selectedSku.id, quantity: 1, saleUnitPrice: 888, costUnitPrice: 600, fulfillmentSource: 'stock', fulfillmentWarehouseId: warehouse.id }],
   } })
   expect(unavailableStockResponse.status()).toBe(409)
   expect((await unavailableStockResponse.json()).error).toBe('QUICK_QUOTE_STOCK_INSUFFICIENT')
@@ -1172,7 +1179,7 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(stockInquiryResponse.status()).toBe(201)
   let stockInquiry = await stockInquiryResponse.json()
   const stockQuoteResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/quotes`, { headers: editorHeaders, data: {
-    items: [{ inquiryItemId: stockInquiry.items[0].id, fulfillmentSource: 'stock', costUnitPrice: 600, saleUnitPrice: 820 }],
+    items: [{ inquiryItemId: stockInquiry.items[0].id, fulfillmentSource: 'stock', fulfillmentWarehouseId: warehouse.id, costUnitPrice: 600, saleUnitPrice: 820 }],
   } })
   expect(stockQuoteResponse.status()).toBe(201)
   stockInquiry = await stockQuoteResponse.json()
@@ -1183,13 +1190,6 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const wonStockInquiryResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/transition`, { headers: editorHeaders, data: { expectedVersion: stockInquiry.version, status: 'won' } })
   expect(wonStockInquiryResponse.ok()).toBeTruthy()
   stockInquiry = await wonStockInquiryResponse.json()
-  const stockConversionResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/convert-order`, { headers: editorHeaders })
-  expect(stockConversionResponse.status()).toBe(201)
-  const stockConversion = await stockConversionResponse.json()
-  expect(stockConversion.salesOrder.items[0].fulfillmentSource).toBe('stock')
-  expect(stockConversion.purchaseOrders).toHaveLength(0)
-  expect(stockConversion.salesOrder.events[0].snapshot.stockItemCount).toBe(1)
-
   const refreshedSalesResponse = await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })
   expect(refreshedSalesResponse.ok()).toBeTruthy()
   salesOrder = await refreshedSalesResponse.json()
@@ -1231,6 +1231,12 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(repeatedReservationResponse.status()).toBe(200)
   expect((await repeatedReservationResponse.json()).reservation.id).toBe(reservation.id)
 
+  const changedStockConversionResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(changedStockConversionResponse.status()).toBe(409)
+  const changedStockConversionError = await changedStockConversionResponse.json()
+  expect(changedStockConversionError.error).toBe('ORDER_STOCK_CHANGED')
+  expect(changedStockConversionError.details.fulfillmentWarehouseId).toBe(warehouse.id)
+
   const releasedReservationResponse = await page.request.post(`/api/v2/business/reservations/${reservation.id}/release`, { headers: editorHeaders, data: {
     expectedVersion: reservation.version, note: '演练释放后重新锁定',
   } })
@@ -1238,6 +1244,13 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect((await releasedReservationResponse.json()).status).toBe('released')
   const balancesAfterRelease = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
   expect(balancesAfterRelease.items.every((item) => item.reservedQuantity === 0 && item.availableQuantity === item.onHandQuantity)).toBeTruthy()
+  const stockConversionResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/convert-order`, { headers: editorHeaders })
+  expect(stockConversionResponse.status()).toBe(201)
+  const stockConversion = await stockConversionResponse.json()
+  expect(stockConversion.salesOrder.items[0].fulfillmentSource).toBe('stock')
+  expect(stockConversion.salesOrder.items[0].fulfillmentWarehouseId).toBe(warehouse.id)
+  expect(stockConversion.purchaseOrders).toHaveLength(0)
+  expect(stockConversion.salesOrder.events[0].snapshot.stockItemCount).toBe(1)
   const replacementReservationResponse = await page.request.post(`/api/v2/business/sales-orders/${salesOrder.id}/reservations`, { headers: editorHeaders, data: {
     warehouseId: warehouse.id,
     items: salesOrder.items.map((item) => ({ itemId: item.id, quantity: item.quantity })),
