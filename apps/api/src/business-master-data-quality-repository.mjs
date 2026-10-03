@@ -152,19 +152,24 @@ export function createBusinessMasterDataQualityRepository(pool) {
     })
   }
 
+  async function filteredCandidates({ kind = '', severity = '', query = '' } = {}) {
+    const normalizedKind = clean(kind)
+    if (normalizedKind && !issueKinds.has(normalizedKind)) throw problem('INVALID_MASTER_DATA_QUALITY_KIND', '资料质量问题类型无效')
+    if (severity && !['high', 'medium'].includes(clean(severity))) throw problem('INVALID_MASTER_DATA_QUALITY_SEVERITY', '资料质量风险等级无效')
+    const term = clean(query).toLocaleLowerCase('zh-CN')
+    let items = await candidatesWithDecisions()
+    if (normalizedKind) items = items.filter((item) => item.kind === normalizedKind)
+    if (severity) items = items.filter((item) => item.severity === severity)
+    if (term) items = items.filter((item) => JSON.stringify(item).toLocaleLowerCase('zh-CN').includes(term))
+    items.sort((a, b) => b.score - a.score || a.issueKey.localeCompare(b.issueKey))
+    return items
+  }
+
   return {
     async list({ kind = '', status = 'open', severity = '', query = '', page = 1, pageSize = 30 } = {}) {
-      const normalizedKind = clean(kind)
       const normalizedStatus = clean(status) || 'open'
-      if (normalizedKind && !issueKinds.has(normalizedKind)) throw problem('INVALID_MASTER_DATA_QUALITY_KIND', '资料质量问题类型无效')
       if (!issueStatuses.has(normalizedStatus)) throw problem('INVALID_MASTER_DATA_QUALITY_STATUS', '资料质量问题状态无效')
-      if (severity && !['high', 'medium'].includes(clean(severity))) throw problem('INVALID_MASTER_DATA_QUALITY_SEVERITY', '资料质量风险等级无效')
-      const term = clean(query).toLocaleLowerCase('zh-CN')
-      let items = await candidatesWithDecisions()
-      if (normalizedKind) items = items.filter((item) => item.kind === normalizedKind)
-      if (severity) items = items.filter((item) => item.severity === severity)
-      if (term) items = items.filter((item) => JSON.stringify(item).toLocaleLowerCase('zh-CN').includes(term))
-      items.sort((a, b) => b.score - a.score || a.issueKey.localeCompare(b.issueKey))
+      let items = await filteredCandidates({ kind, severity, query })
       const summaryItems = items
       if (normalizedStatus !== 'all') items = items.filter((item) => item.status === normalizedStatus)
       const normalizedPage = boundedPage(page, 1, 100000)
@@ -178,6 +183,11 @@ export function createBusinessMasterDataQualityRepository(pool) {
         byKind: Object.fromEntries([...issueKinds].map((value) => [value, summaryItems.filter((item) => item.kind === value).length])),
       }
       return { asOf: new Date().toISOString(), items: items.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize), total, page: normalizedPage, pageSize: normalizedPageSize, summary }
+    },
+
+    async listOpenForOperations({ kind = '', query = '' } = {}) {
+      const items = await filteredCandidates({ kind, query })
+      return items.filter((item) => item.status === 'open')
     },
 
     async decide(issueKey, rawInput = {}, actor) {

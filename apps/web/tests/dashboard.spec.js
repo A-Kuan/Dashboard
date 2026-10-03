@@ -2082,6 +2082,14 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(vehicleIssue.signals.map((signal) => signal.code)).toContain('same_license_plate')
   expect(vehicleIssue.recommendedAction).toBe('vehicle_merge_preview')
   expect(Object.values(vehicleIssue.previewRequest)).toEqual(expect.arrayContaining([survivorVehicleId, duplicateVehicle.id]))
+  const vehicleQualityWorkQueue = await (await page.request.get(`/api/v2/business/operations-center?kind=vehicle_duplicate&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
+  const vehicleQualityWorkItem = vehicleQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)
+  expect(vehicleQualityWorkItem).toBeTruthy()
+  expect(vehicleQualityWorkItem.urgency).toBe('today')
+  expect(vehicleQualityWorkItem.actionCapability).toBe('business.data_quality.review')
+  expect(vehicleQualityWorkItem.details.fingerprint).toBe(vehicleIssue.fingerprint)
+  expect(vehicleQualityWorkItem.details.previewRequest).toEqual(vehicleIssue.previewRequest)
+  expect(vehicleQualityWorkQueue.summary.byKind.vehicle_duplicate.count).toBeGreaterThanOrEqual(1)
   const qualityDecisionResponse = await page.request.post(`/api/v2/business/master-data-quality/${encodeURIComponent(vehicleIssue.issueKey)}/decisions`, { headers: afterSalesReviewerHeaders, data: {
     requestKey: 'vehicle-quality-decision-e2e-1', issueFingerprint: vehicleIssue.fingerprint, decision: 'not_duplicate', reason: '经人工核对暂时不是同一车辆',
   } })
@@ -2094,6 +2102,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect((await repeatedQualityDecisionResponse.json()).decision.id).toBe(qualityDecision.decision.id)
   const suppressedQuality = await (await page.request.get('/api/v2/business/master-data-quality?kind=vehicle_duplicate&status=suppressed', { headers: editorHeaders })).json()
   expect(suppressedQuality.items.map((item) => item.issueKey)).toContain(vehicleIssue.issueKey)
+  const suppressedVehicleQualityWorkQueue = await (await page.request.get(`/api/v2/business/operations-center?kind=vehicle_duplicate&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
+  expect(suppressedVehicleQualityWorkQueue.items.map((item) => item.sourceId)).not.toContain(vehicleIssue.issueKey)
   const refreshDuplicateResponse = await page.request.patch(`/api/v2/business/partners/${customer.id}/vehicles/${duplicateVehicle.id}`, { headers: editorHeaders, data: {
     expectedPartnerVersion: customer.version, expectedVersion: duplicateVehicle.version, vehicleLabel: duplicateVehicle.vehicleLabel,
     vin: duplicateVehicle.vin, licensePlate: duplicateVehicle.licensePlate, platformCode: duplicateVehicle.platformCode,
@@ -2105,6 +2115,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const refreshedVehicleIssue = refreshedQuality.items.find((item) => item.issueKey === vehicleIssue.issueKey)
   expect(refreshedVehicleIssue).toBeTruthy()
   expect(refreshedVehicleIssue.fingerprint).not.toBe(vehicleIssue.fingerprint)
+  const refreshedVehicleQualityWorkQueue = await (await page.request.get(`/api/v2/business/operations-center?kind=vehicle_duplicate&q=${encodeURIComponent(duplicateVehicle.licensePlate)}`, { headers: editorHeaders })).json()
+  expect(refreshedVehicleQualityWorkQueue.items.find((item) => item.sourceId === vehicleIssue.issueKey)?.details.fingerprint).toBe(refreshedVehicleIssue.fingerprint)
   const vehicleMergeInquiryResponse = await page.request.post('/api/v2/business/inquiries', { headers: editorHeaders, data: {
     customerPartnerId: customer.id, customerVehicleId: duplicateVehicle.id, channel: 'phone', nextAction: '验证车辆合并引用迁移',
     items: [{ requirementText: '重复车辆资料验证', requestedQuantity: 1, unit: '件' }],

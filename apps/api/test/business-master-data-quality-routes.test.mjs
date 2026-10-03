@@ -33,3 +33,14 @@ test('master-data quality repository validates filters before querying the datab
   await assert.rejects(() => repository.list({ status: 'closed' }), (error) => error.errorCode === 'INVALID_MASTER_DATA_QUALITY_STATUS')
   await assert.rejects(() => repository.list({ severity: 'low' }), (error) => error.errorCode === 'INVALID_MASTER_DATA_QUALITY_SEVERITY')
 })
+
+test('master-data quality repository exposes its complete open set to the operations center', async () => {
+  const calls = []
+  const repository = createBusinessMasterDataQualityRepository({ query: async (sql) => { calls.push(sql); return { rows: [] } } })
+  const items = await repository.listOpenForOperations({ kind: 'vehicle_duplicate', query: '浙A12345' })
+  assert.deepEqual(items, [])
+  assert.equal(calls.length, 2)
+  assert.match(calls[0], /FROM business_partner a/)
+  assert.match(calls[1], /FROM business_customer_vehicle a/)
+  await assert.rejects(() => repository.listOpenForOperations({ kind: 'unknown' }), (error) => error.errorCode === 'INVALID_MASTER_DATA_QUALITY_KIND')
+})
