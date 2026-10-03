@@ -67,10 +67,11 @@
 1. 校验采购单版本和剩余可收数量；
 2. 创建收货单及逐项库存批次；
 3. 增加库存余额并记录 `receipt` 流水；
-4. 累计采购明细到货数量并更新采购单状态；
-5. 全部采购单到货时推动销售订单进入履约。
+4. 把本次到货中仍属于该客户订单的数量自动锁定到同仓库预留，并记录 `reserve` 流水；
+5. 累计采购明细到货数量并更新采购单状态；
+6. 全部采购单到货时推动销售订单进入履约。
 
-`GET /api/v2/business/goods-receipts/:id` 返回收货明细、库存批次和成本快照。
+自动锁定只覆盖销售单尚未出库、尚未被其他有效预留占用的数量；同仓库分批到货会扩展既有预留，不会重复占用。`GET /api/v2/business/goods-receipts/:id` 返回收货明细、库存批次、成本快照、`stockReservationIds` 和本张收货单的 `autoReservedQuantity`。
 
 ## 库存余额与流水
 
@@ -100,7 +101,7 @@
 }
 ```
 
-默认要求全部满足；库存不足返回 `409 INSUFFICIENT_AVAILABLE_STOCK` 并整笔回滚。明确设置 `allowPartial: true` 时，响应分别记录预留数量与缺货数量。一个销售订单同一时间只允许一张生效预留，重复请求返回现有预留而不重复占用。
+默认要求全部满足；库存不足返回 `409 INSUFFICIENT_AVAILABLE_STOCK` 并整笔回滚。明确设置 `allowPartial: true` 时，响应分别记录预留数量与缺货数量。一个销售订单可按仓库分别维护一张生效预留；同仓库后续增加明细或采购分批到货会扩展原预留，重复请求不会重复占用。
 
 - `GET /api/v2/business/reservations/:id`
 - `POST /api/v2/business/reservations/:id/release`

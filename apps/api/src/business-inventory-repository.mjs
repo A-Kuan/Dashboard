@@ -112,6 +112,52 @@ async function insertOrderEvent(client, orderType, orderId, action, actor, { fro
   ])
 }
 
+async function reserveReceivedItems(client, { salesOrderId, warehouseId, receiptId, receiptNo, items, actor, note }) {
+  const sales = (await client.query('SELECT * FROM business_sales_order WHERE id=$1 FOR UPDATE', [salesOrderId])).rows[0]
+  if (!sales || !['confirmed', 'fulfilling'].includes(sales.status)) return { reservationIds: [], reservedQuantity: 0 }
+  let reservation = (await client.query("SELECT * FROM business_stock_reservation WHERE sales_order_id=$1 AND warehouse_id=$2 AND status='active' FOR UPDATE", [sales.id, warehouseId])).rows[0]
+  let changed = false; let reservedQuantity = 0; const reservedItems = []
+  for (const received of items) {
+    const salesItem = (await client.query(`SELECT soi.*,
+      COALESCE((SELECT sum(si.quantity) FROM business_shipment_item si JOIN business_shipment s ON s.id=si.shipment_id WHERE s.sales_order_id=soi.sales_order_id AND si.sales_order_item_id=soi.id),0) shipped_quantity,
+      COALESCE((SELECT sum(ri.reserved_quantity-ri.fulfilled_quantity) FROM business_stock_reservation_item ri JOIN business_stock_reservation r ON r.id=ri.reservation_id WHERE ri.sales_order_item_id=soi.id AND r.status='active'),0) active_reserved_quantity
+      FROM business_sales_order_item soi WHERE soi.sales_order_id=$1 AND soi.inquiry_item_id=$2 FOR UPDATE OF soi`, [sales.id, received.inquiryItemId])).rows[0]
+    if (!salesItem) continue
+    const remaining = roundQuantity(number(salesItem.quantity) - number(salesItem.shipped_quantity) - number(salesItem.active_reserved_quantity))
+    const quantityToReserve = Math.min(roundQuantity(received.receivedQuantity), Math.max(0, remaining))
+    if (quantityToReserve <= 0) continue
+    if (!reservation) {
+      const by = actorDetails(actor)
+      reservation = { id: randomUUID(), reservation_no: generatedNumber('RSV'), warehouse_id: warehouseId, version: 1 }
+      await client.query(`INSERT INTO business_stock_reservation
+        (id,reservation_no,sales_order_id,warehouse_id,note,created_by_id,created_by_name,updated_by_id,updated_by_name)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7)`, [reservation.id, reservation.reservation_no, sales.id, warehouseId, `采购到货自动锁定：${receiptNo}`, by.id, by.name])
+    }
+    let reservationItem = (await client.query('SELECT * FROM business_stock_reservation_item WHERE reservation_id=$1 AND sales_order_item_id=$2 FOR UPDATE', [reservation.id, salesItem.id])).rows[0]
+    if (reservationItem) {
+      const shortageFilled = Math.min(number(reservationItem.shortage_quantity), quantityToReserve)
+      await client.query(`UPDATE business_stock_reservation_item SET requested_quantity=requested_quantity+$2-$3,
+        reserved_quantity=reserved_quantity+$2,shortage_quantity=shortage_quantity-$3 WHERE id=$1`, [reservationItem.id, quantityToReserve, shortageFilled])
+    } else {
+      reservationItem = { id: randomUUID() }
+      await client.query(`INSERT INTO business_stock_reservation_item
+        (id,reservation_id,sales_order_item_id,stock_key,requested_quantity,reserved_quantity,shortage_quantity)
+        VALUES ($1,$2,$3,$4,$5,$5,0)`, [reservationItem.id, reservation.id, salesItem.id, received.stockKey, quantityToReserve])
+    }
+    await client.query('UPDATE business_inventory_lot SET reserved_quantity=reserved_quantity+$2 WHERE id=$1', [received.inventoryLotId, quantityToReserve])
+    await client.query('INSERT INTO business_stock_reservation_allocation (id,reservation_item_id,inventory_lot_id,quantity) VALUES ($1,$2,$3,$4)', [randomUUID(), reservationItem.id, received.inventoryLotId, quantityToReserve])
+    await client.query('UPDATE business_inventory_balance SET reserved_quantity=reserved_quantity+$3,version=version+1,updated_at=now() WHERE warehouse_id=$1 AND stock_key=$2', [warehouseId, received.stockKey, quantityToReserve])
+    await insertMovement(client, { warehouseId, stockKey: received.stockKey, lotId: received.inventoryLotId, type: 'reserve', reservedDelta: quantityToReserve, referenceType: 'stock_reservation', referenceId: reservation.id, actor, note, snapshot: { salesOrderId: sales.id, salesOrderItemId: salesItem.id, purchaseOrderId: received.purchaseOrderId, purchaseOrderItemId: received.purchaseOrderItemId, goodsReceiptId: receiptId, receiptNo, source: 'purchase_receipt' } })
+    changed = true; reservedQuantity = roundQuantity(reservedQuantity + quantityToReserve)
+    reservedItems.push({ salesOrderItemId: salesItem.id, purchaseOrderItemId: received.purchaseOrderItemId, inventoryLotId: received.inventoryLotId, quantity: quantityToReserve })
+  }
+  if (!changed) return { reservationIds: [], reservedQuantity: 0 }
+  const by = actorDetails(actor)
+  await client.query('UPDATE business_stock_reservation SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1', [reservation.id, by.id, by.name])
+  await insertOrderEvent(client, 'sales', sales.id, 'purchase_receipt_auto_reserved', actor, { fromStatus: sales.status, toStatus: sales.status, note, snapshot: { receiptId, receiptNo, warehouseId, reservationId: reservation.id, reservedQuantity, items: reservedItems } })
+  return { reservationIds: [reservation.id], reservedQuantity }
+}
+
 export function normalizeWarehouseInput(input = {}) {
   const warehouseCode = clean(input.warehouseCode).toUpperCase()
   if (!/^[A-Z0-9][A-Z0-9_-]{1,31}$/.test(warehouseCode)) throw problem('INVALID_WAREHOUSE_CODE', '仓库编码必须是 2 至 32 位英文、数字、横线或下划线')
@@ -131,9 +177,14 @@ export function createBusinessInventoryRepository(pool) {
       FROM business_goods_receipt r JOIN business_purchase_order po ON po.id=r.purchase_order_id JOIN business_warehouse w ON w.id=r.warehouse_id
       WHERE r.id=$1 OR r.receipt_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
-    const items = (await client.query(`SELECT i.*,l.lot_no,l.stock_key,l.catalog_sku_id,l.description,l.oe_number,l.unit,l.on_hand_quantity,l.reserved_quantity,l.received_at
-      FROM business_goods_receipt_item i JOIN business_inventory_lot l ON l.id=i.inventory_lot_id WHERE i.goods_receipt_id=$1 ORDER BY l.received_at,l.id`, [row.id])).rows
-    return { ...mapReceipt(row), items: items.map((item) => ({ id: item.id, purchaseOrderItemId: item.purchase_order_item_id, inventoryLotId: item.inventory_lot_id, receivedQuantity: number(item.received_quantity), unitCost: number(item.unit_cost), lineTotal: number(item.line_total), lot: mapLot({ ...item, id: item.inventory_lot_id, goods_receipt_id: row.id, purchase_order_item_id: item.purchase_order_item_id, received_quantity: item.received_quantity, unit_cost: item.unit_cost, warehouse_id: row.warehouse_id }) })) }
+    const [items, automaticReservations] = await Promise.all([
+      client.query(`SELECT i.*,l.lot_no,l.stock_key,l.catalog_sku_id,l.description,l.oe_number,l.unit,l.on_hand_quantity,l.reserved_quantity,l.received_at
+        FROM business_goods_receipt_item i JOIN business_inventory_lot l ON l.id=i.inventory_lot_id WHERE i.goods_receipt_id=$1 ORDER BY l.received_at,l.id`, [row.id]),
+      client.query(`SELECT m.reference_id reservation_id,COALESCE(sum(m.reserved_delta),0) reserved_quantity
+        FROM business_inventory_movement m WHERE m.reference_type='stock_reservation' AND m.movement_type='reserve' AND m.snapshot->>'goodsReceiptId'=$1
+        GROUP BY m.reference_id ORDER BY m.reference_id`, [row.id]),
+    ])
+    return { ...mapReceipt(row), items: items.rows.map((item) => ({ id: item.id, purchaseOrderItemId: item.purchase_order_item_id, inventoryLotId: item.inventory_lot_id, receivedQuantity: number(item.received_quantity), unitCost: number(item.unit_cost), lineTotal: number(item.line_total), lot: mapLot({ ...item, id: item.inventory_lot_id, goods_receipt_id: row.id, purchase_order_item_id: item.purchase_order_item_id, received_quantity: item.received_quantity, unit_cost: item.unit_cost, warehouse_id: row.warehouse_id }) })), stockReservationIds: automaticReservations.rows.map((item) => item.reservation_id), autoReservedQuantity: automaticReservations.rows.reduce((sum, item) => roundQuantity(sum + number(item.reserved_quantity)), 0) }
   }
   async function getReservation(id, client = pool) {
     const row = (await client.query(`SELECT r.*,so.order_no sales_order_no,w.warehouse_code,w.name warehouse_name
@@ -224,17 +275,19 @@ export function createBusinessInventoryRepository(pool) {
         if (!requestedOrder || existing.purchase_order_id !== requestedOrder.id) throw problem('REQUEST_KEY_CONFLICT', 'requestKey 已用于其他采购收货', 409)
         return { id: existing.id, created: false }
       }
-      const warehouse = (await client.query('SELECT * FROM business_warehouse WHERE id=$1 FOR UPDATE', [clean(rawInput.warehouseId)])).rows[0]
-      if (!warehouse || warehouse.status !== 'active') throw problem('WAREHOUSE_UNAVAILABLE', '收货仓库不存在或已停用', 409)
-      const order = (await client.query('SELECT * FROM business_purchase_order WHERE id=$1 OR order_no=upper(trim($1)) FOR UPDATE', [purchaseOrderId])).rows[0]
-      if (!order) throw problem('PURCHASE_ORDER_NOT_FOUND', '采购订单不存在', 404)
+      const orderReference = (await client.query('SELECT id,sales_order_id FROM business_purchase_order WHERE id=$1 OR order_no=upper(trim($1))', [purchaseOrderId])).rows[0]
+      if (!orderReference) throw problem('PURCHASE_ORDER_NOT_FOUND', '采购订单不存在', 404)
+      await client.query('SELECT id FROM business_sales_order WHERE id=$1 FOR UPDATE', [orderReference.sales_order_id])
+      const order = (await client.query('SELECT * FROM business_purchase_order WHERE id=$1 FOR UPDATE', [orderReference.id])).rows[0]
       requireVersion(rawInput.expectedVersion, order.version, 'PURCHASE_ORDER_VERSION_CONFLICT', '采购订单')
       if (!['confirmed', 'partially_received'].includes(order.status)) throw problem('PURCHASE_ORDER_NOT_RECEIVABLE', '只有已确认或部分到货的采购单可以登记到货', 409)
+      const warehouse = (await client.query('SELECT * FROM business_warehouse WHERE id=$1 FOR UPDATE', [clean(rawInput.warehouseId)])).rows[0]
+      if (!warehouse || warehouse.status !== 'active') throw problem('WAREHOUSE_UNAVAILABLE', '收货仓库不存在或已停用', 409)
       const items = (await client.query('SELECT * FROM business_purchase_order_item WHERE purchase_order_id=$1 ORDER BY line_no FOR UPDATE', [order.id])).rows
       const receiptId = randomUUID(); const receiptNo = generatedNumber('GR'); const by = actorDetails(actor)
       await client.query(`INSERT INTO business_goods_receipt (id,receipt_no,source_request_id,purchase_order_id,warehouse_id,note,created_by_id,created_by_name)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [receiptId, receiptNo, key, order.id, warehouse.id, clean(rawInput.note), by.id, by.name])
-      const receiptSnapshot = []
+      const receiptSnapshot = []; const receivedForReservation = []
       for (const draft of requested) {
         const item = items.find((candidate) => candidate.id === clean(draft.itemId))
         if (!item) throw problem('PURCHASE_ORDER_ITEM_NOT_FOUND', '采购单明细不存在', 404)
@@ -256,10 +309,12 @@ export function createBusinessInventoryRepository(pool) {
         item.received_quantity = next
         await insertMovement(client, { warehouseId: warehouse.id, stockKey: itemStockKey, lotId, type: 'receipt', onHandDelta: increment, referenceType: 'goods_receipt', referenceId: receiptId, actor, note: rawInput.note, snapshot: { purchaseOrderId: order.id, purchaseOrderItemId: item.id, receiptNo, lotNo, unitCost: number(item.cost_unit_price) } })
         receiptSnapshot.push({ purchaseOrderItemId: item.id, inventoryLotId: lotId, receivedQuantity: increment, accumulatedQuantity: next })
+        receivedForReservation.push({ purchaseOrderId: order.id, purchaseOrderItemId: item.id, inquiryItemId: item.inquiry_item_id, inventoryLotId: lotId, stockKey: itemStockKey, receivedQuantity: increment })
       }
+      const automaticReservation = await reserveReceivedItems(client, { salesOrderId: order.sales_order_id, warehouseId: warehouse.id, receiptId, receiptNo, items: receivedForReservation, actor, note: clean(rawInput.note) })
       const fullyReceived = items.every((item) => number(item.received_quantity) >= number(item.quantity)); const nextStatus = fullyReceived ? 'received' : 'partially_received'
       await client.query('UPDATE business_purchase_order SET status=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1', [order.id, nextStatus, by.id, by.name])
-      await insertOrderEvent(client, 'purchase', order.id, 'goods_received', actor, { fromStatus: order.status, toStatus: nextStatus, note: rawInput.note, snapshot: { receiptId, receiptNo, warehouseId: warehouse.id, items: receiptSnapshot } })
+      await insertOrderEvent(client, 'purchase', order.id, 'goods_received', actor, { fromStatus: order.status, toStatus: nextStatus, note: rawInput.note, snapshot: { receiptId, receiptNo, warehouseId: warehouse.id, items: receiptSnapshot, automaticReservation } })
       if (fullyReceived) {
         const sales = (await client.query('SELECT * FROM business_sales_order WHERE id=$1 FOR UPDATE', [order.sales_order_id])).rows[0]
         const outstanding = number((await client.query("SELECT count(*) FROM business_purchase_order WHERE sales_order_id=$1 AND id<>$2 AND status<>'received'", [sales.id, order.id])).rows[0].count)
