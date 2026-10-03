@@ -97,8 +97,8 @@ function mapPurchaseOrder(row) {
     totalAmount: number(row.total_amount), expectedAt: row.expected_at, notes: row.notes, version: row.version,
     createdById: row.created_by_id, createdByName: row.created_by_name, updatedById: row.updated_by_id,
     updatedByName: row.updated_by_name, createdAt: row.created_at, updatedAt: row.updated_at,
-    itemCount: number(row.item_count), receivedItemCount: number(row.received_item_count),
-    payable: row.payable_id ? { id: row.payable_id, payableNo: row.payable_no, status: row.payable_status, originalAmount: number(row.payable_original_amount), paidAmount: number(row.payable_paid_amount), outstandingAmount: Math.max(0, Math.round((number(row.payable_original_amount) - number(row.payable_paid_amount)) * 100) / 100), dueAt: row.payable_due_at, version: row.payable_version } : null,
+    itemCount: number(row.item_count), receivedItemCount: number(row.received_item_count), supplierReturnCount: number(row.supplier_return_count),
+    payable: row.payable_id ? { id: row.payable_id, payableNo: row.payable_no, status: row.payable_status, originalAmount: number(row.payable_original_amount), creditedAmount: number(row.payable_credited_amount), adjustedAmount: Math.round((number(row.payable_original_amount) - number(row.payable_credited_amount)) * 100) / 100, paidAmount: number(row.payable_paid_amount), refundedAmount: number(row.payable_refunded_amount), netPaidAmount: Math.round((number(row.payable_paid_amount) - number(row.payable_refunded_amount)) * 100) / 100, outstandingAmount: Math.max(0, Math.round(((number(row.payable_original_amount) - number(row.payable_credited_amount)) - (number(row.payable_paid_amount) - number(row.payable_refunded_amount))) * 100) / 100), refundableAmount: Math.max(0, Math.round(((number(row.payable_paid_amount) - number(row.payable_refunded_amount)) - (number(row.payable_original_amount) - number(row.payable_credited_amount))) * 100) / 100), dueAt: row.payable_due_at, version: row.payable_version } : null,
   }
 }
 function mapPurchaseItem(row) {
@@ -220,8 +220,8 @@ export function createBusinessOrderRepository(pool) {
       COALESCE(r.original_amount-r.credited_amount,so.total_amount) net_sales_amount,
       COALESCE((SELECT sum(si.quantity*l.unit_cost) FROM business_shipment_item si JOIN business_shipment sh ON sh.id=si.shipment_id JOIN business_inventory_lot l ON l.id=si.inventory_lot_id WHERE sh.sales_order_id=so.id),0)
         - COALESCE((SELECT sum(rri.quantity*l.unit_cost) FROM business_return_receipt_item rri JOIN business_after_sales_item ai ON ai.id=rri.after_sales_item_id JOIN business_after_sales_case ac ON ac.id=ai.case_id JOIN business_inventory_lot l ON l.id=rri.inventory_lot_id WHERE ac.sales_order_id=so.id),0) realized_cost_amount,
-      COALESCE((SELECT sum(a.original_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
-      COALESCE((SELECT sum(a.paid_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
+      COALESCE((SELECT sum(a.original_amount-a.credited_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
+      COALESCE((SELECT sum(a.paid_amount-a.refunded_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
       r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
       r.due_at receivable_due_at,r.version receivable_version
@@ -233,7 +233,8 @@ export function createBusinessOrderRepository(pool) {
       client.query(`SELECT po.*,so.order_no sales_order_no,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
         (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
-        a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+        (SELECT count(*)::int FROM business_supplier_return_case x WHERE x.purchase_order_id=po.id) supplier_return_count,
+        a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.credited_amount payable_credited_amount,a.paid_amount payable_paid_amount,a.refunded_amount payable_refunded_amount,a.due_at payable_due_at,a.version payable_version
         FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id WHERE po.sales_order_id=$1 ORDER BY po.created_at,po.id`, [row.id]),
       client.query(`SELECT r.id,r.reservation_no,r.warehouse_id,w.warehouse_code,w.name warehouse_name,r.status,r.version,r.created_at,r.updated_at
         FROM business_stock_reservation r JOIN business_warehouse w ON w.id=r.warehouse_id WHERE r.sales_order_id=$1 ORDER BY r.created_at,r.id`, [row.id]),
@@ -247,15 +248,17 @@ export function createBusinessOrderRepository(pool) {
     const row = (await client.query(`SELECT po.*,so.order_no sales_order_no,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
-      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+      (SELECT count(*)::int FROM business_supplier_return_case x WHERE x.purchase_order_id=po.id) supplier_return_count,
+      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.credited_amount payable_credited_amount,a.paid_amount payable_paid_amount,a.refunded_amount payable_refunded_amount,a.due_at payable_due_at,a.version payable_version
       FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id
       WHERE po.id=$1 OR po.order_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
-    const [items, events] = await Promise.all([
+    const [items, supplierReturns, events] = await Promise.all([
       client.query('SELECT * FROM business_purchase_order_item WHERE purchase_order_id=$1 ORDER BY line_no', [row.id]),
+      client.query('SELECT id,return_no,status,reason_code,credited_amount,refunded_amount,version,created_at,updated_at FROM business_supplier_return_case WHERE purchase_order_id=$1 ORDER BY created_at,id', [row.id]),
       client.query("SELECT * FROM business_order_event WHERE purchase_order_id=$1 ORDER BY created_at DESC,id DESC", [row.id]),
     ])
-    return { ...mapPurchaseOrder(row), items: items.rows.map(mapPurchaseItem), events: events.rows.map(mapEvent) }
+    return { ...mapPurchaseOrder(row), items: items.rows.map(mapPurchaseItem), supplierReturns: supplierReturns.rows.map((item) => ({ id: item.id, returnNo: item.return_no, status: item.status, reasonCode: item.reason_code, creditedAmount: number(item.credited_amount), refundedAmount: number(item.refunded_amount), version: item.version, createdAt: item.created_at, updatedAt: item.updated_at })), events: events.rows.map(mapEvent) }
   }
 
   async function listSalesOrders({ query = '', status = '', page = 1, pageSize = 30 } = {}) {
@@ -276,8 +279,8 @@ export function createBusinessOrderRepository(pool) {
       COALESCE(r.original_amount-r.credited_amount,so.total_amount) net_sales_amount,
       COALESCE((SELECT sum(si.quantity*l.unit_cost) FROM business_shipment_item si JOIN business_shipment sh ON sh.id=si.shipment_id JOIN business_inventory_lot l ON l.id=si.inventory_lot_id WHERE sh.sales_order_id=so.id),0)
         - COALESCE((SELECT sum(rri.quantity*l.unit_cost) FROM business_return_receipt_item rri JOIN business_after_sales_item ai ON ai.id=rri.after_sales_item_id JOIN business_after_sales_case ac ON ac.id=ai.case_id JOIN business_inventory_lot l ON l.id=rri.inventory_lot_id WHERE ac.sales_order_id=so.id),0) realized_cost_amount,
-      COALESCE((SELECT sum(a.original_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
-      COALESCE((SELECT sum(a.paid_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
+      COALESCE((SELECT sum(a.original_amount-a.credited_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_payable_amount,
+      COALESCE((SELECT sum(a.paid_amount-a.refunded_amount) FROM business_payable a WHERE a.sales_order_id=so.id AND a.status<>'void'),0) supplier_paid_amount,
       r.id receivable_id,r.receivable_no,r.status receivable_status,r.original_amount receivable_original_amount,
       r.credited_amount receivable_credited_amount,r.paid_amount receivable_paid_amount,r.refunded_amount receivable_refunded_amount,
       r.due_at receivable_due_at,r.version receivable_version
@@ -300,7 +303,8 @@ export function createBusinessOrderRepository(pool) {
     const rows = (await pool.query(`SELECT po.*,so.order_no sales_order_no,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id) item_count,
       (SELECT count(*)::int FROM business_purchase_order_item x WHERE x.purchase_order_id=po.id AND x.received_quantity=x.quantity) received_item_count,
-      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.paid_amount payable_paid_amount,a.due_at payable_due_at,a.version payable_version
+      (SELECT count(*)::int FROM business_supplier_return_case x WHERE x.purchase_order_id=po.id) supplier_return_count,
+      a.id payable_id,a.payable_no,a.status payable_status,a.original_amount payable_original_amount,a.credited_amount payable_credited_amount,a.paid_amount payable_paid_amount,a.refunded_amount payable_refunded_amount,a.due_at payable_due_at,a.version payable_version
       FROM business_purchase_order po JOIN business_sales_order so ON so.id=po.sales_order_id LEFT JOIN business_payable a ON a.purchase_order_id=po.id ${clause}
       ORDER BY po.updated_at DESC,po.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
     const summaryRows = (await pool.query('SELECT status,count(*)::int count,COALESCE(sum(total_amount),0)::numeric amount FROM business_purchase_order GROUP BY status')).rows

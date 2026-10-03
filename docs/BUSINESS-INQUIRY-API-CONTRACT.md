@@ -292,6 +292,21 @@
 
 采购单确认后才允许付款；超过未付金额返回 `409 SUPPLIER_PAYMENT_EXCEEDS_OUTSTANDING`。未付款采购单取消时同步作废应付；已付款采购单返回 `409 PAYABLE_HAS_PAYMENTS`，必须先处理供应商退款或冲销，避免通过取消订单抹掉付款事实。所有付款和状态变化都保留独立单据、操作人和应付事件。
 
+### 供应商退货、应付冲减与退款
+
+- `GET /api/v2/business/supplier-returns?q=&status=&supplierPartnerId=&purchaseOrderId=&page=1&pageSize=30`
+- `POST /api/v2/business/supplier-returns`
+- `GET /api/v2/business/supplier-returns/:id`
+- `POST /api/v2/business/supplier-returns/:id/review`
+- `POST /api/v2/business/supplier-returns/:id/shipments`
+- `POST /api/v2/business/supplier-returns/:id/refunds`
+
+供应商退货必须逐条引用真实采购收货形成的库存批次，并且只能申请退回该批次尚未锁定的可用数量。申请人与审核人职责分离；审核可以逐项核准退货数量和冲减单价，冲减单价不能超过原采购批次成本。
+
+退货出库支持分批处理和请求键防重。每批出库都会同时减少原库存批次、仓库汇总余额，写入 `supplier_return_out` 库存流水，并冲减对应采购应付。如果已经支付的净货款高于冲减后的应付，应付单与供应商退货单进入 `refund_pending`，此时暂停继续付款，只有实际待收退款金额可以登记为供应商退款。退款完成后，应付以“原额 - 退货冲减”和“累计付款 - 供应商退款”的净额重新结清。
+
+创建供应商退货要求 `business.purchase_return`，独立审核要求 `business.purchase_return.review`，退货出库要求 `business.inventory`，供应商退款入账要求 `business.finance`。创建、出库和退款都使用数据库事务、锁与请求键，在连续或并发重试时不会重复退库存、重复冲减应付或重复登记退款。
+
 ### 退货、退款与售后
 
 - `GET /api/v2/business/after-sales?q=&status=&customerPartnerId=&salesOrderId=&page=1&pageSize=30`

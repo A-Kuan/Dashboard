@@ -38,7 +38,7 @@ function catalogSnapshotCsv(snapshot) {
   return `\uFEFF${headers.map(csvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
-export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
+export function buildApp({ repository, vehicleRepository, dictionaryRepository, catalogRepository, catalogImportRepository, catalogImportMappingRepository, catalogDictionaryGovernanceRepository, catalogPlatformRepository, catalogEpcIntakeRepository, catalogEpcConnectorService, catalogEpcConnectorRunRepository, catalogEpcAssetRepository, catalogEpcAssetStorage, catalogLegacyMigrationRepository, businessInquiryRepository, businessPartnerRepository, businessOrderRepository, businessInventoryRepository, businessFinanceRepository, businessAfterSalesRepository, businessSupplierReturnRepository, releaseRevision = 'development', readinessCheck = async () => ({ database: 'not-checked' }), getDatabasePoolStats = () => null, operationsToken = process.env.API_OPERATIONS_TOKEN || '', logger = createLoggerOptions() }) {
   const metrics = createHttpMetrics({ releaseRevision, getDatabasePoolStats })
   const app = Fastify({ logger, logController: new OperationalLogController(), genReqId: createRequestId, trustProxy: ['127.0.0.1', '::1'], bodyLimit: 24 * 1024 * 1024 })
   const serviceMetadata = { service: 'dashboard-sku-api', releaseRevision }
@@ -342,6 +342,46 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const actor = requireCatalogCapability(request, reply, 'business.finance')
     if (!actor) return
     const result = await businessAfterSalesRepository.recordRefund(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/supplier-returns', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    return businessSupplierReturnRepository.listCases({ query: request.query?.q, status: request.query?.status, supplierPartnerId: request.query?.supplierPartnerId, purchaseOrderId: request.query?.purchaseOrderId, page: request.query?.page, pageSize: request.query?.pageSize })
+  })
+  app.post('/api/v2/business/supplier-returns', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.purchase_return')
+    if (!actor) return
+    const result = await businessSupplierReturnRepository.createCase(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.get('/api/v2/business/supplier-returns/:id', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.read')
+    if (!actor) return
+    const supplierReturn = await businessSupplierReturnRepository.getCase(request.params.id)
+    return supplierReturn || reply.code(404).send({ error: 'SUPPLIER_RETURN_NOT_FOUND', message: '供应商退货单不存在' })
+  })
+  app.post('/api/v2/business/supplier-returns/:id/review', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.purchase_return.review')
+    if (!actor) return
+    return businessSupplierReturnRepository.reviewCase(request.params.id, request.body, actor)
+  })
+  app.post('/api/v2/business/supplier-returns/:id/shipments', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.inventory')
+    if (!actor) return
+    const result = await businessSupplierReturnRepository.shipReturn(request.params.id, request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
+  app.post('/api/v2/business/supplier-returns/:id/refunds', async (request, reply) => {
+    if (!businessSupplierReturnRepository) return reply.code(503).send({ error: 'BUSINESS_SUPPLIER_RETURN_UNAVAILABLE', message: '供应商退货服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.finance')
+    if (!actor) return
+    const result = await businessSupplierReturnRepository.recordRefund(request.params.id, request.body, actor)
     return reply.code(result.created ? 201 : 200).send(result)
   })
   app.get('/api/v2/business/purchase-orders', async (request, reply) => {

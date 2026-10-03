@@ -1552,6 +1552,71 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   expect(salesOrder.profitability.realizedGrossProfit).toBe(620)
   expect(salesOrder.profitability.realizedGrossMarginRate).toBeCloseTo(25.62, 2)
 
+  const supplierReturnPayload = {
+    requestKey: 'e2e-supplier-return-first', purchaseOrderId: purchaseOrder.id, reasonCode: 'wrong_part',
+    description: '客户退回的不适配配件继续退回原供应商', items: [{ inventoryLotId: afterSales.items[0].inventoryLotId, quantity: 1 }],
+  }
+  const supplierReturnResponse = await page.request.post('/api/v2/business/supplier-returns', { headers: editorHeaders, data: supplierReturnPayload })
+  expect(supplierReturnResponse.status()).toBe(201)
+  let supplierReturn = (await supplierReturnResponse.json()).case
+  expect(supplierReturn.status).toBe('requested')
+  expect(supplierReturn.requestedCreditAmount).toBe(600)
+  const repeatedSupplierReturnResponse = await page.request.post('/api/v2/business/supplier-returns', { headers: editorHeaders, data: { ...supplierReturnPayload, description: '重复请求不应覆盖' } })
+  expect(repeatedSupplierReturnResponse.status()).toBe(200)
+  expect((await repeatedSupplierReturnResponse.json()).case.id).toBe(supplierReturn.id)
+  const selfSupplierReturnReview = await page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/review`, { headers: editorHeaders, data: { expectedVersion: supplierReturn.version, decision: 'approve' } })
+  expect(selfSupplierReturnReview.status()).toBe(403)
+  const approvedSupplierReturnResponse = await page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/review`, { headers: afterSalesReviewerHeaders, data: { expectedVersion: supplierReturn.version, decision: 'approve', note: '采购与库存批次核对一致' } })
+  expect(approvedSupplierReturnResponse.ok()).toBeTruthy()
+  supplierReturn = await approvedSupplierReturnResponse.json()
+  expect(supplierReturn.status).toBe('approved')
+  expect(supplierReturn.approvedCreditAmount).toBe(600)
+
+  const supplierReturnShipmentPayload = { requestKey: 'e2e-supplier-return-shipment-first', expectedVersion: supplierReturn.version, items: [{ itemId: supplierReturn.items[0].id, quantity: 1 }], note: '退回原供应商' }
+  const concurrentSupplierReturnShipments = await Promise.all([
+    page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/shipments`, { headers: editorHeaders, data: supplierReturnShipmentPayload }),
+    page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/shipments`, { headers: editorHeaders, data: supplierReturnShipmentPayload }),
+  ])
+  expect(concurrentSupplierReturnShipments.map((response) => response.status()).sort()).toEqual([200, 201])
+  supplierReturn = await (await page.request.get(`/api/v2/business/supplier-returns/${supplierReturn.id}`, { headers: editorHeaders })).json()
+  expect(supplierReturn.status).toBe('refund_pending')
+  expect(supplierReturn.creditedAmount).toBe(600)
+  expect(supplierReturn.shipments).toHaveLength(1)
+  let payableAfterSupplierReturn = await (await page.request.get(`/api/v2/business/payables/${purchaseOrder.payable.id}`, { headers: editorHeaders })).json()
+  expect(payableAfterSupplierReturn.status).toBe('refund_pending')
+  expect(payableAfterSupplierReturn.creditedAmount).toBe(600)
+  expect(payableAfterSupplierReturn.adjustedAmount).toBe(1800)
+  expect(payableAfterSupplierReturn.refundableAmount).toBe(600)
+  const paymentWhileSupplierRefundPending = await page.request.post(`/api/v2/business/payables/${purchaseOrder.payable.id}/payments`, { headers: editorHeaders, data: { requestKey: 'e2e-payment-during-supplier-refund', amount: 1, paymentMethod: 'cash' } })
+  expect(paymentWhileSupplierRefundPending.status()).toBe(409)
+  expect((await paymentWhileSupplierRefundPending.json()).error).toBe('PAYABLE_REFUND_PENDING')
+
+  const supplierRefundPayload = { requestKey: 'e2e-supplier-refund-first', amount: 600, refundMethod: 'bank_transfer', referenceNo: 'SUPPLIER-REFUND-001', note: '供应商退回货款' }
+  const concurrentSupplierRefunds = await Promise.all([
+    page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/refunds`, { headers: editorHeaders, data: supplierRefundPayload }),
+    page.request.post(`/api/v2/business/supplier-returns/${supplierReturn.id}/refunds`, { headers: editorHeaders, data: supplierRefundPayload }),
+  ])
+  expect(concurrentSupplierRefunds.map((response) => response.status()).sort()).toEqual([200, 201])
+  supplierReturn = await (await page.request.get(`/api/v2/business/supplier-returns/${supplierReturn.id}`, { headers: editorHeaders })).json()
+  expect(supplierReturn.status).toBe('completed')
+  expect(supplierReturn.refundedAmount).toBe(600)
+  expect(supplierReturn.refunds).toHaveLength(1)
+  payableAfterSupplierReturn = await (await page.request.get(`/api/v2/business/payables/${purchaseOrder.payable.id}`, { headers: editorHeaders })).json()
+  expect(payableAfterSupplierReturn.status).toBe('paid')
+  expect(payableAfterSupplierReturn.refundedAmount).toBe(600)
+  expect(payableAfterSupplierReturn.netPaidAmount).toBe(1800)
+  expect(payableAfterSupplierReturn.refundableAmount).toBe(0)
+  const balancesAfterSupplierReturn = await (await page.request.get(`/api/v2/business/inventory-balances?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(balancesAfterSupplierReturn.items.find((item) => item.stockKey === returnedShipmentItem.stockKey).onHandQuantity).toBe(0)
+  const movementsAfterSupplierReturn = await (await page.request.get(`/api/v2/business/inventory-movements?warehouseId=${warehouse.id}`, { headers: editorHeaders })).json()
+  expect(movementsAfterSupplierReturn.items.map((item) => item.movementType)).toContain('supplier_return_out')
+  purchaseOrder = await (await page.request.get(`/api/v2/business/purchase-orders/${purchaseOrder.id}`, { headers: editorHeaders })).json()
+  expect(purchaseOrder.supplierReturns.map((item) => item.id)).toContain(supplierReturn.id)
+  expect(purchaseOrder.payable.adjustedAmount).toBe(1800)
+  salesOrder = await (await page.request.get(`/api/v2/business/sales-orders/${salesOrder.id}`, { headers: editorHeaders })).json()
+  expect(salesOrder.profitability.supplierPayableAmount).toBe(1800)
+  expect(salesOrder.profitability.supplierPaidAmount).toBe(1800)
+
   const customer360Response = await page.request.get(`/api/v2/business/partners/${customer.id}/360?pageSize=100`, { headers: editorHeaders })
   expect(customer360Response.ok()).toBeTruthy()
   const customer360 = await customer360Response.json()

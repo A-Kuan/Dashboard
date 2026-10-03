@@ -99,6 +99,11 @@ test('production workbench uses its real API without writing data', { skip: !bas
     const afterSalesList = await afterSalesListResponse.json()
     assert.ok(Array.isArray(afterSalesList.items))
     assert.ok(Number.isInteger(afterSalesList.total))
+    const supplierReturnListResponse = await page.request.get(new URL('api/v2/business/supplier-returns?page=1&pageSize=5', baseUrl).toString())
+    assert.equal(supplierReturnListResponse.ok(), true)
+    const supplierReturnList = await supplierReturnListResponse.json()
+    assert.ok(Array.isArray(supplierReturnList.items))
+    assert.ok(Number.isInteger(supplierReturnList.total))
     const purchaseOrderListResponse = await page.request.get(new URL('api/v2/business/purchase-orders?page=1&pageSize=5', baseUrl).toString())
     assert.equal(purchaseOrderListResponse.ok(), true)
     const purchaseOrderList = await purchaseOrderListResponse.json()
@@ -138,10 +143,16 @@ test('production workbench uses its real API without writing data', { skip: !bas
       assert.equal(paymentDenied.status(), 403)
       const refundDenied = await page.request.post(new URL('api/v2/business/after-sales/read-only-smoke/refunds', baseUrl).toString(), { data: { requestKey: 'read-only-refund', amount: 1, refundMethod: 'cash' } })
       assert.equal(refundDenied.status(), 403)
+      const supplierRefundDenied = await page.request.post(new URL('api/v2/business/supplier-returns/read-only-smoke/refunds', baseUrl).toString(), { data: { requestKey: 'read-only-supplier-refund', amount: 1, refundMethod: 'cash' } })
+      assert.equal(supplierRefundDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.after_sales')) {
       const afterSalesDenied = await page.request.post(new URL('api/v2/business/after-sales', baseUrl).toString(), { data: { requestKey: 'read-only-after-sales', salesOrderId: 'none', reasonCode: 'other', items: [{ shipmentItemId: 'none', quantity: 1 }] } })
       assert.equal(afterSalesDenied.status(), 403)
+    }
+    if (!session.capabilities.includes('business.purchase_return')) {
+      const supplierReturnDenied = await page.request.post(new URL('api/v2/business/supplier-returns', baseUrl).toString(), { data: { requestKey: 'read-only-supplier-return', purchaseOrderId: 'none', reasonCode: 'other', items: [{ inventoryLotId: 'none', quantity: 1 }] } })
+      assert.equal(supplierReturnDenied.status(), 403)
     }
     if (!session.capabilities.includes('business.inventory')) {
       const warehouseDenied = await page.request.post(new URL('api/v2/business/warehouses', baseUrl).toString(), { data: { warehouseCode: 'SMOKE', name: '不应写入' } })
