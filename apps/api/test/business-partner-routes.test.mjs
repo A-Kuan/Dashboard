@@ -21,6 +21,7 @@ test('partner routes keep reads visible and protect master-data writes', async (
     list: async (input) => { calls.push(['list', input]); return { items: [partner], total: 1, page: 1, pageSize: 30, summary: [] } },
     get: async (id) => { calls.push(['get', id]); return id === partner.id ? partner : null },
     customer360: async (id, input) => { calls.push(['customer360', id, input]); return id === partner.id ? { customer: partner, summary: { inquiryCount: 1 }, nextActions: [], timeline: { items: [], nextCursor: null } } : null },
+    previewQuickQuoteCustomerOnboarding: async (input) => { calls.push(['previewQuickQuoteCustomerOnboarding', input]); return { ready: true, action: 'create_customer', fingerprint: 'preview-1', conflicts: [], warnings: [] } },
     onboardQuickQuoteCustomer: async (input, actor) => { calls.push(['onboardQuickQuoteCustomer', input, actor]); return { created: true, createdPartner: true, createdVehicle: true, matchedBy: 'created', customer: partner, vehicle: { id: 'vehicle-1' } } },
     create: async (input, actor) => { calls.push(['create', input, actor]); return partner },
     update: async (id, input, actor) => { calls.push(['update', id, input, actor]); return { ...partner, ...input, version: 2 } },
@@ -51,10 +52,17 @@ test('partner routes keep reads visible and protect master-data writes', async (
   const onboardingDenied = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { requestKey: 'denied' } })
   assert.equal(onboardingDenied.statusCode, 403)
   assert.equal(onboardingDenied.json().details.capability, 'business.quote')
+  const previewDenied = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding/preview', headers: { 'x-operator-role': 'catalog_viewer' }, payload: { customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })
+  assert.equal(previewDenied.statusCode, 403)
+  assert.equal(previewDenied.json().details.capability, 'business.quote')
 
   const editor = { 'x-operator-role': 'catalog_editor', 'x-operator-name': encodeURIComponent('业务员甲'), 'x-operator-id': 'sales-1' }
+  const preview = await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding/preview', headers: editor, payload: { customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.json().fingerprint, 'preview-1')
+
   assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/partners', headers: editor, payload: { partnerType: 'customer', name: '王师傅汽修' } })).statusCode, 201)
-  assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding', headers: editor, payload: { requestKey: 'onboard-1', customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })).statusCode, 201)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v2/business/quick-quote/customer-onboarding', headers: editor, payload: { requestKey: 'onboard-1', previewFingerprint: 'preview-1', customer: { name: '新客户', phone: '13800000000' }, vehicle: { platformMasterId: 'platform-1' } } })).statusCode, 201)
   assert.equal((await app.inject({ method: 'PATCH', url: `/api/v2/business/partners/${partner.id}`, headers: editor, payload: { expectedVersion: 1, address: '杭州' } })).statusCode, 200)
   assert.equal((await app.inject({ method: 'POST', url: `/api/v2/business/partners/${partner.id}/contacts`, headers: editor, payload: { expectedPartnerVersion: 1, name: '王师傅' } })).statusCode, 201)
   assert.equal((await app.inject({ method: 'PATCH', url: `/api/v2/business/partners/${partner.id}/contacts/contact-1`, headers: editor, payload: { expectedPartnerVersion: 2, expectedVersion: 1, name: '王师傅' } })).statusCode, 200)
