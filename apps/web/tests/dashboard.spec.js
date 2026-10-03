@@ -976,6 +976,46 @@ test('connects customer vehicle, verified SKU and an idempotent quick quote', as
   expect(repeated.quoteId).toBe(quick.quoteId)
   expect(repeated.inquiry.quotes[0].totalAmount).toBe(1776)
 
+  const integrityDraftResponse = await page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: {
+    ...payload, requestKey: 'quick-quote-integrity-e2e', items: [{ ...payload.items[0], quantity: 1, saleUnitPrice: 920 }],
+  } })
+  expect(integrityDraftResponse.status()).toBe(201)
+  let integrityInquiry = (await integrityDraftResponse.json()).inquiry
+  let integrityQuote = integrityInquiry.quotes[0]
+  expect(integrityQuote.integrityStatus).toBe('valid')
+  expect(integrityQuote.integrityEvents.some((event) => event.action === 'created' && event.result === 'valid')).toBeTruthy()
+  const inactiveSupplierResponse = await page.request.patch(`/api/v2/business/partners/${supplier.id}`, { headers: editorHeaders, data: {
+    expectedVersion: supplier.version, status: 'inactive', note: '验证报价发送前供应商状态复核',
+  } })
+  expect(inactiveSupplierResponse.ok()).toBeTruthy()
+  const inactiveSupplier = await inactiveSupplierResponse.json()
+  const integrityBlockedResponse = await page.request.post(`/api/v2/business/quotes/${integrityQuote.id}/send`, { headers: editorHeaders, data: { expectedRevision: integrityQuote.revision } })
+  expect(integrityBlockedResponse.status()).toBe(409)
+  const integrityBlocked = await integrityBlockedResponse.json()
+  expect(integrityBlocked.error).toBe('QUOTE_INTEGRITY_BLOCKED')
+  expect(integrityBlocked.details.integrityReasons.some((reason) => reason.code === 'supplier_unavailable')).toBeTruthy()
+  integrityInquiry = await (await page.request.get(`/api/v2/business/inquiries/${integrityInquiry.id}`, { headers: editorHeaders })).json()
+  integrityQuote = integrityInquiry.quotes[0]
+  expect(integrityQuote.integrityStatus).toBe('blocked')
+  expect(integrityQuote.integrityEvents.some((event) => event.action === 'send' && event.result === 'blocked')).toBeTruthy()
+  const integrityQueueResponse = await page.request.get(`/api/v2/business/operations-center?kind=quote_integrity&q=${encodeURIComponent(integrityQuote.quoteNo)}&pageSize=20`, { headers: editorHeaders })
+  expect(integrityQueueResponse.ok()).toBeTruthy()
+  const integrityQueue = await integrityQueueResponse.json()
+  expect(integrityQueue.items.some((item) => item.sourceId === integrityQuote.id && item.details.integrityReasons.some((reason) => reason.code === 'supplier_unavailable'))).toBeTruthy()
+  const activeSupplierResponse = await page.request.patch(`/api/v2/business/partners/${supplier.id}`, { headers: editorHeaders, data: {
+    expectedVersion: inactiveSupplier.version, status: 'active', note: '供应商资料复核完成',
+  } })
+  expect(activeSupplierResponse.ok()).toBeTruthy()
+  const integrityRevisionResponse = await page.request.post(`/api/v2/business/quotes/${integrityQuote.id}/revisions`, { headers: editorHeaders, data: {
+    expectedRevision: integrityQuote.revision, reason: '供应商恢复后刷新报价证据',
+  } })
+  expect(integrityRevisionResponse.status()).toBe(201)
+  integrityInquiry = await integrityRevisionResponse.json()
+  const refreshedIntegrityQuote = integrityInquiry.quotes.find((quote) => quote.versionNo === 2)
+  expect(refreshedIntegrityQuote.integrityStatus).toBe('valid')
+  expect(refreshedIntegrityQuote.items[0].supplierOfferId).toBe(integrityQuote.items[0].supplierOfferId)
+  expect(refreshedIntegrityQuote.integrityEvents.some((event) => event.action === 'revised' && event.result === 'valid')).toBeTruthy()
+
   const concurrentPayload = { ...payload, requestKey: 'quick-quote-e2e-0002' }
   const concurrentResponses = await Promise.all([
     page.request.post('/api/v2/business/quick-quotes', { headers: editorHeaders, data: concurrentPayload }),
@@ -1467,8 +1507,8 @@ test('runs an inquiry through purchasing, inventory reservation and shipment', a
   const changedStockConversionResponse = await page.request.post(`/api/v2/business/inquiries/${stockInquiry.id}/convert-order`, { headers: editorHeaders })
   expect(changedStockConversionResponse.status()).toBe(409)
   const changedStockConversionError = await changedStockConversionResponse.json()
-  expect(changedStockConversionError.error).toBe('ORDER_STOCK_CHANGED')
-  expect(changedStockConversionError.details.fulfillmentWarehouseId).toBe(warehouse.id)
+  expect(changedStockConversionError.error).toBe('ORDER_QUOTE_INTEGRITY_BLOCKED')
+  expect(changedStockConversionError.details.integrityReasons.some((reason) => reason.code === 'stock_unavailable' && reason.details.fulfillmentWarehouseId === warehouse.id)).toBeTruthy()
 
   const releasedReservationResponse = await page.request.post(`/api/v2/business/reservations/${reservation.id}/release`, { headers: editorHeaders, data: {
     expectedVersion: reservation.version, note: '演练释放后重新锁定',

@@ -12,6 +12,7 @@
 - 发送报价和状态流转使用版本号防止多人操作互相覆盖。
 - 报价按可配置最低毛利率和账期客户信用额度自动判断风险；命中规则时必须由非制单人独立审批。
 - 发送报价和成交转订单都会重新计算风险指纹，额度、欠款、金额或规则变化会使旧审批失效。
+- 报价创建、修订、发送、客户确认和成交转单都会重新核验客户车辆、SKU 版本、适配证据、供应商报价与现货库存；证据变化时先阻断并要求复核，无法恢复原证据时必须修订报价。
 - 关键操作写入不可覆盖的事件记录，保留操作人、前后状态和当时快照。
 - 成交询价只能生成一张销售订单；重复转换返回已有订单，不会重复采购。
 - 销售订单按报价中选定的供应商自动拆分采购单，并保存客户、车型、供应商和价格快照。
@@ -50,7 +51,7 @@
 
 该只读接口把散落在询价、待审批报价、销售订单、采购订单、应收、应付、客户售后和供应商退货中的未完成事项归并为统一工作队列。每项返回来源单号、当前状态、客户或供应商、负责人、下一步动作、需要的权限、目标路径、到期时间、紧急程度、金额和来源快照；已经成交、完成、拒绝、取消或结清的事项不会继续出现在队列中。
 
-`kind` 支持询价跟进、`quote_approval` 报价审批、销售履约、采购到货、客户收款、供应商付款、售后审核/退货入库/客户退款、供应商退货审核/退供出库/供应商退款。`urgency` 支持 `overdue`、`today`、`upcoming`、`normal` 和 `unscheduled`，日期边界固定使用中国时区。返回的 `summary` 同时提供各紧急程度、各工作类型的数量和分币种金额，并分别汇总应收、应付、客户待退款与供应商待退款敞口。该接口不复制任务状态，源单一旦流转或结清，工作队列会立即随业务事实变化。
+`kind` 支持询价跟进、`quote_approval` 报价审批、`quote_integrity` 报价资料复核、`quote_expiry` 报价到期、销售履约、采购到货、客户收款、供应商付款、售后审核/退货入库/客户退款、供应商退货审核/退供出库/供应商退款。`urgency` 支持 `overdue`、`today`、`upcoming`、`normal` 和 `unscheduled`，日期边界固定使用中国时区。返回的 `summary` 同时提供各紧急程度、各工作类型的数量和分币种金额，并分别汇总应收、应付、客户待退款与供应商待退款敞口。该接口不复制任务状态，源单一旦流转或结清，工作队列会立即随业务事实变化。
 
 ### 报价风控规则
 
@@ -207,7 +208,7 @@
 }
 ```
 
-只有当前血缘中的最新草稿版本可以发送；版本不一致返回 `409 QUOTE_VERSION_CONFLICT`。已过 `validUntil` 的草稿会被标记为 `expired` 并返回 `409 QUOTE_EXPIRED`。发送前会重新计算风险：缺少有效审批时返回 `409 QUOTE_APPROVAL_REQUIRED`，并保留最新风险快照。新报价发送成功后，同一询价此前仍为 `sent` 的报价自动进入 `superseded`，避免客户同时确认多个有效报价。
+只有当前血缘中的最新草稿版本可以发送；版本不一致返回 `409 QUOTE_VERSION_CONFLICT`。已过 `validUntil` 的草稿会被标记为 `expired` 并返回 `409 QUOTE_EXPIRED`。发送前先重新核验客户、车辆、SKU、适配、供应商报价和库存；证据已变化返回 `409 QUOTE_INTEGRITY_BLOCKED`，响应带 `integrityReasons` 与 `integritySnapshot`，同时进入业务跟进中枢的资料复核队列。随后重新计算风险：缺少有效审批时返回 `409 QUOTE_APPROVAL_REQUIRED`，并保留最新风险快照。新报价发送成功后，同一询价此前仍为 `sent` 的报价自动进入 `superseded`，避免客户同时确认多个有效报价。
 
 ### 修订报价
 
@@ -224,15 +225,17 @@
       "sourceQuoteItemId": "quote-item-id",
       "quantity": 2,
       "saleUnitPrice": 850,
-      "costUnitPrice": 600
+      "costUnitPrice": 600,
+      "fulfillmentSource": "purchase",
+      "supplierOfferId": "新的供应商报价 ID"
     }
   ]
 }
 ```
 
-修订不会覆盖原报价，而是生成同一 `lineageId` 下递增的 `versionNo`。原版本进入 `superseded`，新版本回到 `draft` 并重新计算金额、毛利、信用风险与审批要求。`revision` 仍只用于并发控制，`versionNo` 才是客户报价的商业版本。只有血缘中的最新版本可以继续修订或发送；审批不会跨版本继承。
+修订不会覆盖原报价，而是生成同一 `lineageId` 下递增的 `versionNo`。原版本进入 `superseded`，新版本回到 `draft` 并重新计算金额、毛利、信用风险与审批要求。修订时会刷新客户车辆、SKU 版本和已核验适配证据，并允许通过 `fulfillmentSource`、`supplierOfferId` 或 `fulfillmentWarehouseId` 改选有效货源；没有已核验适配时仍需提供不少于 8 个字符的 `fitmentOverrideReason`。`revision` 仍只用于并发控制，`versionNo` 才是客户报价的商业版本。只有血缘中的最新版本可以继续修订或发送；审批不会跨版本继承。
 
-询价详情同时返回 `quoteRevisionEvents`，包含前后快照、修订原因与变更行，供后续界面展示版本对比和审计历史。
+询价详情返回顶层 `quoteRevisionEvents`，每张报价返回自己的 `integrityEvents`。前者包含前后快照、修订原因与变更行；后者记录每次核验动作、结果、原因、快照与指纹。每张报价还返回 `integrityStatus`、`integrityReasons`、`integritySnapshot`、`integrityFingerprint`、`integrityValidatedAt` 和 `integrityValidatedAction`。
 
 ### 审批报价
 
@@ -265,13 +268,13 @@
 
 `new → sourcing → quoting → quoted → follow_up → won/lost`
 
-允许报价后直接成交或丢单，也允许丢单重新进入跟进。成交或丢单时可传 `quoteId`；服务端只接受当前最新、仍在有效期内且状态为 `sent` 的报价。旧报价返回 `409 QUOTE_NOT_LATEST`，过期报价返回 `409 QUOTE_EXPIRED`。无效流转与旧版本写入均返回 `409`。
+允许报价后直接成交或丢单，也允许丢单重新进入跟进。成交或丢单时可传 `quoteId`；服务端只接受当前最新、仍在有效期内且状态为 `sent` 的报价。确认成交前再次核验报价引用的数据，变化时返回 `409 QUOTE_INTEGRITY_BLOCKED`。旧报价返回 `409 QUOTE_NOT_LATEST`，过期报价返回 `409 QUOTE_EXPIRED`。无效流转与旧版本写入均返回 `409`。
 
 ### 成交转订单
 
 `POST /api/v2/business/inquiries/:id/convert-order`
 
-仅允许转换 `won` 状态且存在已接受报价的询价。已接受报价必须仍是血缘最新版本且未过有效期，否则拒绝转单。转单前会再次核对毛利、信用额度与未结应收；风险指纹变化时返回 `409 ORDER_QUOTE_APPROVAL_REQUIRED`，需要按最新快照重新审批。每项报价必须关联供应商报价，服务端在同一事务中完成：
+仅允许转换 `won` 状态且存在已接受报价的询价。已接受报价必须仍是血缘最新版本且未过有效期，否则拒绝转单。转单前会再次核验报价资料并核对毛利、信用额度与未结应收；资料变化返回 `409 ORDER_QUOTE_INTEGRITY_BLOCKED`，风险指纹变化返回 `409 ORDER_QUOTE_APPROVAL_REQUIRED`。临时占用等情况恢复后可以用最新 `revision` 重试；SKU 版本、车型或价格来源发生实质变化时需要先修订并让客户重新确认。每项采购来源报价必须关联供应商报价，服务端在同一事务中完成：
 
 1. 生成一张销售订单及销售明细；
 2. 按供应商拆分一张或多张采购订单；

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withTransaction } from './db.mjs'
 import { evaluateQuoteRisk } from './business-quote-policy.mjs'
+import { evaluateAndRecordQuoteIntegrity } from './business-quote-integrity.mjs'
 
 const salesStatuses = new Set(['draft', 'confirmed', 'fulfilling', 'completed', 'cancelled'])
 const purchaseStatuses = new Set(['draft', 'submitted', 'confirmed', 'partially_received', 'received', 'cancelled'])
@@ -330,6 +331,8 @@ export function createBusinessOrderRepository(pool) {
       if (!latestLineageQuote || latestLineageQuote.id !== quote.id) throw problem('ACCEPTED_QUOTE_NOT_LATEST', '客户接受的报价不是当前最新版本，请重新确认', 409, { acceptedQuoteId: quote.id, latestQuoteId: latestLineageQuote?.id || '' })
       const expired = Boolean((await client.query("SELECT valid_until IS NOT NULL AND valid_until<(now() AT TIME ZONE 'Asia/Shanghai')::date expired FROM business_quote WHERE id=$1", [quote.id])).rows[0].expired)
       if (expired) throw problem('ACCEPTED_QUOTE_EXPIRED', '客户接受的报价已过有效期，请创建新版本并重新确认', 409, { quoteId: quote.id, validUntil: quote.valid_until })
+      const integrity = await evaluateAndRecordQuoteIntegrity(client, quote, 'conversion', actor, { incrementRevisionWhenBlocked: true })
+      if (integrity.status === 'blocked') return { integrityBlocked: true, quoteId: quote.id, integrity }
       const risk = await evaluateQuoteRisk(client, { customerPartnerId: inquiry.customer_partner_id, currency: quote.currency, totalAmount: quote.total_amount, marginAmount: quote.margin_amount })
       if (risk.required && (quote.approval_status !== 'approved' || quote.approval_fingerprint !== risk.fingerprint)) {
         const changed = quote.approval_status !== 'pending' || quote.approval_fingerprint !== risk.fingerprint
@@ -434,6 +437,7 @@ export function createBusinessOrderRepository(pool) {
         VALUES ($1,$2,'converted_to_order',$3,$3,$4,$5,$6,$7::jsonb)`, [randomUUID(), inquiry.id, inquiry.status, by.id, by.name, salesOrderNo, JSON.stringify({ salesOrderId, salesOrderNo, purchaseOrderIds, stockReservationIds })])
       return { salesOrderId, purchaseOrderIds, stockReservationIds, created: true }
     })
+    if (result.integrityBlocked) throw problem('ORDER_QUOTE_INTEGRITY_BLOCKED', '成交转单前发现车型、SKU 适配、货源或库存证据变化，请复核并在必要时修订报价', 409, { quoteId: result.quoteId, currentRevision: result.integrity.currentRevision, integrityReasons: result.integrity.reasons, integritySnapshot: result.integrity.snapshot })
     if (result.blocked) throw problem('ORDER_QUOTE_APPROVAL_REQUIRED', '客户信用额度或报价毛利条件已变化，需重新审批后才能转订单', 409, { quoteId: result.quoteId, currentRevision: result.currentRevision, riskReasons: result.risk.reasons, riskSnapshot: result.risk.snapshot })
     return { salesOrder: await getSalesOrder(result.salesOrderId), purchaseOrders: await Promise.all((result.purchaseOrderIds || []).map((id) => getPurchaseOrder(id))), stockReservationIds: result.stockReservationIds || [], created: result.created }
   }
