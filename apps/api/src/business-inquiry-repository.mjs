@@ -51,6 +51,11 @@ function requestKey(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(normalized)) throw problem('INVALID_QUICK_QUOTE_REQUEST_KEY', '快速报价请求编号必须为 8 至 128 位安全字符')
   return normalized
 }
+function businessStockKey(row) {
+  if (clean(row.catalog_sku_id ?? row.catalogSkuId)) return `sku:${clean(row.catalog_sku_id ?? row.catalogSkuId)}`
+  const oe = clean(row.oe_number ?? row.oeNumber).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return oe ? `oe:${oe}` : `inquiry:${clean(row.inquiry_item_id ?? row.id)}`
+}
 
 export function normalizeBusinessInquiryInput(input = {}) {
   const items = Array.isArray(input.items) ? input.items : []
@@ -147,7 +152,7 @@ export function createBusinessInquiryRepository(pool) {
     return {
       ...inquiry,
       items: items.rows.map((row) => ({ ...mapItem(row), offers: offers.rows.filter((offer) => offer.inquiry_item_id === row.id).map(mapOffer) })),
-      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, fulfillmentSource: item.fulfillment_source, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
+      quotes: quotes.rows.map((row) => ({ ...mapQuote(row), items: quoteItemRows.filter((item) => item.quote_id === row.id).map((item) => ({ id: item.id, quoteId: item.quote_id, inquiryItemId: item.inquiry_item_id, supplierOfferId: item.supplier_offer_id, fulfillmentSource: item.fulfillment_source, fulfillmentWarehouseId: item.fulfillment_warehouse_id, catalogSkuId: item.catalog_sku_id, catalogSkuVersion: item.catalog_sku_version, skuCodeSnapshot: item.sku_code_snapshot, skuNameSnapshot: item.sku_name_snapshot, brandSnapshot: item.brand_snapshot, fitmentSnapshot: item.fitment_snapshot || {}, lineNo: item.line_no, description: item.description, oeNumber: item.oe_number, quantity: Number(item.quantity), unit: item.unit, costUnitPrice: Number(item.cost_unit_price), saleUnitPrice: Number(item.sale_unit_price), lineTotal: Number(item.line_total) })) })),
       events: events.rows.map((row) => ({ id: row.id, action: row.action, fromStatus: row.from_status, toStatus: row.to_status, actorId: row.actor_id, actorName: row.actor_name, note: row.note, snapshot: row.snapshot, createdAt: row.created_at })),
     }
   }
@@ -188,6 +193,7 @@ export function createBusinessInquiryRepository(pool) {
       const suppliers = (await pool.query(`SELECT p.id,p.partner_no,p.name,p.short_name,p.phone,p.status,p.version
         FROM business_partner p WHERE p.status='active' AND p.partner_type IN ('supplier','both')
         ORDER BY p.updated_at DESC LIMIT $1`, [size])).rows.map((row) => ({ id: row.id, partnerNo: row.partner_no, name: row.name, shortName: row.short_name, phone: row.phone, status: row.status, version: row.version }))
+      const warehouses = (await pool.query("SELECT id,warehouse_code,name,address,is_default FROM business_warehouse WHERE status='active' ORDER BY is_default DESC,name,id LIMIT $1", [size])).rows.map((row) => ({ id: row.id, warehouseCode: row.warehouse_code, name: row.name, address: row.address, isDefault: row.is_default }))
 
       let customer = null; let selectedVehicle = null
       if (clean(customerId)) {
@@ -228,13 +234,15 @@ export function createBusinessInquiryRepository(pool) {
         (SELECT raw_value FROM catalog_part_identifier i WHERE i.sku_id=s.id AND i.is_primary ORDER BY i.sort_order LIMIT 1) primary_oe,
         COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.sort_order,f.created_at) FROM catalog_fitment f WHERE f.sku_id=s.id AND f.verification_status='verified'),'[]'::jsonb) fitments,
         COALESCE((SELECT sum(b.on_hand_quantity) FROM business_inventory_balance b WHERE b.catalog_sku_id=s.id),0)::numeric on_hand_quantity,
-        COALESCE((SELECT sum(b.reserved_quantity) FROM business_inventory_balance b WHERE b.catalog_sku_id=s.id),0)::numeric reserved_quantity
+        COALESCE((SELECT sum(b.reserved_quantity) FROM business_inventory_balance b WHERE b.catalog_sku_id=s.id),0)::numeric reserved_quantity,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object('warehouseId',b.warehouse_id,'warehouseCode',w.warehouse_code,'warehouseName',w.name,'onHandQuantity',b.on_hand_quantity,'reservedQuantity',b.reserved_quantity,'availableQuantity',b.on_hand_quantity-b.reserved_quantity) ORDER BY w.is_default DESC,w.name,b.warehouse_id)
+          FROM business_inventory_balance b JOIN business_warehouse w ON w.id=b.warehouse_id WHERE b.catalog_sku_id=s.id AND w.status='active'),'[]'::jsonb) inventory_by_warehouse
         FROM catalog_sku s WHERE ${skuClauses.join(' AND ')} ORDER BY s.updated_at DESC LIMIT $${skuValues.length}`, skuValues)).rows
       const skus = skuRows.map((row) => {
         const fitment = vehicleContext ? row.fitments.find((candidate) => fitmentMatchesVehicle(candidate, vehicleContext)) : null
-        return { id: row.id, skuCode: row.sku_code, name: row.canonical_name_zh || row.canonical_name_en, brandLabel: row.brand_label || row.brand_code, categoryLabel: row.category_label || row.category_code, unit: row.unit_label, primaryOe: row.primary_oe || '', version: row.version, onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity), fitmentStatus: vehicleContext ? fitment ? 'matched' : 'not_matched' : 'vehicle_required', fitment: fitmentSnapshot(fitment) }
+        return { id: row.id, skuCode: row.sku_code, name: row.canonical_name_zh || row.canonical_name_en, brandLabel: row.brand_label || row.brand_code, categoryLabel: row.category_label || row.category_code, unit: row.unit_label, primaryOe: row.primary_oe || '', version: row.version, onHandQuantity: Number(row.on_hand_quantity), reservedQuantity: Number(row.reserved_quantity), availableQuantity: Number(row.on_hand_quantity) - Number(row.reserved_quantity), inventoryByWarehouse: row.inventory_by_warehouse.map((item) => ({ ...item, onHandQuantity: Number(item.onHandQuantity), reservedQuantity: Number(item.reservedQuantity), availableQuantity: Number(item.availableQuantity) })), fitmentStatus: vehicleContext ? fitment ? 'matched' : 'not_matched' : 'vehicle_required', fitment: fitmentSnapshot(fitment) }
       })
-      return { customers, suppliers, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
+      return { customers, suppliers, warehouses, customer, selectedVehicle: selectedVehicle ? { id: selectedVehicle.id, vehicleLabel: selectedVehicle.vehicle_label, vin: selectedVehicle.vin, licensePlate: selectedVehicle.license_plate, platformCode: selectedVehicle.platform_code, platformMasterId: selectedVehicle.platform_master_id, variantMasterId: selectedVehicle.variant_master_id, engineCode: selectedVehicle.engine_code, modelYear: selectedVehicle.model_year } : null, platforms, vehicles, skus }
     },
 
     async createQuickQuote(rawInput = {}, actor) {
@@ -274,16 +282,21 @@ export function createBusinessInquiryRepository(pool) {
           const fulfillmentSource = clean(draft.fulfillmentSource)
           if (!['stock', 'purchase'].includes(fulfillmentSource)) throw problem('QUICK_QUOTE_FULFILLMENT_SOURCE_REQUIRED', `第 ${index + 1} 项必须选择现货或采购来源`)
           let supplier = null
+          let fulfillmentWarehouse = null
           if (fulfillmentSource === 'stock') {
+            const fulfillmentWarehouseId = clean(draft.fulfillmentWarehouseId)
+            fulfillmentWarehouse = (await client.query("SELECT * FROM business_warehouse WHERE id=$1 AND status='active' FOR SHARE", [fulfillmentWarehouseId])).rows[0]
+            if (!fulfillmentWarehouse) throw problem('QUICK_QUOTE_WAREHOUSE_REQUIRED', `第 ${index + 1} 项现货来源必须选择有效仓库`, 409)
             const available = Number((await client.query(`SELECT COALESCE(sum(on_hand_quantity-reserved_quantity),0)::numeric quantity
-              FROM business_inventory_balance WHERE catalog_sku_id=$1`, [sku.id])).rows[0].quantity)
-            if (available < requestedQuantity) throw problem('QUICK_QUOTE_STOCK_INSUFFICIENT', `第 ${index + 1} 项可用库存不足，不能按现货报价`, 409, { catalogSkuId: sku.id, requestedQuantity, availableQuantity: available })
+              FROM business_inventory_balance WHERE warehouse_id=$1 AND catalog_sku_id=$2`, [fulfillmentWarehouse.id, sku.id])).rows[0].quantity)
+            if (available < requestedQuantity) throw problem('QUICK_QUOTE_STOCK_INSUFFICIENT', `第 ${index + 1} 项所选仓库可用库存不足，不能按现货报价`, 409, { catalogSkuId: sku.id, fulfillmentWarehouseId: fulfillmentWarehouse.id, requestedQuantity, availableQuantity: available })
           } else {
+            if (clean(draft.fulfillmentWarehouseId)) throw problem('QUICK_QUOTE_PURCHASE_WAREHOUSE_CONFLICT', `第 ${index + 1} 项采购来源不能同时指定现货仓库`)
             const supplierPartnerId = clean(draft.supplierPartnerId)
             supplier = (await client.query("SELECT * FROM business_partner WHERE id=$1 AND status='active' AND partner_type IN ('supplier','both') FOR SHARE", [supplierPartnerId])).rows[0]
             if (!supplier) throw problem('QUICK_QUOTE_SUPPLIER_REQUIRED', `第 ${index + 1} 项采购来源必须选择有效供应商`, 409)
           }
-          normalized.push({ id: randomUUID(), sku, fitment: fitmentSnapshot(fitment, { overridden: !fitment, overrideReason }), quantity: requestedQuantity, saleUnitPrice, costUnitPrice, fulfillmentSource, supplier, description: clean(draft.description) || sku.canonical_name_zh || sku.canonical_name_en, unit: clean(draft.unit) || sku.unit_label || '件', lineTotal: Math.round(requestedQuantity * saleUnitPrice * 100) / 100 })
+          normalized.push({ id: randomUUID(), sku, fitment: fitmentSnapshot(fitment, { overridden: !fitment, overrideReason }), quantity: requestedQuantity, saleUnitPrice, costUnitPrice, fulfillmentSource, fulfillmentWarehouse, supplier, description: clean(draft.description) || sku.canonical_name_zh || sku.canonical_name_en, unit: clean(draft.unit) || sku.unit_label || '件', lineTotal: Math.round(requestedQuantity * saleUnitPrice * 100) / 100 })
         }
         const subtotal = Math.round(normalized.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100
         if (discountAmount > subtotal + freightAmount) throw problem('INVALID_BUSINESS_AMOUNT', '优惠金额不能大于报价金额')
@@ -303,8 +316,8 @@ export function createBusinessInquiryRepository(pool) {
             await client.query(`INSERT INTO business_supplier_offer (id,inquiry_id,inquiry_item_id,supplier_name,supplier_partner_id,brand_label,unit_price,availability,lead_time_days,source_note,selected,created_by_id,created_by_name)
               VALUES ($1,$2,$3,$4,$5,$6,$7,'ordered',$8,'快速报价采购来源',true,$9,$10)`, [supplierOfferId, inquiryId, inquiryItemId, item.supplier.name, item.supplier.id, item.sku.brand_label || item.sku.brand_code, item.costUnitPrice, Number.isInteger(Number(requested[index].leadTimeDays)) ? Number(requested[index].leadTimeDays) : null, by.id, by.name])
           }
-          await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19)`, [randomUUID(), quoteId, inquiryItemId, supplierOfferId, item.fulfillmentSource, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
+          await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,fulfillment_warehouse_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, [randomUUID(), quoteId, inquiryItemId, supplierOfferId, item.fulfillmentSource, item.fulfillmentWarehouse?.id || null, item.sku.id, item.sku.version, item.sku.sku_code, item.sku.canonical_name_zh || item.sku.canonical_name_en, item.sku.brand_label || item.sku.brand_code, JSON.stringify(item.fitment), index + 1, item.description, item.sku.primary_oe || '', item.quantity, item.unit, item.costUnitPrice, item.saleUnitPrice, item.lineTotal])
         }
         await insertEvent(client, inquiryId, 'quick_quote_created', actor, { toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, requestKey: key, customerPartnerId: customer.id, customerVehicleId: vehicle.id, vehiclePlatformId: vehicle.platform_master_id, vehicleVariantId: vehicle.variant_master_id, itemCount: normalized.length, totalAmount } })
         return { created: true, inquiryId, quoteId }
@@ -419,9 +432,16 @@ export function createBusinessInquiryRepository(pool) {
           if (!['stock', 'purchase'].includes(fulfillmentSource)) throw problem('INVALID_QUOTE_FULFILLMENT_SOURCE', `第 ${item.line_no} 项履约来源无效`)
           if (fulfillmentSource === 'purchase' && !offer) throw problem('QUOTE_SUPPLIER_SOURCE_REQUIRED', `第 ${item.line_no} 项选择采购时必须关联供应商报价`)
           if (fulfillmentSource === 'stock' && offer) throw problem('QUOTE_STOCK_SOURCE_CONFLICT', `第 ${item.line_no} 项选择现货时不能同时关联供应商报价`)
+          let fulfillmentWarehouse = null
+          if (fulfillmentSource === 'stock') {
+            fulfillmentWarehouse = (await client.query("SELECT * FROM business_warehouse WHERE id=$1 AND status='active' FOR SHARE", [clean(draft.fulfillmentWarehouseId)])).rows[0]
+            if (!fulfillmentWarehouse) throw problem('QUOTE_WAREHOUSE_REQUIRED', `第 ${item.line_no} 项选择现货时必须指定有效仓库`)
+            const available = Number((await client.query('SELECT COALESCE(on_hand_quantity-reserved_quantity,0)::numeric quantity FROM business_inventory_balance WHERE warehouse_id=$1 AND stock_key=$2', [fulfillmentWarehouse.id, businessStockKey(item)])).rows[0]?.quantity || 0)
+            if (available < Number(item.requested_quantity)) throw problem('QUOTE_STOCK_INSUFFICIENT', `第 ${item.line_no} 项所选仓库可用库存不足`, 409, { fulfillmentWarehouseId: fulfillmentWarehouse.id, requestedQuantity: Number(item.requested_quantity), availableQuantity: available })
+          } else if (clean(draft.fulfillmentWarehouseId)) throw problem('QUOTE_PURCHASE_WAREHOUSE_CONFLICT', `第 ${item.line_no} 项采购来源不能同时指定现货仓库`)
           const saleUnitPrice = money(draft.saleUnitPrice, `第 ${item.line_no} 项销售单价`)
           const costUnitPrice = offer ? Number(offer.unit_price) : money(draft.costUnitPrice, `第 ${item.line_no} 项成本价`, { optional: true })
-          normalized.push({ id: randomUUID(), item, offer, fulfillmentSource, description: clean(draft.description) || item.requirement_text, costUnitPrice, saleUnitPrice, lineTotal: Math.round(Number(item.requested_quantity) * saleUnitPrice * 100) / 100 })
+          normalized.push({ id: randomUUID(), item, offer, fulfillmentSource, fulfillmentWarehouse, description: clean(draft.description) || item.requirement_text, costUnitPrice, saleUnitPrice, lineTotal: Math.round(Number(item.requested_quantity) * saleUnitPrice * 100) / 100 })
         }
         const subtotal = normalized.reduce((sum, item) => sum + item.lineTotal, 0)
         if (discountAmount > subtotal + freightAmount) throw problem('INVALID_BUSINESS_AMOUNT', '优惠金额不能大于报价金额')
@@ -429,8 +449,8 @@ export function createBusinessInquiryRepository(pool) {
         const marginAmount = Math.round((subtotal - normalized.reduce((sum, item) => sum + Number(item.item.requested_quantity) * item.costUnitPrice, 0) - discountAmount) * 100) / 100
         await client.query(`INSERT INTO business_quote (id,inquiry_id,quote_no,currency,valid_until,subtotal,discount_amount,freight_amount,total_amount,margin_amount,note,created_by_id,created_by_name)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [quoteId, inquiryId, quoteNo, inquiry.currency, optionalDate(rawInput.validUntil, '报价有效期'), subtotal, discountAmount, freightAmount, totalAmount, marginAmount, clean(rawInput.note), by.id, by.name])
-        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.fulfillmentSource, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
+        for (const entry of normalized) await client.query(`INSERT INTO business_quote_item (id,quote_id,inquiry_item_id,supplier_offer_id,fulfillment_source,fulfillment_warehouse_id,catalog_sku_id,catalog_sku_version,sku_code_snapshot,sku_name_snapshot,brand_snapshot,fitment_snapshot,line_no,description,oe_number,quantity,unit,cost_unit_price,sale_unit_price,line_total)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, [entry.id, quoteId, entry.item.id, entry.offer?.id || null, entry.fulfillmentSource, entry.fulfillmentWarehouse?.id || null, entry.item.catalog_sku_id, entry.item.catalog_sku_version, entry.item.sku_code_snapshot, entry.item.sku_name_snapshot, entry.item.brand_snapshot, JSON.stringify(entry.item.fitment_snapshot || {}), entry.item.line_no, entry.description, entry.item.oe_number, entry.item.requested_quantity, entry.item.unit, entry.costUnitPrice, entry.saleUnitPrice, entry.lineTotal])
         await client.query(`UPDATE business_inquiry SET status='quoting',quote_amount=$2,version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [inquiryId, totalAmount, by.id, by.name])
         await insertEvent(client, inquiryId, 'quote_created', actor, { fromStatus: inquiry.status, toStatus: 'quoting', note: clean(rawInput.note), snapshot: { quoteId, quoteNo, subtotal, totalAmount, marginAmount } })
       })
