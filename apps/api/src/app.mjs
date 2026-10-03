@@ -178,6 +178,19 @@ export function buildApp({ repository, vehicleRepository, dictionaryRepository, 
     const result = await businessPartnerRepository.mergeCustomer(request.body, actor)
     return reply.code(result.created ? 201 : 200).send(result)
   })
+  app.post('/api/v2/business/customer-vehicles/merge-preview', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.manage')
+    if (!actor) return
+    return businessPartnerRepository.previewCustomerVehicleMerge(request.body)
+  })
+  app.post('/api/v2/business/customer-vehicles/merge', async (request, reply) => {
+    if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
+    const actor = requireCatalogCapability(request, reply, 'business.customer.vehicle.merge')
+    if (!actor) return
+    const result = await businessPartnerRepository.mergeCustomerVehicle(request.body, actor)
+    return reply.code(result.created ? 201 : 200).send(result)
+  })
   app.get('/api/v2/business/partners/:id', async (request, reply) => {
     if (!businessPartnerRepository) return reply.code(503).send({ error: 'BUSINESS_PARTNER_UNAVAILABLE', message: '客户与供应商服务未配置' })
     const actor = requireCatalogCapability(request, reply, 'business.read')

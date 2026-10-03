@@ -99,7 +99,7 @@ function mapContact(row) {
   return { id: row.id, partnerId: row.partner_id, name: row.name, roleTitle: row.role_title, phone: row.phone, wechat: row.wechat, email: row.email, isPrimary: row.is_primary, notes: row.notes, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 function mapVehicle(row) {
-  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, engineCode: row.engine_code, modelYear: row.model_year, notes: row.notes, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformCode: row.platform_code, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, engineCode: row.engine_code, modelYear: row.model_year, notes: row.notes, version: row.version, mergedIntoVehicleId: row.merged_into_vehicle_id || null, mergedAt: row.merged_at || null, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 async function insertEvent(client, partnerId, action, actor, snapshot = {}, note = '') {
   const by = actorDetails(actor)
@@ -169,7 +169,7 @@ function onboardingPartner(row) {
 
 function onboardingVehicle(row) {
   if (!row) return null
-  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, version: row.version }
+  return { id: row.id, partnerId: row.partner_id, vehicleLabel: row.vehicle_label, vin: row.vin, licensePlate: row.license_plate, platformMasterId: row.platform_master_id, variantMasterId: row.variant_master_id, version: row.version, mergedIntoVehicleId: row.merged_into_vehicle_id || null }
 }
 
 function uniqueRows(rows) {
@@ -187,9 +187,9 @@ async function buildOnboardingPreflight(client, rawInput = {}, { lock = false } 
   const partnerLock = lock ? ' FOR UPDATE OF p' : ''
   const vehicleLock = lock ? ' FOR UPDATE OF v,p' : ''
   const vinMatches = vehicle.vin ? (await client.query(`SELECT v.*,p.partner_no,p.name,p.short_name,p.phone,p.tax_id,p.partner_type,p.status partner_status,p.version partner_version
-    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE v.vin=$1 ORDER BY v.id${vehicleLock}`, [vehicle.vin])).rows : []
+    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE v.vin=$1 AND v.merged_into_vehicle_id IS NULL ORDER BY v.id${vehicleLock}`, [vehicle.vin])).rows : []
   const plateMatches = vehicle.licensePlate ? (await client.query(`SELECT v.*,p.partner_no,p.name,p.short_name,p.phone,p.tax_id,p.partner_type,p.status partner_status,p.version partner_version
-    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE upper(v.license_plate)=upper($1) ORDER BY v.id${vehicleLock}`, [vehicle.licensePlate])).rows : []
+    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id WHERE upper(v.license_plate)=upper($1) AND v.merged_into_vehicle_id IS NULL ORDER BY v.id${vehicleLock}`, [vehicle.licensePlate])).rows : []
   const phoneMatches = (await client.query(`SELECT p.* FROM business_partner p
     WHERE p.partner_type IN ('customer','both') AND (regexp_replace(p.phone,'[^0-9]','','g')=$1 OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND regexp_replace(c.phone,'[^0-9]','','g')=$1))
     ORDER BY p.updated_at DESC,p.id${partnerLock}`, [input.customerPhone])).rows
@@ -310,7 +310,8 @@ async function buildCustomerMergePreview(client, rawInput = {}, { lock = false }
   const vehiclesResult = await client.query('SELECT * FROM business_customer_vehicle WHERE partner_id=ANY($1::text[]) ORDER BY partner_id,id', [[survivor.id, retired.id]])
   const duplicatePlateResult = await client.query(`SELECT rv.id retired_vehicle_id,sv.id survivor_vehicle_id,rv.license_plate
     FROM business_customer_vehicle rv JOIN business_customer_vehicle sv ON sv.partner_id=$1
-      AND rv.partner_id=$2 AND rv.license_plate<>'' AND upper(rv.license_plate)=upper(sv.license_plate)
+      AND rv.partner_id=$2 AND rv.merged_into_vehicle_id IS NULL AND sv.merged_into_vehicle_id IS NULL
+      AND rv.license_plate<>'' AND upper(rv.license_plate)=upper(sv.license_plate)
     ORDER BY rv.id,sv.id`, [survivor.id, retired.id])
   if (duplicatePlateResult.rows.length) conflicts.push({ code: 'duplicate_vehicle_plate', message: '两个客户存在相同车牌的车辆，需先复核车辆资料', vehicles: duplicatePlateResult.rows.map((row) => ({ retiredVehicleId: row.retired_vehicle_id, survivorVehicleId: row.survivor_vehicle_id, licensePlate: row.license_plate })) })
 
@@ -385,11 +386,122 @@ async function buildCustomerMergePreview(client, rawInput = {}, { lock = false }
   }
 }
 
+function vehicleStandardSnapshot(row) {
+  return {
+    platformCode: row.platform_code,
+    platformMasterId: row.platform_master_id,
+    variantMasterId: row.variant_master_id,
+    engineCode: row.engine_code,
+    modelYear: row.model_year,
+  }
+}
+
+function normalizeVehicleMergeChoices(raw = {}) {
+  const choices = {}
+  for (const [key, label] of [['vehicleLabel', '车辆名称'], ['licensePlate', '车牌'], ['standardVehicle', '标准车型'], ['notes', '备注']]) {
+    const value = clean(raw[key])
+    if (value && !['survivor', 'retired'].includes(value)) throw problem('INVALID_CUSTOMER_VEHICLE_MERGE_FIELD_CHOICE', `${label}的保留来源无效`)
+    if (value) choices[key] = value
+  }
+  return choices
+}
+
+function vehicleMergeValue(survivor, retired, key, choices) {
+  const source = choices[key] || 'survivor'
+  return source === 'retired' ? retired : survivor
+}
+
+async function buildCustomerVehicleMergePreview(client, rawInput = {}, { lock = false } = {}) {
+  const survivorId = clean(rawInput.survivorVehicleId)
+  const retiredId = clean(rawInput.retiredVehicleId)
+  if (!survivorId || !retiredId || survivorId === retiredId) throw problem('INVALID_CUSTOMER_VEHICLE_MERGE_PAIR', '必须选择同一客户的两辆不同车辆，并明确保留车辆与退役车辆')
+  const choices = normalizeVehicleMergeChoices(rawInput.fieldChoices)
+  const rows = (await client.query(`SELECT v.*,p.partner_no,p.name partner_name,p.status partner_status,p.merged_into_partner_id
+    FROM business_customer_vehicle v JOIN business_partner p ON p.id=v.partner_id
+    WHERE v.id=ANY($1::text[]) ORDER BY v.id${lock ? ' FOR UPDATE OF v,p' : ''}`, [[survivorId, retiredId]])).rows
+  const survivor = rows.find((row) => row.id === survivorId)
+  const retired = rows.find((row) => row.id === retiredId)
+  if (!survivor || !retired) throw problem('CUSTOMER_VEHICLE_MERGE_NOT_FOUND', '待合并车辆不存在', 404, { survivorFound: Boolean(survivor), retiredFound: Boolean(retired) })
+
+  const conflicts = []
+  if (survivor.partner_id !== retired.partner_id) conflicts.push({ code: 'vehicle_owner_mismatch', message: '两辆车不属于同一客户，不能静默改变客户归属', survivorPartnerId: survivor.partner_id, retiredPartnerId: retired.partner_id })
+  if (survivor.partner_status !== 'active' || survivor.merged_into_partner_id) conflicts.push({ code: 'vehicle_customer_unavailable', message: '保留车辆所属客户当前不可用', partnerId: survivor.partner_id })
+  if (survivor.merged_into_vehicle_id) conflicts.push({ code: 'survivor_vehicle_already_merged', message: '保留车辆已经合并到其他车辆', vehicleId: survivor.id, mergedIntoVehicleId: survivor.merged_into_vehicle_id })
+  if (retired.merged_into_vehicle_id) conflicts.push({ code: 'retired_vehicle_already_merged', message: '退役车辆已经合并到其他车辆', vehicleId: retired.id, mergedIntoVehicleId: retired.merged_into_vehicle_id })
+  if (survivor.vin && retired.vin && survivor.vin !== retired.vin) conflicts.push({ code: 'vehicle_vin_conflict', message: '两辆车的 VIN 不同，不能作为重复车辆合并', survivorVin: survivor.vin, retiredVin: retired.vin })
+
+  const differences = []
+  const requiredChoices = []
+  const resolved = {}
+  for (const [key, column, label] of [['vehicleLabel', 'vehicle_label', '车辆名称'], ['licensePlate', 'license_plate', '车牌']]) {
+    const survivorValue = survivor[column]
+    const retiredValue = retired[column]
+    const differs = String(survivorValue || '') !== String(retiredValue || '')
+    let source = choices[key]
+    if (!source) source = !survivorValue && retiredValue ? 'retired' : 'survivor'
+    if (differs) differences.push({ field: key, label, survivorValue, retiredValue, selectedSource: source })
+    if (differs && survivorValue && retiredValue && !choices[key]) requiredChoices.push(key)
+    resolved[key] = source === 'retired' ? retiredValue : survivorValue
+  }
+  resolved.vin = survivor.vin || retired.vin
+  const survivorStandard = vehicleStandardSnapshot(survivor)
+  const retiredStandard = vehicleStandardSnapshot(retired)
+  const standardsDiffer = JSON.stringify(survivorStandard) !== JSON.stringify(retiredStandard)
+  const survivorHasStandard = Boolean(survivor.platform_master_id || survivor.variant_master_id || survivor.platform_code || survivor.engine_code || survivor.model_year)
+  const retiredHasStandard = Boolean(retired.platform_master_id || retired.variant_master_id || retired.platform_code || retired.engine_code || retired.model_year)
+  let standardSource = choices.standardVehicle
+  if (!standardSource) standardSource = !survivorHasStandard && retiredHasStandard ? 'retired' : 'survivor'
+  if (standardsDiffer) differences.push({ field: 'standardVehicle', label: '标准车型', survivorValue: survivorStandard, retiredValue: retiredStandard, selectedSource: standardSource })
+  if (standardsDiffer && survivorHasStandard && retiredHasStandard && !choices.standardVehicle) requiredChoices.push('standardVehicle')
+  Object.assign(resolved, vehicleMergeValue(survivorStandard, retiredStandard, 'standardVehicle', { standardVehicle: standardSource }))
+  const survivorNotes = clean(survivor.notes)
+  const retiredNotes = clean(retired.notes)
+  let notesSource = choices.notes
+  if (!notesSource) notesSource = !survivorNotes && retiredNotes ? 'retired' : 'survivor'
+  if (survivorNotes !== retiredNotes) differences.push({ field: 'notes', label: '备注', survivorValue: survivorNotes, retiredValue: retiredNotes, selectedSource: notesSource })
+  resolved.notes = notesSource === 'retired' ? retiredNotes : survivorNotes
+
+  const impact = {
+    inquiries: await countWhere(client, 'business_inquiry', 'customer_vehicle_id', retired.id),
+    salesOrders: await countWhere(client, 'business_sales_order', 'customer_vehicle_id', retired.id),
+    onboardingRequests: await countWhere(client, 'business_customer_onboarding_request', 'customer_vehicle_id', retired.id),
+    quickQuoteDrafts: await countWhere(client, 'business_quick_quote_draft', 'customer_vehicle_id', retired.id),
+    mergedAliases: await countWhere(client, 'business_customer_vehicle', 'merged_into_vehicle_id', retired.id),
+  }
+  impact.quotes = Number((await client.query('SELECT count(*) FROM business_quote q JOIN business_inquiry i ON i.id=q.inquiry_id WHERE i.customer_vehicle_id=$1', [retired.id])).rows[0].count)
+  const snapshot = {
+    partner: { id: survivor.partner_id, partnerNo: survivor.partner_no, name: survivor.partner_name, status: survivor.partner_status },
+    survivor: mapVehicle(survivor),
+    retired: mapVehicle(retired),
+    fieldChoices: choices,
+    resolved,
+    differences,
+    requiredChoices,
+    impact,
+    conflicts,
+  }
+  return {
+    ready: conflicts.length === 0 && requiredChoices.length === 0,
+    partner: snapshot.partner,
+    survivor: snapshot.survivor,
+    retired: snapshot.retired,
+    differences,
+    requiredChoices,
+    resolved,
+    impact,
+    conflicts,
+    fingerprint: onboardingFingerprint(snapshot),
+    _snapshot: snapshot,
+    _survivor: survivor,
+    _retired: retired,
+  }
+}
+
 export function createBusinessPartnerRepository(pool) {
   async function get(id, client = pool) {
     const row = (await client.query(`SELECT p.*,
       (SELECT count(*)::int FROM business_partner_contact c WHERE c.partner_id=p.id) contact_count,
-      (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id) vehicle_count
+      (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id AND v.merged_into_vehicle_id IS NULL) vehicle_count
       FROM business_partner p WHERE p.id=$1 OR p.partner_no=upper(trim($1)) LIMIT 1`, [id])).rows[0]
     if (!row) return null
     const [contacts, vehicles, events] = await Promise.all([
@@ -523,7 +635,7 @@ export function createBusinessPartnerRepository(pool) {
       if (type && !partnerTypes.has(type)) throw problem('INVALID_PARTNER_INPUT', '合作方类型无效')
       if (state && !partnerStatuses.has(state)) throw problem('INVALID_PARTNER_INPUT', '合作方状态无效')
       const currentPage = Math.max(1, Number(page) || 1); const size = Math.min(100, Math.max(1, Number(pageSize) || 30)); const where = []; const values = []
-      if (q) { values.push(`%${q}%`); where.push(`(p.partner_no ILIKE $${values.length} OR p.name ILIKE $${values.length} OR p.short_name ILIKE $${values.length} OR p.phone ILIKE $${values.length} OR p.tax_id ILIKE $${values.length} OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND (c.name ILIKE $${values.length} OR c.phone ILIKE $${values.length} OR c.wechat ILIKE $${values.length})) OR EXISTS (SELECT 1 FROM business_customer_vehicle v WHERE v.partner_id=p.id AND (v.vin ILIKE $${values.length} OR v.license_plate ILIKE $${values.length} OR v.vehicle_label ILIKE $${values.length})))`) }
+      if (q) { values.push(`%${q}%`); where.push(`(p.partner_no ILIKE $${values.length} OR p.name ILIKE $${values.length} OR p.short_name ILIKE $${values.length} OR p.phone ILIKE $${values.length} OR p.tax_id ILIKE $${values.length} OR EXISTS (SELECT 1 FROM business_partner_contact c WHERE c.partner_id=p.id AND (c.name ILIKE $${values.length} OR c.phone ILIKE $${values.length} OR c.wechat ILIKE $${values.length})) OR EXISTS (SELECT 1 FROM business_customer_vehicle v WHERE v.partner_id=p.id AND v.merged_into_vehicle_id IS NULL AND (v.vin ILIKE $${values.length} OR v.license_plate ILIKE $${values.length} OR v.vehicle_label ILIKE $${values.length})))`) }
       if (type) { values.push(type); where.push(`(p.partner_type=$${values.length} OR p.partner_type='both')`) }
       if (state) { values.push(state); where.push(`p.status=$${values.length}`) }
       const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
@@ -531,7 +643,7 @@ export function createBusinessPartnerRepository(pool) {
       values.push(size, (currentPage - 1) * size)
       const rows = (await pool.query(`SELECT p.*,
         (SELECT count(*)::int FROM business_partner_contact c WHERE c.partner_id=p.id) contact_count,
-        (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id) vehicle_count
+        (SELECT count(*)::int FROM business_customer_vehicle v WHERE v.partner_id=p.id AND v.merged_into_vehicle_id IS NULL) vehicle_count
         FROM business_partner p ${clause} ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'inactive' THEN 1 ELSE 2 END,p.updated_at DESC
         LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows
       const summary = (await pool.query('SELECT partner_type,status,count(*)::int count FROM business_partner GROUP BY partner_type,status')).rows
@@ -668,6 +780,65 @@ export function createBusinessPartnerRepository(pool) {
       return { ...result, survivor: await get(result.survivorPartnerId), retired: await get(result.retiredPartnerId) }
     },
 
+    async previewCustomerVehicleMerge(rawInput = {}) {
+      const preview = await buildCustomerVehicleMergePreview(pool, rawInput)
+      const { _snapshot, _survivor, _retired, ...result } = preview
+      return result
+    },
+
+    async mergeCustomerVehicle(rawInput = {}, actor) {
+      const key = requestKey(rawInput.requestKey)
+      const reason = clean(rawInput.reason)
+      if (reason.length < 8 || reason.length > 500) throw problem('INVALID_CUSTOMER_VEHICLE_MERGE_REASON', '车辆合并原因必须为 8 至 500 个字符')
+      const result = await withTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-vehicle-merge-request:${key}`])
+        const existing = (await client.query('SELECT * FROM business_customer_vehicle_merge WHERE request_key=$1', [key])).rows[0]
+        if (existing) return { created: false, mergeId: existing.id, partnerId: existing.partner_id, survivorVehicleId: existing.survivor_vehicle_id, retiredVehicleId: existing.retired_vehicle_id, decisionFingerprint: existing.decision_fingerprint }
+        const survivorId = clean(rawInput.survivorVehicleId)
+        const retiredId = clean(rawInput.retiredVehicleId)
+        for (const id of [survivorId, retiredId].sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`business-customer-vehicle-merge:${id}`])
+        const preview = await buildCustomerVehicleMergePreview(client, rawInput, { lock: true })
+        const publicPreview = Object.fromEntries(Object.entries(preview).filter(([name]) => !name.startsWith('_')))
+        const submittedFingerprint = clean(rawInput.previewFingerprint)
+        if (!submittedFingerprint) throw problem('CUSTOMER_VEHICLE_MERGE_PREVIEW_REQUIRED', '车辆合并必须先完成影响预览', 409, { preview: publicPreview })
+        if (submittedFingerprint !== preview.fingerprint) throw problem('CUSTOMER_VEHICLE_MERGE_PREVIEW_STALE', '车辆或关联业务数据已变化，请刷新合并预览', 409, { preview: publicPreview })
+        if (!preview.ready) throw problem('CUSTOMER_VEHICLE_MERGE_REVIEW_REQUIRED', '车辆合并仍有字段选择或资料冲突未处理', 409, { preview: publicPreview })
+
+        const survivor = preview._survivor
+        const retired = preview._retired
+        const mergeId = randomUUID()
+        const by = actorDetails(actor)
+        await client.query('UPDATE business_inquiry SET customer_vehicle_id=$1,updated_at=now() WHERE customer_vehicle_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_sales_order SET customer_vehicle_id=$1,updated_at=now() WHERE customer_vehicle_id=$2', [survivor.id, retired.id])
+        await client.query('UPDATE business_customer_onboarding_request SET customer_vehicle_id=$1 WHERE customer_vehicle_id=$2', [survivor.id, retired.id])
+        const draftRows = (await client.query('SELECT id,version FROM business_quick_quote_draft WHERE customer_vehicle_id=$1 ORDER BY id FOR UPDATE', [retired.id])).rows
+        for (const draft of draftRows) {
+          await client.query(`UPDATE business_quick_quote_draft SET customer_vehicle_id=$2,
+            payload=jsonb_set(payload,'{customerVehicleId}',to_jsonb($2::text),true),version=version+1,updated_by_id=$3,updated_by_name=$4,updated_at=now() WHERE id=$1`, [draft.id, survivor.id, by.id, by.name])
+          await client.query(`INSERT INTO business_quick_quote_draft_event
+            (id,draft_id,action,from_version,to_version,actor_id,actor_name,snapshot) VALUES ($1,$2,'vehicle_merged',$3,$4,$5,$6,$7::jsonb)`,
+          [randomUUID(), draft.id, draft.version, draft.version + 1, by.id, by.name, JSON.stringify({ mergeId, fromVehicleId: retired.id, toVehicleId: survivor.id })])
+        }
+        await client.query(`UPDATE business_customer_vehicle SET merged_into_vehicle_id=$1,version=version+1,updated_at=now()
+          WHERE merged_into_vehicle_id=$2`, [survivor.id, retired.id])
+        await client.query(`UPDATE business_customer_vehicle SET vehicle_label=$3,vin='',license_plate='',merged_into_vehicle_id=$2,merged_at=now(),version=version+1,updated_at=now()
+          WHERE id=$1`, [retired.id, survivor.id, `[已合并] ${retired.vehicle_label}`])
+        const resolved = preview.resolved
+        await client.query(`UPDATE business_customer_vehicle SET vehicle_label=$2,vin=$3,license_plate=$4,platform_code=$5,
+          platform_master_id=$6,variant_master_id=$7,engine_code=$8,model_year=$9,notes=$10,version=version+1,updated_at=now() WHERE id=$1`,
+        [survivor.id, resolved.vehicleLabel, resolved.vin, resolved.licensePlate, resolved.platformCode, resolved.platformMasterId, resolved.variantMasterId, resolved.engineCode, resolved.modelYear, resolved.notes])
+        await client.query(`UPDATE business_partner SET version=version+1,updated_by_id=$2,updated_by_name=$3,updated_at=now() WHERE id=$1`, [survivor.partner_id, by.id, by.name])
+        await client.query(`INSERT INTO business_customer_vehicle_merge
+          (id,request_key,partner_id,survivor_vehicle_id,retired_vehicle_id,reason,decision_fingerprint,decision_snapshot,impact_snapshot,actor_id,actor_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11)`,
+        [mergeId, key, survivor.partner_id, survivor.id, retired.id, reason, preview.fingerprint, JSON.stringify(preview._snapshot), JSON.stringify(preview.impact), by.id, by.name])
+        await insertEvent(client, survivor.partner_id, 'customer_vehicle_merged', actor, { mergeId, survivorVehicleId: survivor.id, retiredVehicleId: retired.id, decisionFingerprint: preview.fingerprint, impact: preview.impact, resolved }, reason)
+        return { created: true, mergeId, partnerId: survivor.partner_id, survivorVehicleId: survivor.id, retiredVehicleId: retired.id, decisionFingerprint: preview.fingerprint }
+      })
+      const partner = await get(result.partnerId)
+      return { ...result, customer: partner, survivorVehicle: partner.vehicles.find((vehicle) => vehicle.id === result.survivorVehicleId), retiredVehicle: partner.vehicles.find((vehicle) => vehicle.id === result.retiredVehicleId) }
+    },
+
     async create(rawInput = {}, actor) {
       const input = normalizeBusinessPartnerInput(rawInput); const contacts = Array.isArray(rawInput.contacts) ? rawInput.contacts.map(normalizeContact) : []; const vehicles = Array.isArray(rawInput.vehicles) ? rawInput.vehicles.map(normalizeVehicle) : []
       if (contacts.filter((contact) => contact.isPrimary).length > 1) throw problem('INVALID_PARTNER_CONTACT', '只能设置一个主联系人')
@@ -751,6 +922,7 @@ export function createBusinessPartnerRepository(pool) {
         if (partner.partner_type === 'supplier') throw problem('INVALID_CUSTOMER_VEHICLE', '纯供应商不能登记客户车辆', 409)
         const current = (await client.query('SELECT * FROM business_customer_vehicle WHERE id=$1 AND partner_id=$2 FOR UPDATE', [vehicleId, partner.id])).rows[0]
         if (!current) throw problem('CUSTOMER_VEHICLE_NOT_FOUND', '客户车辆不存在', 404)
+        if (current.merged_into_vehicle_id) throw problem('CUSTOMER_VEHICLE_ALREADY_MERGED', '该车辆已合并，不能继续修改', 409, { mergedIntoVehicleId: current.merged_into_vehicle_id })
         if (Number(rawInput.expectedVersion) !== current.version) throw problem('CUSTOMER_VEHICLE_VERSION_CONFLICT', '车辆资料已变化，请刷新后重试', 409, { currentVersion: current.version })
         const vehicle = await resolveVehicleMaster(client, {
           ...draft,
