@@ -164,7 +164,7 @@ export function createBusinessAfterSalesRepository(pool) {
             WHERE si.id=$1 FOR UPDATE OF si`, [shipmentItemId])).rows[0]
           if (!row || row.sales_order_id !== order.id) throw problem('SHIPMENT_ITEM_NOT_FOUND', '出库明细不存在或不属于当前订单', 404)
           const quantity = requiredQuantity(draft.quantity, '申请退货数量')
-          const committed = number((await client.query(`SELECT COALESCE(sum(i.requested_quantity),0) quantity FROM business_after_sales_item i
+          const committed = number((await client.query(`SELECT COALESCE(sum(CASE WHEN c.status='requested' THEN i.requested_quantity ELSE i.approved_quantity END),0) quantity FROM business_after_sales_item i
             JOIN business_after_sales_case c ON c.id=i.case_id WHERE i.shipment_item_id=$1 AND c.status NOT IN ('rejected','cancelled')`, [shipmentItemId])).rows[0].quantity)
           if (roundQuantity(committed + quantity) > number(row.quantity)) throw problem('RETURN_QUANTITY_EXCEEDS_SHIPPED', '申请退货数量超过该出库批次尚可退数量', 409, { shipmentItemId, shippedQuantity: number(row.quantity), committedReturnQuantity: committed })
           items.push({ ...row, quantity })

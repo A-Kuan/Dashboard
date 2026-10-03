@@ -133,7 +133,13 @@ SELECT json_build_object(
   'businessAfterSalesEvent',pg_temp.exact_count('business_after_sales_event'),
   'businessPayable',pg_temp.exact_count('business_payable'),
   'businessSupplierPayment',pg_temp.exact_count('business_supplier_payment'),
-  'businessPayableEvent',pg_temp.exact_count('business_payable_event')
+  'businessPayableEvent',pg_temp.exact_count('business_payable_event'),
+  'businessSupplierReturnCase',pg_temp.exact_count('business_supplier_return_case'),
+  'businessSupplierReturnItem',pg_temp.exact_count('business_supplier_return_item'),
+  'businessSupplierReturnShipment',pg_temp.exact_count('business_supplier_return_shipment'),
+  'businessSupplierReturnShipmentItem',pg_temp.exact_count('business_supplier_return_shipment_item'),
+  'businessSupplierRefund',pg_temp.exact_count('business_supplier_refund'),
+  'businessSupplierReturnEvent',pg_temp.exact_count('business_supplier_return_event')
 )::text;
 SQL
 REMOTE

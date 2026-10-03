@@ -39,7 +39,7 @@ try {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
-  for (const table of ['business_payable', 'business_supplier_payment', 'business_payable_event']) {
+  for (const table of ['business_payable', 'business_supplier_payment', 'business_payable_event', 'business_supplier_return_case', 'business_supplier_return_item', 'business_supplier_return_shipment', 'business_supplier_return_shipment_item', 'business_supplier_refund', 'business_supplier_return_event']) {
     const exists = (await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`])).rows[0].table_name
     counts[table] = exists ? Number((await pool.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count) : null
   }
