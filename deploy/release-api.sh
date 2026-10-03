@@ -70,7 +70,7 @@ fi
 production_counts() {
   ssh "${ssh_options[@]}" "$deploy_host" bash -s <<'REMOTE'
 set -euo pipefail
-sudo -u dashboard-sku psql -d dashboard_sku -Atc "SELECT json_build_object(
+sudo -u dashboard-sku psql -v ON_ERROR_STOP=1 -d dashboard_sku -Atc "SELECT json_build_object(
   'legacySku',(SELECT count(*) FROM sku),
   'legacyOe',(SELECT count(*) FROM sku_oe_relation),
   'legacyFitment',(SELECT count(*) FROM sku_fitment),
@@ -86,7 +86,7 @@ REMOTE
 production_business_counts() {
   ssh "${ssh_options[@]}" "$deploy_host" bash -s <<'REMOTE'
 set -euo pipefail
-sudo -u dashboard-sku psql -d dashboard_sku -qAt <<'SQL'
+sudo -u dashboard-sku psql -v ON_ERROR_STOP=1 -d dashboard_sku -qAt <<'SQL'
 CREATE OR REPLACE FUNCTION pg_temp.exact_count(table_name text) RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE result bigint;
 BEGIN
@@ -94,59 +94,59 @@ BEGIN
   EXECUTE format('SELECT count(*) FROM %I', table_name) INTO result;
   RETURN result;
 END $$;
-SELECT json_build_object(
-  'businessInquiry',pg_temp.exact_count('business_inquiry'),
-  'businessInquiryItem',pg_temp.exact_count('business_inquiry_item'),
-  'businessSupplierOffer',pg_temp.exact_count('business_supplier_offer'),
-  'businessQuote',pg_temp.exact_count('business_quote'),
-  'businessQuoteItem',pg_temp.exact_count('business_quote_item'),
-  'businessQuoteApprovalEvent',pg_temp.exact_count('business_quote_approval_event'),
-  'businessQuoteRevisionEvent',pg_temp.exact_count('business_quote_revision_event'),
-  'businessQuoteIntegrityEvent',pg_temp.exact_count('business_quote_integrity_event'),
-  'businessControlEvent',pg_temp.exact_count('business_control_event'),
-  'businessQuickQuoteDraft',pg_temp.exact_count('business_quick_quote_draft'),
-  'businessQuickQuoteDraftEvent',pg_temp.exact_count('business_quick_quote_draft_event'),
-  'businessInquiryEvent',pg_temp.exact_count('business_inquiry_event'),
-  'businessPartner',pg_temp.exact_count('business_partner'),
-  'businessPartnerContact',pg_temp.exact_count('business_partner_contact'),
-  'businessCustomerVehicle',pg_temp.exact_count('business_customer_vehicle'),
-  'businessPartnerEvent',pg_temp.exact_count('business_partner_event'),
-  'businessCustomerOnboardingRequest',pg_temp.exact_count('business_customer_onboarding_request'),
-  'businessSalesOrder',pg_temp.exact_count('business_sales_order'),
-  'businessSalesOrderItem',pg_temp.exact_count('business_sales_order_item'),
-  'businessPurchaseOrder',pg_temp.exact_count('business_purchase_order'),
-  'businessPurchaseOrderItem',pg_temp.exact_count('business_purchase_order_item'),
-  'businessOrderEvent',pg_temp.exact_count('business_order_event'),
-  'businessWarehouse',pg_temp.exact_count('business_warehouse'),
-  'businessGoodsReceipt',pg_temp.exact_count('business_goods_receipt'),
-  'businessGoodsReceiptItem',pg_temp.exact_count('business_goods_receipt_item'),
-  'businessInventoryLot',pg_temp.exact_count('business_inventory_lot'),
-  'businessInventoryBalance',pg_temp.exact_count('business_inventory_balance'),
-  'businessStockReservation',pg_temp.exact_count('business_stock_reservation'),
-  'businessStockReservationItem',pg_temp.exact_count('business_stock_reservation_item'),
-  'businessStockReservationAllocation',pg_temp.exact_count('business_stock_reservation_allocation'),
-  'businessShipment',pg_temp.exact_count('business_shipment'),
-  'businessShipmentItem',pg_temp.exact_count('business_shipment_item'),
-  'businessInventoryMovement',pg_temp.exact_count('business_inventory_movement'),
-  'businessReceivable',pg_temp.exact_count('business_receivable'),
-  'businessPayment',pg_temp.exact_count('business_payment'),
-  'businessReceivableEvent',pg_temp.exact_count('business_receivable_event'),
-  'businessAfterSalesCase',pg_temp.exact_count('business_after_sales_case'),
-  'businessAfterSalesItem',pg_temp.exact_count('business_after_sales_item'),
-  'businessReturnReceipt',pg_temp.exact_count('business_return_receipt'),
-  'businessReturnReceiptItem',pg_temp.exact_count('business_return_receipt_item'),
-  'businessRefund',pg_temp.exact_count('business_refund'),
-  'businessAfterSalesEvent',pg_temp.exact_count('business_after_sales_event'),
-  'businessPayable',pg_temp.exact_count('business_payable'),
-  'businessSupplierPayment',pg_temp.exact_count('business_supplier_payment'),
-  'businessPayableEvent',pg_temp.exact_count('business_payable_event'),
-  'businessSupplierReturnCase',pg_temp.exact_count('business_supplier_return_case'),
-  'businessSupplierReturnItem',pg_temp.exact_count('business_supplier_return_item'),
-  'businessSupplierReturnShipment',pg_temp.exact_count('business_supplier_return_shipment'),
-  'businessSupplierReturnShipmentItem',pg_temp.exact_count('business_supplier_return_shipment_item'),
-  'businessSupplierRefund',pg_temp.exact_count('business_supplier_refund'),
-  'businessSupplierReturnEvent',pg_temp.exact_count('business_supplier_return_event')
-)::text;
+SELECT jsonb_object_agg(metric,pg_temp.exact_count(table_name))::text FROM (VALUES
+  ('businessInquiry','business_inquiry'),
+  ('businessInquiryItem','business_inquiry_item'),
+  ('businessSupplierOffer','business_supplier_offer'),
+  ('businessQuote','business_quote'),
+  ('businessQuoteItem','business_quote_item'),
+  ('businessQuoteApprovalEvent','business_quote_approval_event'),
+  ('businessQuoteRevisionEvent','business_quote_revision_event'),
+  ('businessQuoteIntegrityEvent','business_quote_integrity_event'),
+  ('businessControlEvent','business_control_event'),
+  ('businessQuickQuoteDraft','business_quick_quote_draft'),
+  ('businessQuickQuoteDraftEvent','business_quick_quote_draft_event'),
+  ('businessInquiryEvent','business_inquiry_event'),
+  ('businessPartner','business_partner'),
+  ('businessPartnerContact','business_partner_contact'),
+  ('businessCustomerVehicle','business_customer_vehicle'),
+  ('businessPartnerEvent','business_partner_event'),
+  ('businessCustomerOnboardingRequest','business_customer_onboarding_request'),
+  ('businessSalesOrder','business_sales_order'),
+  ('businessSalesOrderItem','business_sales_order_item'),
+  ('businessPurchaseOrder','business_purchase_order'),
+  ('businessPurchaseOrderItem','business_purchase_order_item'),
+  ('businessOrderEvent','business_order_event'),
+  ('businessWarehouse','business_warehouse'),
+  ('businessGoodsReceipt','business_goods_receipt'),
+  ('businessGoodsReceiptItem','business_goods_receipt_item'),
+  ('businessInventoryLot','business_inventory_lot'),
+  ('businessInventoryBalance','business_inventory_balance'),
+  ('businessStockReservation','business_stock_reservation'),
+  ('businessStockReservationItem','business_stock_reservation_item'),
+  ('businessStockReservationAllocation','business_stock_reservation_allocation'),
+  ('businessShipment','business_shipment'),
+  ('businessShipmentItem','business_shipment_item'),
+  ('businessInventoryMovement','business_inventory_movement'),
+  ('businessReceivable','business_receivable'),
+  ('businessPayment','business_payment'),
+  ('businessReceivableEvent','business_receivable_event'),
+  ('businessAfterSalesCase','business_after_sales_case'),
+  ('businessAfterSalesItem','business_after_sales_item'),
+  ('businessReturnReceipt','business_return_receipt'),
+  ('businessReturnReceiptItem','business_return_receipt_item'),
+  ('businessRefund','business_refund'),
+  ('businessAfterSalesEvent','business_after_sales_event'),
+  ('businessPayable','business_payable'),
+  ('businessSupplierPayment','business_supplier_payment'),
+  ('businessPayableEvent','business_payable_event'),
+  ('businessSupplierReturnCase','business_supplier_return_case'),
+  ('businessSupplierReturnItem','business_supplier_return_item'),
+  ('businessSupplierReturnShipment','business_supplier_return_shipment'),
+  ('businessSupplierReturnShipmentItem','business_supplier_return_shipment_item'),
+  ('businessSupplierRefund','business_supplier_refund'),
+  ('businessSupplierReturnEvent','business_supplier_return_event')
+) AS metrics(metric,table_name);
 SQL
 REMOTE
 }
